@@ -18,7 +18,7 @@ pub enum Value {
     Float(f64),
     Symbol(Symbol),
     Keyword(Symbol),
-    Str(Rc<str>),
+    Str(Rc<String>),
     List(List),
     Vector(Rc<Vector>),
     Map(Rc<Map>),
@@ -62,7 +62,7 @@ impl Value {
     }
 
     pub fn string(s: &str) -> Value {
-        Value::Str(Rc::from(s))
+        Value::Str(Rc::new(s.to_string()))
     }
 
     pub fn is_truthy(&self) -> bool {

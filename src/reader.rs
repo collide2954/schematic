@@ -235,7 +235,7 @@ impl<'a> Reader<'a> {
         loop {
             match self.bump() {
                 None => return Err(start),
-                Some('"') => return Ok(Value::Str(out.into())),
+                Some('"') => return Ok(Value::Str(Rc::new(out))),
                 Some('\\') => {
                     let escaped = match self.bump() {
                         Some('n') => '\n',

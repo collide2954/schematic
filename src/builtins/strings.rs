@@ -1,7 +1,8 @@
 use std::fmt::Write;
+use std::rc::Rc;
 
-use super::collections::{expects, items};
-use super::native;
+use super::collections::{expects, items, owned, take};
+use super::{native, native_owned};
 use crate::error::Error;
 use crate::reader::parse_number;
 use crate::symbol::Symbol;
@@ -9,7 +10,7 @@ use crate::value::{Shown, Value};
 use crate::vm::{Arity, Globals};
 
 pub fn install(globals: &mut Globals) {
-    native(globals, "str", Arity::AtLeast(0), str_fn);
+    native_owned(globals, "str", Arity::AtLeast(0), str_fn);
     native(globals, "substring", Arity::Between(2, 3), substring);
     native(globals, "string-split", Arity::Between(1, 2), string_split);
     native(globals, "string-join", Arity::Between(1, 2), string_join);
@@ -76,12 +77,18 @@ pub fn display(value: &Value) -> String {
     }
 }
 
-fn str_fn(args: &[Value]) -> Result<Value, Error> {
-    let mut out = String::new();
-    for arg in args {
+fn str_fn(args: &mut [Value]) -> Result<Value, Error> {
+    if args.is_empty() {
+        return Ok(Value::string(""));
+    }
+    let mut out = match take(args, 0) {
+        Value::Str(s) => owned(s),
+        other => display(&other),
+    };
+    for arg in &args[1..] {
         out.push_str(&display(arg));
     }
-    Ok(Value::string(&out))
+    Ok(Value::Str(Rc::new(out)))
 }
 
 fn substring(args: &[Value]) -> Result<Value, Error> {
