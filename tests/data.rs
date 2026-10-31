@@ -255,9 +255,22 @@ fn statistics_skip_missing_values() {
     assert_eq!(eval("[(mean #[1 2 3 nil]) (mean #[]) (median #[3 1 2]) (median #[4 1 3 2]) (median #[])]"), "[2.0 nil 2 2.5 nil]");
     assert_eq!(eval("[(variance #[2 4 4 4 5 5 7 9]) (std #[2 4 4 4 5 5 7 9])]"), "[4.571428571428571 2.138089935299395]");
     assert_eq!(eval("[(variance #[1]) (std #[])]"), "[nil nil]");
-    assert_eq!(eval("(cumsum #[1 2 nil 3])"), "#[1 3 nil 6]");
+    assert_eq!(eval("[(running-sum #[1 2 nil 3]) (running-max #[1 3 nil 2 5]) (running-min #[3 1 nil 2 0]) (running-sum [1 2])]"), "[#[1 3 nil 6] #[1 3 nil 3 5] #[3 1 nil 1 0] [1 3]]");
+    assert_eq!(eval("(running-max [1 \"a\"])"), "error: running-max expects numbers, got \"a\"");
     assert_eq!(eval("[(quantile #[1 2 3 4 5] 0.5) (quantile #[1 2 3 4] 0.5) (quantile #[1 2 3 4 5] 0.25) (quantile #[] 0.5)]"), "[3.0 2.5 2.0 nil]");
     assert_eq!(eval("(sum #[\"a\"])"), "error: sum expects numbers, got \"a\"");
+}
+
+#[test]
+fn series_helpers_shift_rank_and_roll() {
+    assert_eq!(eval("[(rank #[30 10 20]) (rank #[10 20 20 30 nil]) (rank #[\"b\" \"a\"]) (rank #[]) (rank [2 1])]"), "[#[3 1 2] #[1 2 2 4 nil] #[2 1] #[] [2 1]]");
+    assert_eq!(eval("(rank [1 \"a\"])"), "error: rank cannot compare 1 and \"a\"");
+    assert_eq!(eval("[(lag #[1 2 3]) (lag #[1 2 3] 2) (lead #[1 2 3]) (lead [1 2 3] 5) (lag #[1 2] 0)]"), "[#[nil 1 2] #[nil nil 1] #[2 3 nil] [nil nil nil] #[1 2]]");
+    assert_eq!(eval("(lag #[1] -1)"), "error: lag expects a non-negative count, got -1");
+    assert_eq!(eval("[(diff #[1 4 9 nil 16]) (diff #[1.5 2]) (diff #[])]"), "[#[nil 3 5 nil nil] #[nil 0.5] #[]]");
+    assert_eq!(eval("(diff #[true false])"), "error: - expects numbers, got false");
+    assert_eq!(eval("[(rolling 2 sum #[1 2 3 4]) (rolling 3 mean #[1 2 3 4]) (rolling 2 sum #[1 nil 3]) (rolling 2 count [1 2 3])]"), "[#[nil 3 5 7] #[nil nil 2.0 3.0] #[nil 1 3] [nil 2 2]]");
+    assert_eq!(eval("(rolling 0 sum #[1])"), "error: rolling expects a positive window size, got 0");
 }
 
 #[test]

@@ -372,7 +372,7 @@ fn fill_missing(args: &[Value]) -> Result<Value, Error> {
     Ok(like(&args[0], filled))
 }
 
-fn count_arg(name: &str, value: &Value) -> Result<usize, Error> {
+pub fn count_arg(name: &str, value: &Value) -> Result<usize, Error> {
     match value {
         Value::Int(n) if *n >= 0 => Ok(*n as usize),
         other => Err(expects(name, "a non-negative count", other)),

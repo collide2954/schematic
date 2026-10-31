@@ -68,7 +68,7 @@ pub fn compare_values(name: &str, a: &Value, b: &Value) -> Result<Ordering, Erro
     ordering.ok_or_else(|| Error::type_error(format!("{name} cannot compare {a} and {b}")))
 }
 
-fn merge_sort<T>(items: Vec<T>, keep_left: &mut impl FnMut(&T, &T) -> Result<bool, Error>) -> Result<Vec<T>, Error> {
+pub fn merge_sort<T>(items: Vec<T>, keep_left: &mut impl FnMut(&T, &T) -> Result<bool, Error>) -> Result<Vec<T>, Error> {
     if items.len() <= 1 {
         return Ok(items);
     }

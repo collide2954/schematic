@@ -1,14 +1,14 @@
 use std::cmp::Ordering;
 
-use super::collections::{expects, items, like};
-use super::functional::compare_values;
+use super::collections::{count_arg, expects, items, like};
+use super::functional::{compare_values, merge_sort};
 use super::math::binary;
-use super::native;
+use super::{native, native_vm};
 use crate::array::{Array, Data};
 use crate::bytecode::Intrinsic;
 use crate::error::Error;
 use crate::value::Value;
-use crate::vm::{Arity, Globals};
+use crate::vm::{Arity, Globals, Vm};
 
 pub fn install(globals: &mut Globals) {
     native(globals, "sum", Arity::Exact(1), sum);
@@ -16,8 +16,15 @@ pub fn install(globals: &mut Globals) {
     native(globals, "median", Arity::Exact(1), median);
     native(globals, "variance", Arity::Exact(1), |args| Ok(variance(&args[0])?.map(Value::Float).unwrap_or(Value::Nil)));
     native(globals, "std", Arity::Exact(1), |args| Ok(variance(&args[0])?.map(|v| Value::Float(v.sqrt())).unwrap_or(Value::Nil)));
-    native(globals, "cumsum", Arity::Exact(1), cumsum);
     native(globals, "quantile", Arity::Exact(2), quantile);
+    native(globals, "running-sum", Arity::Exact(1), |args| running("running-sum", args, |a, b| binary(Intrinsic::Add, a, b)));
+    native(globals, "running-max", Arity::Exact(1), |args| running("running-max", args, |a, b| pick("running-max", a, b, Ordering::Greater)));
+    native(globals, "running-min", Arity::Exact(1), |args| running("running-min", args, |a, b| pick("running-min", a, b, Ordering::Less)));
+    native(globals, "rank", Arity::Exact(1), rank);
+    native(globals, "lag", Arity::Between(1, 2), |args| shift("lag", args, true));
+    native(globals, "lead", Arity::Between(1, 2), |args| shift("lead", args, false));
+    native(globals, "diff", Arity::Exact(1), diff);
+    native_vm(globals, "rolling", Arity::Exact(3), rolling);
 }
 
 fn numbers(name: &str, value: &Value) -> Result<Vec<Value>, Error> {
@@ -116,24 +123,92 @@ fn variance(value: &Value) -> Result<Option<f64>, Error> {
     Ok(Some(squares / (xs.len() - 1) as f64))
 }
 
-fn cumsum(args: &[Value]) -> Result<Value, Error> {
+fn pick(name: &str, acc: &Value, x: &Value, wanted: Ordering) -> Result<Value, Error> {
+    Ok(if compare_values(name, x, acc)? == wanted { x.clone() } else { acc.clone() })
+}
+
+fn running(name: &str, args: &[Value], step: impl Fn(&Value, &Value) -> Result<Value, Error>) -> Result<Value, Error> {
     let mut running: Option<Value> = None;
     let mut out = Vec::new();
-    for x in items("cumsum", &args[0])? {
+    for x in items(name, &args[0])? {
         match x {
             Value::Nil => out.push(Value::Nil),
             Value::Int(_) | Value::Float(_) => {
                 let next = match &running {
                     None => x,
-                    Some(acc) => binary(Intrinsic::Add, acc, &x)?,
+                    Some(acc) => step(acc, &x)?,
                 };
                 out.push(next.clone());
                 running = Some(next);
             }
-            other => return Err(expects("cumsum", "numbers", &other)),
+            other => return Err(expects(name, "numbers", &other)),
         }
     }
     Ok(like(&args[0], out))
+}
+
+fn rank(args: &[Value]) -> Result<Value, Error> {
+    let values: Vec<Value> = items("rank", &args[0])?.collect();
+    let present: Vec<usize> = (0..values.len()).filter(|&i| !matches!(values[i], Value::Nil)).collect();
+    let order = merge_sort(present, &mut |&a, &b| {
+        Ok(compare_values("rank", &values[a], &values[b])? != Ordering::Greater)
+    })?;
+    let mut ranks = vec![Value::Nil; values.len()];
+    for (position, &i) in order.iter().enumerate() {
+        let previous = position.checked_sub(1).map(|p| order[p]);
+        ranks[i] = match previous {
+            Some(p) if values[p] == values[i] => ranks[p].clone(),
+            _ => Value::Int(position as i64 + 1),
+        };
+    }
+    Ok(like(&args[0], ranks))
+}
+
+fn shift(name: &str, args: &[Value], backward: bool) -> Result<Value, Error> {
+    let values: Vec<Value> = items(name, &args[0])?.collect();
+    let n = match args.get(1) {
+        None => 1,
+        Some(v) => count_arg(name, v)?,
+    };
+    let len = values.len();
+    let out = (0..len)
+        .map(|i| {
+            let source = if backward { i.checked_sub(n) } else { Some(i + n).filter(|&j| j < len) };
+            source.map_or(Value::Nil, |j| values[j].clone())
+        })
+        .collect();
+    Ok(like(&args[0], out))
+}
+
+fn diff(args: &[Value]) -> Result<Value, Error> {
+    let values: Vec<Value> = items("diff", &args[0])?.collect();
+    let mut out = Vec::with_capacity(values.len());
+    for (i, x) in values.iter().enumerate() {
+        let previous = if i == 0 { &Value::Nil } else { &values[i - 1] };
+        out.push(match (previous, x) {
+            (Value::Nil, _) | (_, Value::Nil) => Value::Nil,
+            _ => binary(Intrinsic::Sub, x, previous)?,
+        });
+    }
+    Ok(like(&args[0], out))
+}
+
+fn rolling(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
+    let n = match &args[0] {
+        Value::Int(n) if *n > 0 => *n as usize,
+        other => return Err(expects("rolling", "a positive window size", other)),
+    };
+    let values: Vec<Value> = items("rolling", &args[2])?.collect();
+    let mut out = Vec::with_capacity(values.len());
+    for i in 0..values.len() {
+        if i + 1 < n {
+            out.push(Value::Nil);
+            continue;
+        }
+        let window = like(&args[2], values[i + 1 - n..=i].to_vec());
+        out.push(vm.call_value(&args[1], &[window])?);
+    }
+    Ok(like(&args[2], out))
 }
 
 fn quantile(args: &[Value]) -> Result<Value, Error> {
