@@ -1,0 +1,128 @@
+;; A tour of Schematic. Every expression here also appears in docs/guide.md.
+
+(define (check label expected actual)
+  (unless (equal? expected actual)
+    (error (str label ": expected " expected " but got " actual))))
+
+;; Expressions
+(check "add" 3 (+ 1 2))
+(check "nested" 14 (* 2 (+ 3 4)))
+(check "max" 9 (max 3 9 4))
+(check "division" 3.5 (/ 7 2))
+(check "quot" 3 (quot 7 2))
+(check "mod" 1 (mod -7 2))
+(check "mixed" 3.5 (+ 1 2.5))
+
+;; Names and functions
+(define tax-rate 0.25)
+(define (with-tax price) (* price (+ 1 tax-rate)))
+(check "with-tax" 125.0 (with-tax 100))
+
+(define double (lambda (x) (* x 2)))
+(check "map double" [2 4 6] (map double [1 2 3]))
+
+(define (make-adder n) (lambda (x) (+ x n)))
+(check "adder" 15 ((make-adder 10) 5))
+
+(define (count-args & args) (count args))
+(check "rest args" 3 (count-args 1 2 3))
+
+;; Local names
+(check "let" 12 (let ((width 3) (height 4)) (* width height)))
+(check "let*" 6 (let* ((x 2) (y (* x x))) (+ x y)))
+
+;; Decisions
+(check "if" "bigger" (if (> 5 3) "bigger" "smaller"))
+(check "cond" "positive" (cond ((< 5 0) "negative") ((= 5 0) "zero") (else "positive")))
+(check "and" "last" (and true 1 "last"))
+(check "or" 7 (or nil false 7))
+
+;; Repetition
+(check "named let" 10 (let loop ((i 0) (total 0)) (if (= i 5) total (loop (+ i 1) (+ total i)))))
+(check "loop" [0 1 4] (loop ((i 0) (acc [])) (if (= i 3) acc (recur (+ i 1) (conj acc (* i i))))))
+(check "map" [1 4 9 16] (map (lambda (x) (* x x)) [1 2 3 4]))
+(check "filter" [2 4] (filter even? [1 2 3 4]))
+(check "reduce" 10 (reduce + 0 [1 2 3 4]))
+
+;; Collections
+(define ada {:name "Ada" :age 36})
+(check "keyword lookup" "Ada" (:name ada))
+(check "map as function" 36 (ada :age))
+(check "default" "none" (:email ada "none"))
+(check "vector index" 20 ([10 20 30] 1))
+(check "conj" [1 2 3] (conj [1 2] 3))
+(check "assoc" {:name "Ada" :age 36 :city "London"} (assoc ada :city "London"))
+(check "dissoc" {:name "Ada"} (dissoc ada :age))
+(check "update" {:name "Ada" :age 37} (update ada :age inc))
+(check "get-in" 1 (get-in {:a {:b 1}} [:a :b]))
+(check "count" 3 (count [1 2 3]))
+(check "first" 1 (first [1 2 3]))
+(check "rest" '(2 3) (rest [1 2 3]))
+(check "sort" [1 2 3] (sort [3 1 2]))
+(check "sort-by" [{:age 20} {:age 30}] (sort-by :age [{:age 30} {:age 20}]))
+(check "group-by" {false [1 3] true [2 4]} (group-by even? [1 2 3 4]))
+(check "frequencies" {"a" 2 "b" 1} (frequencies ["a" "b" "a"]))
+(check "str" "Total: 42" (str "Total: " 42))
+(check "split" ["a" "b" "c"] (string-split "a,b,c" ","))
+(check "upcase" "HI" (string-upcase "hi"))
+
+;; Arrays
+(define prices #[10 20 30 nil])
+(check "array-type" :int (array-type prices))
+(check "count-missing" 1 (count-missing prices))
+(check "scale" #[12.5 25.0 37.5 nil] (* prices 1.25))
+(check "add arrays" #[11 22 33 nil] (+ prices #[1 2 3 4]))
+(check "mask" #[false true true nil] (> prices 15))
+(check "sum" 60 (sum prices))
+(check "mean" 20.0 (mean prices))
+(check "median" 20 (median prices))
+(check "std" 2.138089935299395 (std #[2 4 4 4 5 5 7 9]))
+(check "where" #[20 30] (where prices (> prices 15)))
+(check "gather" #[30 10] (prices [2 0]))
+(check "fill" #[10 20 30 0] (fill-missing prices 0))
+(check "drop" #[10 20 30] (drop-missing prices))
+
+;; Tables
+(define sales
+  (table {:city ["Oslo" "Rome" "Oslo" "Rome"]
+          :amount [10 20 30 40]
+          :year [2020 2020 2021 2021]}))
+(check "column" #[10 20 30 40] (:amount sales))
+(check "column mean" 25.0 (mean (:amount sales)))
+(check "columns" [:city :amount :year] (columns sales))
+(check "nrows" 4 (nrows sales))
+(check "row" {:city "Oslo" :amount 10 :year 2020} (row sales 0))
+(check "where mask" 3 (nrows (where sales (> (:amount sales) 15))))
+(check "where pred" 2 (nrows (where sales (lambda (r) (= (:city r) "Oslo")))))
+(check "select" [:city :amount] (columns (select sales [:city :amount])))
+(check "order-by" #[40 30 20 10] (:amount (order-by sales :amount :desc)))
+(check "assoc column" #[12.5 25.0 37.5 50.0] (:with-tax (assoc sales :with-tax (* (:amount sales) 1.25))))
+(check "dissoc column" [:city :amount] (columns (dissoc sales :year)))
+(check "rename" [:city :revenue :year] (columns (rename sales {:amount :revenue})))
+(check "head" 2 (nrows (head sales 2)))
+(define totals (aggregate sales :city {:total [sum :amount] :orders [count]}))
+(check "aggregate" [{:city "Oslo" :total 40 :orders 2} {:city "Rome" :total 60 :orders 2}] (rows totals))
+(define cities (table {:city ["Oslo" "Rome"] :country ["NO" "IT"]}))
+(check "join" [:city :amount :year :country] (columns (join sales cities :city)))
+(check "describe" 2 (nrows (describe sales)))
+(check "csv" (rows sales) (rows (parse-csv (to-csv sales))))
+
+;; Errors
+(check "catch" "/ expects numbers, got \"two\"" (try (/ 1 "two") (catch e (:message e))))
+(check "error data" {:rows 0} (try (error "no data" {:rows 0}) (catch e (:data e))))
+(check "call/ec" 3 (call/ec (lambda (return)
+                             (for-each (lambda (x) (when (> x 2) (return x))) [1 2 3 4])
+                             'none)))
+
+;; Macros
+(define-syntax unless-zero
+  (syntax-rules ()
+    ((_ n body ...)
+     (if (= n 0) nil (begin body ...)))))
+(check "macro" "ran" (unless-zero 5 "ran"))
+(check "macro zero" nil (unless-zero 0 "ran"))
+
+(define x 42)
+(check "quasiquote" '(x is 42 and doubled 84) `(x is ~x and doubled ~(* 2 x)))
+
+(println "tour complete")

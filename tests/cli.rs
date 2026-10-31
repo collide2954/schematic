@@ -63,6 +63,13 @@ fn exit_stops_the_program_with_a_code() {
 }
 
 #[test]
+fn the_tour_example_runs_clean() {
+    let tour = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/tour.scm");
+    let (code, out, err) = run(&[tour], "");
+    assert_eq!((code, out.as_str(), err.as_str()), (0, "tour complete\n", ""));
+}
+
+#[test]
 fn prints_the_version() {
     let (code, out, _) = run(&["--version"], "");
     assert_eq!(code, 0);

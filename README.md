@@ -63,6 +63,12 @@ cargo build --release
 cargo test
 ```
 
+## Learning more
+
+- [Guide](docs/guide.md): a walkthrough for newcomers, from expressions to tables
+- [Reference](docs/reference.md): every special form and built-in function
+- [examples/tour.scm](examples/tour.scm): the guide's examples as a runnable, checked script
+
 ## License
 
 Apache-2.0

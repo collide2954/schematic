@@ -1,0 +1,364 @@
+# Schematic Guide
+
+Schematic is a small language for working with data. It looks like Scheme,
+borrows its data literals and immutable collections from Clojure, and adds
+typed arrays and tables for numeric work. This guide assumes no prior
+experience with either language. Every example here is also in
+`examples/tour.scm`, which you can run with:
+
+```
+schematic examples/tour.scm
+```
+
+## Running Schematic
+
+Start the interactive prompt (the REPL) with no arguments. Type an expression,
+press Enter, and the result prints. If a line is incomplete, the prompt
+changes to two spaces and waits for the rest.
+
+```
+$ schematic
+> (+ 1 2)
+3
+> (define greeting
+    "hello")
+greeting
+```
+
+Run a file with `schematic file.scm`, evaluate one expression with
+`schematic -e "(* 6 7)"`, and leave the REPL with `(exit)` or Ctrl-D.
+
+## Expressions
+
+Everything is an expression written in parentheses with the operation first:
+
+```scheme
+(+ 1 2)            ; 3
+(* 2 (+ 3 4))      ; 14
+(max 3 9 4)        ; 9
+```
+
+Numbers are either integers or floats. Integer arithmetic never silently
+wraps around; overflow is an error. Division always produces a float, and
+`quot`, `rem`, and `mod` do integer division.
+
+```scheme
+(/ 7 2)            ; 3.5
+(quot 7 2)         ; 3
+(mod -7 2)         ; 1
+(+ 1 2.5)          ; 3.5
+```
+
+Text goes in double quotes, and `true`, `false`, and `nil` are themselves.
+Only `false` and `nil` count as false in a condition; `0`, `""`, and empty
+collections are all true.
+
+## Names and functions
+
+`define` gives a value a name. Writing the name in parentheses with
+parameters defines a function.
+
+```scheme
+(define tax-rate 0.25)
+
+(define (with-tax price)
+  (* price (+ 1 tax-rate)))
+
+(with-tax 100)     ; 125.0
+```
+
+Anonymous functions use `lambda`. Functions are values: pass them around,
+store them in collections, and return them from other functions.
+
+```scheme
+(define double (lambda (x) (* x 2)))
+(map double [1 2 3])            ; [2 4 6]
+
+(define (make-adder n)
+  (lambda (x) (+ x n)))
+((make-adder 10) 5)             ; 15
+```
+
+A parameter after `&` collects any remaining arguments into a list:
+
+```scheme
+(define (count-args & args) (count args))
+(count-args 1 2 3)              ; 3
+```
+
+## Local names
+
+`let` binds names for the duration of its body. `let*` lets each binding
+see the ones before it.
+
+```scheme
+(let ((width 3) (height 4))
+  (* width height))             ; 12
+
+(let* ((x 2) (y (* x x)))
+  (+ x y))                      ; 6
+```
+
+## Making decisions
+
+```scheme
+(if (> 5 3) "bigger" "smaller")
+
+(cond ((< 5 0) "negative")
+      ((= 5 0) "zero")
+      (else "positive"))
+
+(when (> 5 3) (println "yes"))
+(unless (> 5 3) (println "never printed"))
+
+(and true 1 "last")             ; "last"
+(or nil false 7)                ; 7
+```
+
+`and` and `or` stop as soon as the answer is known and return the deciding
+value, not just `true` or `false`.
+
+## Repetition
+
+Schematic has no loop keyword in the usual sense. A function that calls
+itself in tail position runs in constant space, and named `let` gives that
+pattern a compact shape:
+
+```scheme
+(let loop ((i 0) (total 0))
+  (if (= i 5)
+      total
+      (loop (+ i 1) (+ total i))))        ; 10
+```
+
+`loop` and `recur` do the same thing without naming the loop:
+
+```scheme
+(loop ((i 0) (acc []))
+  (if (= i 3)
+      acc
+      (recur (+ i 1) (conj acc (* i i)))))  ; [0 1 4]
+```
+
+Most of the time you will not write loops at all. `map`, `filter`, and
+`reduce` cover the common cases:
+
+```scheme
+(map (lambda (x) (* x x)) [1 2 3 4])      ; [1 4 9 16]
+(filter even? [1 2 3 4])                  ; [2 4]
+(reduce + 0 [1 2 3 4])                    ; 10
+```
+
+## Collections
+
+Schematic has four everyday collections. All of them are immutable:
+operations return new collections and leave the old ones untouched.
+
+| Literal | Name | Use it for |
+|---|---|---|
+| `[1 2 3]` | vector | ordered items, fast indexing and appending |
+| `{:name "Ada" :age 36}` | map | records and lookups by key |
+| `#{1 2 3}` | set | membership |
+| `'(1 2 3)` | list | code as data, building from the front |
+
+Keywords such as `:name` are symbolic constants that are mostly used as map
+keys. A keyword works as a function that looks itself up, and so do maps,
+vectors, and sets:
+
+```scheme
+(define ada {:name "Ada" :age 36})
+(:name ada)                     ; "Ada"
+(ada :age)                      ; 36
+(:email ada "none")             ; "none"
+([10 20 30] 1)                  ; 20
+```
+
+Useful operations:
+
+```scheme
+(conj [1 2] 3)                  ; [1 2 3]
+(assoc ada :city "London")      ; adds a key
+(dissoc ada :age)               ; removes a key
+(update ada :age inc)           ; {:name "Ada", :age 37}
+(get-in {:a {:b 1}} [:a :b])    ; 1
+(count [1 2 3])                 ; 3
+(first [1 2 3])                 ; 1
+(rest [1 2 3])                  ; (2 3)
+(sort [3 1 2])                  ; [1 2 3]
+(sort-by :age [{:age 30} {:age 20}])
+(group-by even? [1 2 3 4])      ; {false [1 3], true [2 4]}
+(frequencies ["a" "b" "a"])     ; {"a" 2, "b" 1}
+```
+
+Strings have their own family of functions, all starting with `string-`,
+plus `str`, which glues anything together:
+
+```scheme
+(str "Total: " 42)              ; "Total: 42"
+(string-split "a,b,c" ",")      ; ["a" "b" "c"]
+(string-upcase "hi")            ; "HI"
+```
+
+## Arrays
+
+Arrays hold many numbers (or booleans, or strings) of one type in a compact
+buffer, which makes numeric work fast. Write them with `#[...]` or build one
+from any collection with `array`.
+
+```scheme
+(define prices #[10 20 30 nil])
+(array-type prices)             ; :int
+(count-missing prices)          ; 1
+```
+
+Arithmetic and comparisons work elementwise over arrays, and a plain number
+is applied to every element:
+
+```scheme
+(* prices 1.25)                 ; #[12.5 25.0 37.5 nil]
+(+ prices #[1 2 3 4])           ; #[11 22 33 nil]
+(> prices 15)                   ; #[false true true nil]
+```
+
+`nil` marks a missing value. Arithmetic keeps missing values missing, and
+statistics skip them:
+
+```scheme
+(sum prices)                    ; 60
+(mean prices)                   ; 20.0
+(median prices)                 ; 20
+(std #[2 4 4 4 5 5 7 9])        ; 2.138089935299395
+```
+
+A boolean array selects elements, and a vector of positions gathers them:
+
+```scheme
+(where prices (> prices 15))    ; #[20 30]
+(prices [2 0])                  ; #[30 10]
+(fill-missing prices 0)         ; #[10 20 30 0]
+(drop-missing prices)           ; #[10 20 30]
+```
+
+Comparisons against arrays use `=` elementwise. To ask whether two values
+are the same thing structurally, use `equal?`.
+
+## Tables
+
+A table is a set of equally long named columns. Build one from a map of
+columns, from keyword and column pairs, or from a vector of row maps, and
+read one from a CSV file with `read-csv`.
+
+```scheme
+(define sales
+  (table {:city ["Oslo" "Rome" "Oslo" "Rome"]
+          :amount [10 20 30 40]
+          :year [2020 2020 2021 2021]}))
+```
+
+A table prints as an aligned grid. Columns are arrays, so everything above
+applies to them:
+
+```scheme
+(:amount sales)                 ; #[10 20 30 40]
+(mean (:amount sales))          ; 25.0
+(columns sales)                 ; [:city :amount :year]
+(nrows sales)                   ; 4
+(row sales 0)                   ; {:city "Oslo", :amount 10, :year 2020}
+```
+
+Filtering takes either a boolean array or a function of a row map. Both
+return a new table:
+
+```scheme
+(where sales (> (:amount sales) 15))
+(where sales (lambda (r) (= (:city r) "Oslo")))
+```
+
+Shaping and sorting:
+
+```scheme
+(select sales [:city :amount])
+(order-by sales :amount :desc)
+(assoc sales :with-tax (* (:amount sales) 1.25))
+(dissoc sales :year)
+(rename sales {:amount :revenue})
+(head sales 2)
+```
+
+Grouping and summarizing use `aggregate`. The spec maps new column names to
+a function and the column it applies to; `[count]` alone counts rows:
+
+```scheme
+(aggregate sales :city {:total [sum :amount]
+                        :orders [count]})
+;; city  total  orders
+;; Oslo     40       2
+;; Rome     60       2
+```
+
+Join two tables on a shared column name:
+
+```scheme
+(define cities (table {:city ["Oslo" "Rome"] :country ["NO" "IT"]}))
+(join sales cities :city)
+```
+
+`describe` summarizes every numeric column, and `write-csv` saves a table:
+
+```scheme
+(describe sales)
+(write-csv sales "sales.csv")
+(read-csv "sales.csv")
+```
+
+## When things go wrong
+
+Errors carry a map with `:kind` and `:message`, and `try` catches them:
+
+```scheme
+(try (/ 1 "two")
+  (catch e (:message e)))        ; "/ expects numbers, got \"two\""
+
+(try (error "no data" {:rows 0})
+  (catch e (:data e))
+  (finally (println "done")))
+```
+
+`raise` throws any value, and `call/ec` gives a function that jumps straight
+out of a computation:
+
+```scheme
+(call/ec (lambda (return)
+  (for-each (lambda (x) (when (> x 2) (return x))) [1 2 3 4])
+  'none))                        ; 3
+```
+
+## Macros
+
+New syntax can be defined with `define-syntax` and `syntax-rules`. Patterns
+match the shape of a form and templates rebuild it; `...` matches any number
+of repetitions. Names introduced by a template never clash with yours.
+
+```scheme
+(define-syntax unless-zero
+  (syntax-rules ()
+    ((_ n body ...)
+     (if (= n 0) nil (begin body ...)))))
+
+(unless-zero 5 (println "five is not zero"))
+```
+
+Quasiquote builds data with holes, which is handy for generating code or
+nested structures:
+
+```scheme
+(define x 42)
+`(x is ~x and doubled ~(* 2 x))   ; (x is 42 and doubled 84)
+```
+
+## Where to go next
+
+The [reference](reference.md) lists every special form and built-in
+function with its arguments. `examples/bench.rs` shows how to embed the
+interpreter from Rust: create an `Interpreter`, call `eval_str`, and print
+the resulting `Value`.
