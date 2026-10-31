@@ -3,12 +3,14 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::array::is_array;
 use crate::builtins::collections::gather;
 use crate::builtins::math;
 use crate::bytecode::{Intrinsic, Op, Proto};
-use crate::error::Error;
+use crate::error::{Error, INTERRUPT};
 use crate::list::List;
 use crate::macros::Macro;
 use crate::symbol::Symbol;
@@ -120,6 +122,14 @@ impl Globals {
 
     pub fn lookup(&self, name: Symbol) -> Option<&Value> {
         self.slots.get(&name).and_then(|&slot| self.get(slot))
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (Symbol, Option<&Value>)> {
+        self.names.iter().copied().zip(self.values.iter().map(Option::as_ref))
     }
 }
 
@@ -238,6 +248,7 @@ pub struct Vm {
     frame_limit: usize,
     next_token: u64,
     output: Box<dyn Write>,
+    interrupt: Arc<AtomicBool>,
 }
 
 impl Default for Vm {
@@ -256,7 +267,17 @@ impl Vm {
             frame_limit: DEFAULT_FRAME_LIMIT,
             next_token: 0,
             output: Box::new(std::io::stdout()),
+            interrupt: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn interrupt_handle(&self) -> Arc<AtomicBool> {
+        self.interrupt.clone()
+    }
+
+    #[inline]
+    fn interrupted(&self) -> bool {
+        self.interrupt.load(Ordering::Relaxed) && self.interrupt.swap(false, Ordering::Relaxed)
     }
 
     pub fn set_frame_limit(&mut self, limit: usize) {
@@ -285,7 +306,7 @@ impl Vm {
             self.handlers.truncate(handler_base);
         }
         result.map_err(|e| {
-            if e.escape.is_some() {
+            if e.escape.is_some_and(|token| token != INTERRUPT) {
                 Error::new("escape", "escape continuation called outside its extent")
             } else {
                 e
@@ -599,6 +620,9 @@ impl Vm {
                     throw!(Rc::try_unwrap(signal).unwrap_or_else(|rc| (*rc).clone()));
                 }
                 Op::Recur(n) => {
+                    if self.interrupted() {
+                        throw!(Error::interrupt());
+                    }
                     let n = n as usize;
                     let start = self.stack.len() - n;
                     for i in 0..n {
@@ -686,6 +710,9 @@ impl Vm {
     }
 
     fn call(&mut self, argc: usize) -> Result<(), Error> {
+        if self.interrupted() {
+            return Err(Error::interrupt());
+        }
         let callee_index = self.stack.len() - argc - 1;
         let callee = std::mem::take(&mut self.stack[callee_index]);
         match callee {
@@ -775,6 +802,9 @@ impl Vm {
     }
 
     fn tail_call(&mut self, argc: usize) -> Result<TailCalled, Error> {
+        if self.interrupted() {
+            return Err(Error::interrupt());
+        }
         let callee_index = self.stack.len() - argc - 1;
         let Value::Closure(closure) = self.stack[callee_index].clone() else {
             self.call(argc)?;

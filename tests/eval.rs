@@ -38,6 +38,40 @@ fn eval(src: &str) -> String {
 }
 
 #[test]
+fn user_globals_are_listed_in_definition_order() {
+    let mut interp = Interpreter::new();
+    assert!(interp.user_globals().next().is_none());
+    interp.eval_str("(define a 1) (define (f x) x) (define a 2)").unwrap();
+    let names: Vec<String> = interp.user_globals().map(|(name, _)| name).collect();
+    assert_eq!(names, ["a", "f"]);
+    assert_eq!(interp.global("a").unwrap().to_string(), "2");
+    assert!(interp.global("map").is_some());
+    assert!(interp.global("zzz").is_none());
+}
+
+#[test]
+fn a_raised_interrupt_flag_stops_running_code() {
+    use std::sync::atomic::Ordering;
+    let mut interp = Interpreter::new();
+    let flag = interp.interrupt_handle();
+    let interrupted = |interp: &mut Interpreter, src: &str| {
+        flag.store(true, Ordering::Relaxed);
+        let result = interp.eval_str(src).map(|v| v.to_string());
+        (result.unwrap_err().to_string(), flag.load(Ordering::Relaxed))
+    };
+    assert_eq!(interrupted(&mut interp, "(let loop ((i 0)) (loop (+ i 1)))"), ("interrupted".to_string(), false));
+    assert_eq!(interp.eval_str("(+ 1 2)").unwrap().to_string(), "3");
+    assert_eq!(interrupted(&mut interp, "(loop ((i 0)) (recur (+ i 1)))").0, "interrupted");
+    assert_eq!(interrupted(&mut interp, "(define (g) (+ 1 (g))) (g)").0, "interrupted");
+    assert_eq!(interrupted(&mut interp, "(try (let loop () (loop)) (catch e :caught))").0, "interrupted");
+    assert_eq!(interrupted(&mut interp, "(try (map (lambda (x) (let loop () (loop))) [1]) (catch e :caught))").0, "interrupted");
+    let captured = Captured::default();
+    interp.set_output(Box::new(captured.clone()));
+    assert_eq!(interrupted(&mut interp, "(try (let loop () (loop)) (finally (println \"cleanup\")))").0, "interrupted");
+    assert_eq!(String::from_utf8(captured.0.borrow().clone()).unwrap(), "cleanup\n");
+}
+
+#[test]
 fn literals_evaluate_to_themselves() {
     assert_eq!(eval("42"), "42");
     assert_eq!(eval("2.5"), "2.5");

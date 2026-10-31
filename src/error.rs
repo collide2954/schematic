@@ -3,6 +3,8 @@ use std::fmt;
 use crate::reader::ReadError;
 use crate::value::Value;
 
+pub const INTERRUPT: u64 = u64::MAX;
+
 #[derive(Debug, Clone)]
 pub struct Error {
     pub payload: Value,
@@ -16,6 +18,10 @@ impl Error {
             (Value::keyword("message"), Value::string(&message.into())),
         ]);
         Error { payload, escape: None }
+    }
+
+    pub fn interrupt() -> Error {
+        Error { escape: Some(INTERRUPT), ..Error::new("interrupted", "interrupted") }
     }
 
     pub fn raise(payload: Value) -> Error {
