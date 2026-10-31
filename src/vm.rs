@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Write;
 use std::rc::Rc;
 
 use crate::bytecode::{Op, Proto};
@@ -163,6 +164,7 @@ pub struct Vm {
     handlers: Vec<Handler>,
     frame_limit: usize,
     next_token: u64,
+    output: Box<dyn Write>,
 }
 
 impl Default for Vm {
@@ -180,11 +182,20 @@ impl Vm {
             handlers: Vec::new(),
             frame_limit: DEFAULT_FRAME_LIMIT,
             next_token: 0,
+            output: Box::new(std::io::stdout()),
         }
     }
 
     pub fn set_frame_limit(&mut self, limit: usize) {
         self.frame_limit = limit;
+    }
+
+    pub fn set_output(&mut self, output: Box<dyn Write>) {
+        self.output = output;
+    }
+
+    pub fn output(&mut self) -> &mut dyn Write {
+        &mut *self.output
     }
 
     pub fn execute(&mut self, proto: Rc<Proto>) -> Result<Value, Error> {

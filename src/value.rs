@@ -216,8 +216,22 @@ fn write_string(f: &mut fmt::Formatter<'_>, s: &str) -> fmt::Result {
     f.write_str("\"")
 }
 
+pub struct Shown<'a>(pub &'a Value);
+
+impl fmt::Display for Shown<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.format(f, false)
+    }
+}
+
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.format(f, true)
+    }
+}
+
+impl Value {
+    fn format(&self, f: &mut fmt::Formatter<'_>, readable: bool) -> fmt::Result {
         match self {
             Value::Nil => f.write_str("nil"),
             Value::Bool(b) => write!(f, "{b}"),
@@ -225,20 +239,23 @@ impl fmt::Display for Value {
             Value::Float(x) => write_float(f, *x),
             Value::Symbol(s) => write!(f, "{s}"),
             Value::Keyword(s) => write!(f, ":{s}"),
-            Value::Str(s) => write_string(f, s),
-            Value::List(l) => write_seq(f, "(", l.iter(), ")"),
-            Value::Vector(v) => write_seq(f, "[", v.iter(), "]"),
+            Value::Str(s) if readable => write_string(f, s),
+            Value::Str(s) => f.write_str(s),
+            Value::List(l) => write_seq(f, "(", l.iter(), ")", readable),
+            Value::Vector(v) => write_seq(f, "[", v.iter(), "]", readable),
             Value::Map(m) => {
                 f.write_str("{")?;
                 for (i, (k, v)) in m.iter().enumerate() {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{k} {v}")?;
+                    k.format(f, readable)?;
+                    f.write_str(" ")?;
+                    v.format(f, readable)?;
                 }
                 f.write_str("}")
             }
-            Value::Set(s) => write_seq(f, "#{", s.iter(), "}"),
+            Value::Set(s) => write_seq(f, "#{", s.iter(), "}", readable),
             Value::Closure(c) => match c.proto.name {
                 Some(name) => write!(f, "#<procedure {name}>"),
                 None => f.write_str("#<procedure>"),
@@ -256,13 +273,14 @@ fn write_seq<'a>(
     open: &str,
     items: impl Iterator<Item = &'a Value>,
     close: &str,
+    readable: bool,
 ) -> fmt::Result {
     f.write_str(open)?;
     for (i, item) in items.enumerate() {
         if i > 0 {
             f.write_str(" ")?;
         }
-        write!(f, "{item}")?;
+        item.format(f, readable)?;
     }
     f.write_str(close)
 }

@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::rc::Rc;
 
 use crate::builtins;
@@ -26,6 +27,10 @@ impl Interpreter {
 
     pub fn set_frame_limit(&mut self, limit: usize) {
         self.vm.set_frame_limit(limit);
+    }
+
+    pub fn set_output(&mut self, output: Box<dyn Write>) {
+        self.vm.set_output(output);
     }
 
     pub fn eval_str(&mut self, src: &str) -> Result<Value, Error> {

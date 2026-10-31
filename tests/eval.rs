@@ -1,4 +1,34 @@
+use std::cell::RefCell;
+use std::io::Write;
+use std::rc::Rc;
+
 use schematic::Interpreter;
+
+#[derive(Clone, Default)]
+struct Captured(Rc<RefCell<Vec<u8>>>);
+
+impl Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn eval_with_output(src: &str) -> (String, String) {
+    let captured = Captured::default();
+    let mut interp = Interpreter::new();
+    interp.set_output(Box::new(captured.clone()));
+    let result = match interp.eval_str(src) {
+        Ok(v) => v.to_string(),
+        Err(e) => format!("error: {e}"),
+    };
+    let output = String::from_utf8(captured.0.borrow().clone()).unwrap();
+    (result, output)
+}
 
 fn eval(src: &str) -> String {
     match Interpreter::new().eval_str(src) {
@@ -805,6 +835,39 @@ fn numeric_builtins() {
     assert_eq!(eval("(max 1 'a)"), "error: max expects numbers, got a");
     assert_eq!(eval("(even? 1.5)"), "error: even? expects an integer, got 1.5");
     assert_eq!(eval("(pow 2 100)"), "error: integer overflow");
+}
+
+#[test]
+fn str_joins_the_display_forms_of_its_arguments() {
+    assert_eq!(eval("(str \"a\" 1 :k nil 'sym [1 \"b\"] 2.5)"), "\"a1:ksym[1 b]2.5\"");
+    assert_eq!(eval("(str)"), "\"\"");
+    assert_eq!(eval("(str {:a \"x\"})"), "\"{:a x}\"");
+}
+
+#[test]
+fn string_functions() {
+    assert_eq!(eval("[(substring \"hello\" 1 3) (substring \"hello\" 2) (substring \"héllo\" 1 2)]"), "[\"el\" \"llo\" \"é\"]");
+    assert_eq!(eval("(substring \"hi\" 3)"), "error: substring range 3 to 2 is out of bounds for a string of length 2");
+    assert_eq!(eval("[(string-split \"a,b,,c\" \",\") (string-split \"a b  c\") (string-split \"\" \",\")]"), "[[\"a\" \"b\" \"\" \"c\"] [\"a\" \"b\" \"c\"] [\"\"]]");
+    assert_eq!(eval("[(string-join \", \" [1 \"a\" :b]) (string-join [\"a\" \"b\"]) (string-join \"-\" [])]"), "[\"1, a, :b\" \"ab\" \"\"]");
+    assert_eq!(eval("[(string-upcase \"abc\") (string-downcase \"ABC\") (string-trim \"  x \")]"), "[\"ABC\" \"abc\" \"x\"]");
+    assert_eq!(eval("[(string-contains? \"hello\" \"ell\") (string-starts-with? \"hello\" \"he\") (string-ends-with? \"hello\" \"lo\") (string-contains? \"hello\" \"z\")]"), "[true true true false]");
+    assert_eq!(eval("[(string-replace \"a-b-c\" \"-\" \"+\") (string-index-of \"hello\" \"l\") (string-index-of \"hello\" \"z\")]"), "[\"a+b+c\" 2 nil]");
+    assert_eq!(eval("[(string->number \"42\") (string->number \"2.5\") (string->number \"x\") (string->number \"1e3\") (string->number \" 7 \")]"), "[42 2.5 nil 1000.0 7]");
+    assert_eq!(eval("[(number->string 42) (number->string 2.5)]"), "[\"42\" \"2.5\"]");
+    assert_eq!(eval("[(name :k) (name 'sym) (name \"s\") (keyword \"k\") (symbol \"s\") (keyword 'k) (keyword :k)]"), "[\"k\" \"sym\" \"s\" :k s :k :k]");
+    assert_eq!(eval("(string-upcase 5)"), "error: string-upcase expects a string, got 5");
+    assert_eq!(eval("(string-repeat \"ab\" 3)"), "\"ababab\"");
+}
+
+#[test]
+fn printing_goes_to_the_interpreter_output() {
+    assert_eq!(eval_with_output("(println \"hi\" 1 [\"a\"])"), ("nil".to_string(), "hi 1 [a]\n".to_string()));
+    assert_eq!(eval_with_output("(print \"a\") (print \"b\" 1)").1, "ab 1");
+    assert_eq!(eval_with_output("(prn \"hi\" [\"a\"])").1, "\"hi\" [\"a\"]\n");
+    assert_eq!(eval_with_output("(newline)").1, "\n");
+    assert_eq!(eval_with_output("(println)").1, "\n");
+    assert_eq!(eval_with_output("(for-each println [1 2])").1, "1\n2\n");
 }
 
 #[test]

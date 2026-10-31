@@ -286,7 +286,7 @@ impl<'a> Reader<'a> {
     }
 }
 
-fn parse_number(token: &str) -> Option<Result<Value, String>> {
+pub(crate) fn parse_number(token: &str) -> Option<Result<Value, String>> {
     match token {
         "+inf.0" => return Some(Ok(Value::Float(f64::INFINITY))),
         "-inf.0" => return Some(Ok(Value::Float(f64::NEG_INFINITY))),
