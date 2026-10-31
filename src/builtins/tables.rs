@@ -22,6 +22,7 @@ pub fn install(globals: &mut Globals) {
     native(globals, "head", Arity::Between(1, 2), |args| slice("head", args, true));
     native(globals, "tail", Arity::Between(1, 2), |args| slice("tail", args, false));
     native_vm(globals, "aggregate", Arity::Between(2, 3), aggregate);
+    native_vm(globals, "window", Arity::Between(2, 3), window);
     native(globals, "join", Arity::Between(3, 4), join);
     native_vm(globals, "pivot", Arity::Between(4, 5), pivot);
     native(globals, "unpivot", Arity::Exact(4), unpivot);
@@ -291,7 +292,7 @@ pub fn distinct_rows(table: &Table, by: Option<&Value>) -> Result<Value, Error> 
     Ok(Value::Table(Rc::new(table.take_rows(&keep))))
 }
 
-fn apply_aggregate(vm: &mut Vm, how: &Value, group: &Table) -> Result<Value, Error> {
+fn apply_spec(vm: &mut Vm, name: &str, how: &Value, group: &Table) -> Result<Value, Error> {
     let whole = || Value::Table(Rc::new(group.clone()));
     match how {
         Value::Vector(v) => {
@@ -299,29 +300,36 @@ fn apply_aggregate(vm: &mut Vm, how: &Value, group: &Table) -> Result<Value, Err
             match parts.as_slice() {
                 [f] => vm.call_value(f, &[whole()]),
                 [f, col] => {
-                    let name = column_name("aggregate", col)?;
-                    let column = group.column(name).ok_or_else(|| Table::missing(name))?;
+                    let col = column_name(name, col)?;
+                    let column = group.column(col).ok_or_else(|| Table::missing(col))?;
                     vm.call_value(f, &[Value::Array(column.clone())])
                 }
-                _ => Err(expects("aggregate", "[function] or [function column]", how)),
+                _ => Err(expects(name, "[function] or [function column]", how)),
             }
         }
         f @ (Value::Closure(_) | Value::Native(_) | Value::Keyword(_)) => vm.call_value(f, &[whole()]),
-        other => Err(expects("aggregate", "[function column] pairs", other)),
+        other => Err(expects(name, "[function column] pairs", other)),
     }
 }
 
-fn aggregate(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
-    let table = as_table("aggregate", &args[0])?;
+struct Grouped<'a> {
+    table: &'a Table,
+    names: Vec<Symbol>,
+    groups: Vec<(Value, Vec<usize>)>,
+    specs: Vec<(Symbol, Value)>,
+}
+
+fn grouped_spec<'a>(name: &str, args: &'a [Value]) -> Result<Grouped<'a>, Error> {
+    let table = as_table(name, &args[0])?;
     let (by, spec) = match args.len() {
         3 => (Some(&args[1]), &args[2]),
         _ => (None, &args[1]),
     };
     let Value::Map(spec) = spec else {
-        return Err(expects("aggregate", "a map from new column names to [function column] pairs", spec));
+        return Err(expects(name, "a map from new column names to [function column] pairs", spec));
     };
     let names = match by {
-        Some(spec) => key_columns("aggregate", table, spec)?,
+        Some(spec) => key_columns(name, table, spec)?,
         None => Vec::new(),
     };
     let groups = if names.is_empty() {
@@ -331,8 +339,43 @@ fn aggregate(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
     };
     let mut specs = Vec::with_capacity(spec.len());
     for (k, how) in spec.iter() {
-        specs.push((column_name("aggregate", k)?, how.clone()));
+        specs.push((column_name(name, k)?, how.clone()));
     }
+    Ok(Grouped { table, names, groups, specs })
+}
+
+fn window(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
+    let Grouped { table, groups, specs, .. } = grouped_spec("window", &args)?;
+    let mut out = table.clone();
+    for (name, how) in &specs {
+        let mut column = vec![Value::Nil; table.nrows()];
+        for (_, rows) in &groups {
+            let result = apply_spec(vm, "window", how, &table.take_rows(rows))?;
+            match &result {
+                Value::Array(_) | Value::Vector(_) | Value::List(_) => {
+                    let values: Vec<Value> = seq_items(&result).unwrap().collect();
+                    if values.len() != rows.len() {
+                        let message = format!(
+                            "window function for :{name} returned {} values for a group of {} rows",
+                            values.len(),
+                            rows.len()
+                        );
+                        return Err(Error::new("value-error", message));
+                    }
+                    for (&i, value) in rows.iter().zip(values) {
+                        column[i] = value;
+                    }
+                }
+                scalar => rows.iter().for_each(|&i| column[i] = scalar.clone()),
+            }
+        }
+        out.set_column(*name, Rc::new(Array::from_values(column)?))?;
+    }
+    Ok(Value::Table(Rc::new(out)))
+}
+
+fn aggregate(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
+    let Grouped { table, names, groups, specs } = grouped_spec("aggregate", &args)?;
     let mut out_names: Vec<Symbol> = names.clone();
     out_names.extend(specs.iter().map(|(name, _)| *name));
     let mut out_values: Vec<Vec<Value>> = vec![Vec::with_capacity(groups.len()); out_names.len()];
@@ -342,7 +385,7 @@ fn aggregate(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
             out_values[c].push(part);
         }
         for (j, (_, how)) in specs.iter().enumerate() {
-            let value = apply_aggregate(vm, how, &group)?;
+            let value = apply_spec(vm, "aggregate", how, &group)?;
             out_values[names.len() + j].push(value);
         }
     }

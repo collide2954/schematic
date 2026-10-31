@@ -197,6 +197,19 @@ fn tables_pivot_between_long_and_wide() {
 }
 
 #[test]
+fn window_adds_columns_computed_per_group() {
+    assert_eq!(with_sales("[(:running (window s :city {:running [running-sum :amount]})) (:prev (window s :city {:prev [lag :amount]}))]"), "[#[10 20 40 60 nil] #[nil nil 10 20 30]]");
+    assert_eq!(with_sales("(:share (window s :city {:share (lambda (g) (/ (:amount g) (sum (:amount g))))}))"), "#[0.25 0.3333333333333333 0.75 0.6666666666666666 nil]");
+    assert_eq!(with_sales("[(:n (window s :city {:n [count]})) (:rank (window s :city {:rank [rank :amount]})) (:total (window s {:total [sum :amount]}))]"), "[#[3 2 3 2 3] #[1 1 2 2 nil] #[100 100 100 100 100]]");
+    assert_eq!(with_sales("[(columns (window s :city {:a [count] :b [sum :amount]})) (:amount (window s :city {:amount [running-sum :amount]})) (columns s)]"), "[[:city :amount :year :a :b] #[10 20 40 60 nil] [:city :amount :year]]");
+    assert_eq!(with_sales("(:label (window s :city {:label [(lambda (g) (str (first (:city g)) \"!\"))]}))"), "#[\"Oslo!\" \"Rome!\" \"Oslo!\" \"Rome!\" \"Oslo!\"]");
+    assert_eq!(with_sales("(window s :city {:bad (lambda (g) [1 2])})"), "error: window function for :bad returned 2 values for a group of 3 rows");
+    assert_eq!(with_sales("(window s :city {:x [sum :nope]})"), "error: table has no column :nope");
+    assert_eq!(with_sales("(window s :city 5)"), "error: window expects a map from new column names to [function column] pairs, got 5");
+    assert_eq!(with_sales("(window s :city {:x [1 2 3]})"), "error: window expects [function] or [function column], got [1 2 3]");
+}
+
+#[test]
 fn tables_join_on_a_shared_key() {
     let setup = "(define p (table {:id [1 2 3] :name [\"Ada\" \"Bob\" \"Cy\"]})) (define o (table {:id [2 1 2 9] :total [5 7 1 0]}))";
     assert_eq!(eval(&format!("{setup} (rows (join p o :id))")), "[{:id 1, :name \"Ada\", :total 7} {:id 2, :name \"Bob\", :total 5} {:id 2, :name \"Bob\", :total 1}]");
