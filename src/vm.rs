@@ -7,6 +7,7 @@ use std::rc::Rc;
 use crate::bytecode::{Op, Proto};
 use crate::error::Error;
 use crate::list::List;
+use crate::macros::Macro;
 use crate::symbol::Symbol;
 use crate::value::Value;
 
@@ -71,9 +72,18 @@ pub struct Globals {
     slots: HashMap<Symbol, usize>,
     names: Vec<Symbol>,
     values: Vec<Option<Value>>,
+    macros: HashMap<Symbol, Rc<Macro>>,
 }
 
 impl Globals {
+    pub fn define_macro(&mut self, name: Symbol, definition: Rc<Macro>) {
+        self.macros.insert(name, definition);
+    }
+
+    pub fn macro_for(&self, name: Symbol) -> Option<Rc<Macro>> {
+        self.macros.get(&name).cloned()
+    }
+
     pub fn slot(&mut self, name: Symbol) -> usize {
         if let Some(&slot) = self.slots.get(&name) {
             return slot;

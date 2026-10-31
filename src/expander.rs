@@ -1,0 +1,238 @@
+use std::collections::HashSet;
+use std::rc::Rc;
+
+use crate::error::Error;
+use crate::list::List;
+use crate::macros::Macro;
+use crate::symbol::Symbol;
+use crate::value::Value;
+use crate::vm::Globals;
+
+pub struct Expander<'a> {
+    globals: &'a mut Globals,
+    scopes: Vec<HashSet<Symbol>>,
+}
+
+fn param_names(params: &Value) -> Vec<Symbol> {
+    match params {
+        Value::Symbol(s) => vec![*s],
+        Value::List(l) => l
+            .iter()
+            .filter_map(|p| match p {
+                Value::Symbol(s) if &*s.name() != "&" => Some(*s),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn binding_pairs(bindings: &Value) -> Vec<(Option<Symbol>, Vec<Value>)> {
+    let Value::List(items) = bindings else { return Vec::new() };
+    items
+        .iter()
+        .map(|b| match b {
+            Value::List(pair) => match pair.first() {
+                Some(Value::Symbol(name)) => (Some(*name), pair.iter().skip(1).cloned().collect()),
+                _ => (None, pair.iter().cloned().collect()),
+            },
+            other => (None, vec![other.clone()]),
+        })
+        .collect()
+}
+
+impl<'a> Expander<'a> {
+    pub fn new(globals: &'a mut Globals) -> Expander<'a> {
+        Expander { globals, scopes: Vec::new() }
+    }
+
+    fn is_bound(&self, symbol: Symbol) -> bool {
+        self.scopes.iter().any(|scope| scope.contains(&symbol))
+    }
+
+    fn special(&self, head: &Value) -> Option<Symbol> {
+        let Value::Symbol(s) = head else { return None };
+        if self.is_bound(*s) {
+            return None;
+        }
+        Some(s.root())
+    }
+
+    fn macro_at_head(&self, form: &Value) -> Option<Rc<Macro>> {
+        let Value::List(l) = form else { return None };
+        self.globals.macro_for(self.special(l.first()?)?)
+    }
+
+    fn with_scope<T>(&mut self, names: Vec<Symbol>, body: impl FnOnce(&mut Self) -> T) -> T {
+        self.scopes.push(names.into_iter().collect());
+        let result = body(self);
+        self.scopes.pop();
+        result
+    }
+
+    pub fn expand(&mut self, form: &Value) -> Result<Value, Error> {
+        match form {
+            Value::List(l) if !l.is_empty() => self.expand_list(l),
+            Value::Vector(v) => Ok(Value::vector(self.expand_all(v.iter())?)),
+            Value::Set(s) => Ok(Value::set(self.expand_all(s.iter())?)),
+            Value::Map(m) => {
+                let mut pairs = Vec::new();
+                for (k, v) in m.iter() {
+                    pairs.push((self.expand(k)?, self.expand(v)?));
+                }
+                Ok(Value::map(pairs))
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    fn expand_all<'v>(&mut self, forms: impl Iterator<Item = &'v Value>) -> Result<Vec<Value>, Error> {
+        forms.map(|f| self.expand(f)).collect()
+    }
+
+    fn expand_head(&mut self, form: &Value) -> Result<Value, Error> {
+        let mut form = form.clone();
+        while let Some(m) = self.macro_at_head(&form) {
+            form = m.expand(&form)?;
+        }
+        Ok(form)
+    }
+
+    fn flatten_body_form(&mut self, form: &Value, out: &mut Vec<Value>) -> Result<(), Error> {
+        let expanded = self.expand_head(form)?;
+        if let Value::List(l) = &expanded {
+            if l.first().and_then(|h| self.special(h)).is_some_and(|s| &*s.name() == "begin") {
+                for inner in l.rest().iter() {
+                    self.flatten_body_form(inner, out)?;
+                }
+                return Ok(());
+            }
+        }
+        out.push(expanded);
+        Ok(())
+    }
+
+    fn define_name(&self, form: &Value) -> Option<Symbol> {
+        let Value::List(l) = form else { return None };
+        if &*self.special(l.first()?)?.name() != "define" {
+            return None;
+        }
+        match l.iter().nth(1)? {
+            Value::Symbol(name) => Some(*name),
+            Value::List(signature) => match signature.first()? {
+                Value::Symbol(name) => Some(*name),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn expand_body(&mut self, forms: &[Value]) -> Result<Vec<Value>, Error> {
+        let mut flat = Vec::new();
+        for form in forms {
+            self.flatten_body_form(form, &mut flat)?;
+        }
+        let defined: Vec<Symbol> = flat.iter().filter_map(|f| self.define_name(f)).collect();
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.extend(defined);
+        }
+        self.expand_all(flat.iter())
+    }
+
+    fn rebuild(head: &Value, items: Vec<Value>) -> Value {
+        Value::list(std::iter::once(head.clone()).chain(items))
+    }
+
+    fn expand_list(&mut self, list: &List) -> Result<Value, Error> {
+        let head = list.first().unwrap();
+        let Some(sym) = self.special(head) else {
+            return Ok(Value::list(self.expand_all(list.iter())?));
+        };
+        if let Some(m) = self.globals.macro_for(sym) {
+            let expanded = m.expand(&Value::List(list.clone()))?;
+            return self.expand(&expanded);
+        }
+        let items: Vec<Value> = list.iter().skip(1).cloned().collect();
+        let expanded = match &*sym.name() {
+            "quote" => return Ok(Value::List(list.clone())),
+            "define-syntax" => {
+                if let (Some(Value::Symbol(name)), Some(spec)) = (items.first(), items.get(1)) {
+                    self.globals.define_macro(name.root(), Rc::new(Macro::parse(spec)?));
+                }
+                return Ok(Value::List(list.clone()));
+            }
+            "lambda" => {
+                let Some(params) = items.first() else { return Ok(Value::List(list.clone())) };
+                let body = self.with_scope(param_names(params), |e| e.expand_body(&items[1..]))?;
+                std::iter::once(params.clone()).chain(body).collect()
+            }
+            "define" => match items.first() {
+                Some(Value::List(signature)) => {
+                    let params = Value::List(signature.rest());
+                    let body = self.with_scope(param_names(&params), |e| e.expand_body(&items[1..]))?;
+                    std::iter::once(items[0].clone()).chain(body).collect()
+                }
+                _ => self.expand_all(items.iter())?,
+            },
+            "let" | "let*" | "loop" => self.expand_let(&sym.name(), &items)?,
+            "try" => {
+                let mut out = Vec::new();
+                for item in &items {
+                    let clause = match item {
+                        Value::List(l) => l.first().and_then(|h| self.special(h)).map(|s| s.name()),
+                        _ => None,
+                    };
+                    match (clause.as_deref(), item) {
+                        (Some("catch"), Value::List(l)) => {
+                            let parts: Vec<Value> = l.iter().cloned().collect();
+                            let var = match parts.get(1) {
+                                Some(Value::Symbol(s)) => vec![*s],
+                                _ => Vec::new(),
+                            };
+                            let body = self.with_scope(var, |e| e.expand_body(parts.get(2..).unwrap_or(&[])))?;
+                            out.push(Value::list(parts.iter().take(2).cloned().chain(body)));
+                        }
+                        (Some("finally"), Value::List(l)) => {
+                            let parts: Vec<Value> = l.iter().cloned().collect();
+                            let body = self.expand_all(parts[1..].iter())?;
+                            out.push(Value::list(parts.iter().take(1).cloned().chain(body)));
+                        }
+                        _ => out.push(self.expand(item)?),
+                    }
+                }
+                out
+            }
+            _ => self.expand_all(items.iter())?,
+        };
+        Ok(Self::rebuild(head, expanded))
+    }
+
+    fn expand_let(&mut self, form: &str, items: &[Value]) -> Result<Vec<Value>, Error> {
+        let (name, rest) = match (form, items.first()) {
+            ("let", Some(Value::Symbol(name))) => (Some(*name), &items[1..]),
+            _ => (None, items),
+        };
+        let Some(bindings) = rest.first() else { return Ok(items.to_vec()) };
+        let pairs = binding_pairs(bindings);
+        let mut names: Vec<Symbol> = name.into_iter().collect();
+        let mut expanded_bindings = Vec::new();
+        for (bound, inits) in &pairs {
+            let inits = if form == "let*" {
+                self.with_scope(names.clone(), |e| e.expand_all(inits.iter()))?
+            } else {
+                self.expand_all(inits.iter())?
+            };
+            if let Some(bound) = bound {
+                names.push(*bound);
+                expanded_bindings.push(Value::list(std::iter::once(Value::Symbol(*bound)).chain(inits)));
+            } else {
+                expanded_bindings.push(Value::list(inits));
+            }
+        }
+        let body = self.with_scope(names, |e| e.expand_body(&rest[1..]))?;
+        let mut out: Vec<Value> = name.map(Value::Symbol).into_iter().collect();
+        out.push(Value::list(expanded_bindings));
+        out.extend(body);
+        Ok(out)
+    }
+}

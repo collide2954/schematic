@@ -3,7 +3,9 @@ use std::rc::Rc;
 
 use crate::bytecode::{Capture, Op, Proto};
 use crate::error::Error;
+use crate::expander::Expander;
 use crate::list::List;
+use crate::macros::{Macro, strip_aliases};
 use crate::symbol::Symbol;
 use crate::value::Value;
 use crate::vm::{Arity, Globals};
@@ -229,10 +231,11 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn compile_toplevel(mut self, form: &Value) -> Result<Proto, Error> {
+        let form = Expander::new(self.globals).expand(form)?;
         let mut f = FunctionState::new(None);
-        f.boxed_names = scan_boxed(std::iter::once(form));
+        f.boxed_names = scan_boxed(std::iter::once(&form));
         self.functions.push(f);
-        self.compile(form, true)?;
+        self.compile(&form, true)?;
         Ok(self.functions.pop().unwrap().proto)
     }
 
@@ -342,7 +345,7 @@ impl<'a> Compiler<'a> {
         let top = self.functions.len() - 1;
         match self.resolve_in(top, name) {
             Some(r) => r,
-            None => Resolved::Global(self.globals.slot(name)),
+            None => Resolved::Global(self.globals.slot(name.root())),
         }
     }
 
@@ -374,15 +377,46 @@ impl<'a> Compiler<'a> {
         if self.resolve_in(top, *s).is_some() {
             return None;
         }
-        Some(*s)
+        Some(s.root())
+    }
+
+    fn macro_at_head(&mut self, form: &Value) -> Option<Rc<Macro>> {
+        let Value::List(l) = form else { return None };
+        let sym = self.is_special(l.first()?)?;
+        self.globals.macro_for(sym)
+    }
+
+    fn expand_head(&mut self, form: &Value) -> Result<Value, Error> {
+        let mut form = form.clone();
+        while let Some(m) = self.macro_at_head(&form) {
+            form = m.expand(&form)?;
+        }
+        Ok(form)
+    }
+
+    fn compile_define_syntax(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        let rest = args.rest();
+        let (Some(Value::Symbol(name)), Some(spec), 2) = (args.first(), rest.first(), args.len()) else {
+            return Err(syntax_error("define-syntax", "expected a name and a syntax-rules form"));
+        };
+        let name = name.root();
+        self.globals.define_macro(name, Rc::new(Macro::parse(spec)?));
+        self.emit_constant(&Value::Symbol(name));
+        self.finish_tail(tail);
+        Ok(())
     }
 
     fn compile_list(&mut self, list: &List, tail: bool) -> Result<(), Error> {
         let head = list.first().unwrap();
         let args = list.rest();
         if let Some(sym) = self.is_special(head) {
+            if let Some(m) = self.globals.macro_for(sym) {
+                let expanded = m.expand(&Value::List(list.clone()))?;
+                return self.compile(&expanded, tail);
+            }
             match &*sym.name() {
                 "quote" => return self.compile_quote(&args, tail),
+                "define-syntax" => return self.compile_define_syntax(&args, tail),
                 "if" => return self.compile_if(&args, tail),
                 "define" => return self.compile_define(&args, tail),
                 "set!" => return self.compile_set(&args, tail),
@@ -439,7 +473,29 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    fn expand_body_form(&mut self, form: &Value, out: &mut Vec<Value>) -> Result<(), Error> {
+        let expanded = self.expand_head(form)?;
+        if let Value::List(l) = &expanded {
+            if let Some(head) = l.first() {
+                if self.is_special(head).is_some_and(|s| &*s.name() == "begin") {
+                    for inner in l.rest().iter() {
+                        self.expand_body_form(inner, out)?;
+                    }
+                    return Ok(());
+                }
+            }
+        }
+        out.push(expanded);
+        Ok(())
+    }
+
     fn compile_body(&mut self, body: &List, tail: bool) -> Result<(), Error> {
+        let mut forms = Vec::new();
+        for form in body.iter() {
+            self.expand_body_form(form, &mut forms)?;
+        }
+        let body: List = forms.into_iter().collect();
+        let body = &body;
         let mut defined: Vec<Symbol> = Vec::new();
         for form in body.iter() {
             if let Some(name) = self.internal_define_name(form) {
@@ -857,7 +913,7 @@ impl<'a> Compiler<'a> {
             Some((slot, false)) => self.emit(Op::SetLocal(slot)),
             Some((slot, true)) => self.emit(Op::SetLocalCell(slot)),
             None if top == 0 => {
-                let slot = self.globals.slot(name) as u32;
+                let slot = self.globals.slot(name.root()) as u32;
                 self.emit(Op::DefineGlobal(slot));
                 self.finish_tail(tail);
                 return Ok(());
@@ -924,7 +980,7 @@ impl<'a> Compiler<'a> {
         if args.len() != 1 {
             return Err(syntax_error("quote", "expected exactly one form"));
         }
-        self.emit_constant(args.first().unwrap());
+        self.emit_constant(&strip_aliases(args.first().unwrap()));
         self.finish_tail(tail);
         Ok(())
     }
