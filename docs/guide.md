@@ -31,7 +31,8 @@ Run a file with `schematic file.scm`, evaluate one expression with
 If you prefer a window, Schematic Studio (`cargo run --release -p
 schematic-studio`) puts an editor, a console, an environment pane, and a
 data viewer side by side. Ctrl+Enter in the editor runs the form under the
-cursor and moves to the next one, so you can step through a script.
+cursor and moves to the next one, so you can step through a script, and the
+console remembers earlier inputs for the up and down arrows.
 
 ## Expressions
 

@@ -71,11 +71,14 @@ cargo test
 ## Schematic Studio
 
 Schematic Studio is a desktop workbench in the spirit of RStudio, built with
-Iced. It has a script editor with syntax highlighting, a console, an
-environment pane listing every value you have defined, and a data viewer
-that shows tables, arrays, and maps as a scrollable grid. The interpreter
-runs on its own thread, so the window stays responsive and a runaway loop
-can be stopped.
+Iced. Four resizable cards sit on a canvas: a script editor with syntax
+highlighting and bracket matching, a console with history, an environment
+pane that groups everything you have defined into data, values, and
+functions, and a data viewer that shows tables, arrays, and maps as a grid
+with numbers right-aligned. It has its own light and dark themes and bundles
+the Inter and JetBrains Mono fonts, so it looks the same everywhere. The
+interpreter runs on its own thread, so the window stays responsive and a
+runaway loop can be stopped.
 
 ```
 cargo run --release -p schematic-studio               # empty editor
@@ -83,8 +86,11 @@ cargo run --release -p schematic-studio script.scm    # open a file
 ```
 
 In the editor, Ctrl+Enter runs the form under the cursor (or the selection)
-and moves to the next one, Ctrl+Shift+Enter runs the whole file, and Ctrl+S
-saves. Clicking a name in the environment pane opens it in the data viewer.
+and moves to the next one, Ctrl+Shift+Enter runs the whole file, Ctrl+O opens
+a script through the native file dialog, Ctrl+S saves, and Ctrl+Shift+S saves
+under a new name. In the console, Enter runs a complete form, Shift+Enter adds
+a line, and the up and down arrows walk through earlier inputs. Clicking a
+name in the environment pane opens it in the data viewer.
 
 ## Learning more
 
@@ -94,4 +100,6 @@ saves. Clicking a name in the environment pane opens it in the data viewer.
 
 ## License
 
-Apache-2.0
+Apache-2.0. Schematic Studio bundles the Inter and JetBrains Mono fonts,
+which are distributed under the SIL Open Font License; their licence texts
+sit next to the font files in `crates/schematic-studio/fonts`.
