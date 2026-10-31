@@ -10,6 +10,7 @@ pub struct ReadError {
     pub message: String,
     pub line: usize,
     pub col: usize,
+    pub incomplete: bool,
 }
 
 impl fmt::Display for ReadError {
@@ -24,7 +25,7 @@ pub fn read_str(src: &str) -> Result<Value, ReadError> {
     let mut reader = Reader::new(src);
     match reader.read()? {
         Some(v) => Ok(v),
-        None => Err(reader.error("unexpected end of input")),
+        None => Err(reader.incomplete("unexpected end of input")),
     }
 }
 
@@ -54,7 +55,11 @@ impl<'a> Reader<'a> {
     }
 
     fn error(&self, message: impl Into<String>) -> ReadError {
-        ReadError { message: message.into(), line: self.line, col: self.col }
+        ReadError { message: message.into(), line: self.line, col: self.col, incomplete: false }
+    }
+
+    fn incomplete(&self, message: impl Into<String>) -> ReadError {
+        ReadError { incomplete: true, ..self.error(message) }
     }
 
     fn peek(&self) -> Option<char> {
@@ -91,7 +96,7 @@ impl<'a> Reader<'a> {
                     self.bump();
                     self.bump();
                     if self.read()?.is_none() {
-                        return Err(self.error("expected a form after `#_`"));
+                        return Err(self.incomplete("expected a form after `#_`"));
                     }
                 }
                 _ => return Ok(()),
@@ -100,7 +105,7 @@ impl<'a> Reader<'a> {
     }
 
     fn skip_block_comment(&mut self) -> Result<(), ReadError> {
-        let unclosed = self.error("unclosed `#|`");
+        let unclosed = self.incomplete("unclosed `#|`");
         self.bump();
         self.bump();
         let mut depth = 1;
@@ -172,7 +177,7 @@ impl<'a> Reader<'a> {
                 self.read_set()
             }
             Some(c) => Err(self.error(format!("unknown dispatch `#{c}`"))),
-            None => Err(self.error("unexpected end of input after `#`")),
+            None => Err(self.incomplete("unexpected end of input after `#`")),
         }
     }
 
@@ -196,13 +201,13 @@ impl<'a> Reader<'a> {
     fn read_wrapped(&mut self, name: &str, prefix: &str) -> Result<Value, ReadError> {
         match self.read()? {
             Some(v) => Ok(Value::list([Value::symbol(name), v])),
-            None => Err(self.error(format!("expected a form after `{prefix}`"))),
+            None => Err(self.incomplete(format!("expected a form after `{prefix}`"))),
         }
     }
 
     fn read_items(&mut self, close: char) -> Result<Vec<Value>, ReadError> {
         let open = self.bump().unwrap();
-        let unclosed = self.error(format!("unclosed `{open}`"));
+        let unclosed = self.incomplete(format!("unclosed `{open}`"));
         let mut items = Vec::new();
         loop {
             self.skip_trivia()?;
@@ -224,7 +229,7 @@ impl<'a> Reader<'a> {
     }
 
     fn read_string(&mut self) -> Result<Value, ReadError> {
-        let start = self.error("unterminated string");
+        let start = self.incomplete("unterminated string");
         self.bump();
         let mut out = String::new();
         loop {
@@ -448,6 +453,16 @@ mod tests {
     fn errors_carry_position() {
         let err = read_str("(1\n  \"oops").unwrap_err();
         assert_eq!((err.line, err.col), (2, 3));
+    }
+
+    #[test]
+    fn errors_at_end_of_input_are_marked_incomplete() {
+        for src in ["(1 2", "[1", "{:a 1", "#{1", "\"abc", "#| x", "'", "#_", "#", "", "  ; c"] {
+            assert!(read_str(src).unwrap_err().incomplete, "{src:?}");
+        }
+        for src in ["(1 2]", ")", "#x", "{:a}", "99999999999999999999"] {
+            assert!(!read_str(src).unwrap_err().incomplete, "{src:?}");
+        }
     }
 
     #[test]

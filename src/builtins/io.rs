@@ -1,3 +1,4 @@
+use super::collections::expects;
 use super::native_vm;
 use super::strings::join_display;
 use crate::error::Error;
@@ -9,6 +10,17 @@ pub fn install(globals: &mut Globals) {
     native_vm(globals, "println", Arity::AtLeast(0), |vm, args| emit(vm, &args, false, true));
     native_vm(globals, "prn", Arity::AtLeast(0), |vm, args| emit(vm, &args, true, true));
     native_vm(globals, "newline", Arity::Exact(0), |vm, args| emit(vm, &args, false, true));
+    native_vm(globals, "exit", Arity::Between(0, 1), exit);
+}
+
+fn exit(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
+    let code = match args.first() {
+        None => 0,
+        Some(Value::Int(n)) => *n as i32,
+        Some(other) => return Err(expects("exit", "an integer status", other)),
+    };
+    let _ = vm.output().flush();
+    std::process::exit(code)
 }
 
 fn io_error(e: std::io::Error) -> Error {
