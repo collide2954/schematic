@@ -21,6 +21,21 @@ never used one.
   (if (= i 10) acc (loop (+ i 1) (+ acc i))))
 ```
 
+Data work uses typed arrays and column-oriented tables. Arithmetic and
+comparisons broadcast over arrays, and `nil` marks missing values.
+
+```scheme
+(define sales (read-csv "sales.csv"))
+
+(define big (where sales (> (:amount sales) 100)))
+
+(aggregate sales :city {:total [sum :amount]
+                        :orders [count]})
+
+(mean (:amount sales))        ; missing values are skipped
+(* (:amount sales) 1.25)      ; elementwise
+```
+
 ## Status
 
 Early development. Working today:
@@ -31,9 +46,12 @@ Early development. Working today:
 - `try`/`catch`/`finally`, `raise`, and `call/ec` escape continuations
 - Hygienic `syntax-rules` macros
 - A standard library of collection, string, numeric, and higher-order functions
+- Typed arrays with missing values, broadcasting arithmetic, and statistics
+- Tables with `select`, `where`, `order-by`, `group-by`, `aggregate`, `join`,
+  `describe`, and CSV reading and writing
 - A REPL and file runner
 
-Next up: VM performance work, then typed numeric arrays and tables.
+Next up: more performance work, plotting-friendly output, and documentation.
 
 ## Running
 
