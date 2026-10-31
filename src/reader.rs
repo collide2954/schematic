@@ -70,18 +70,56 @@ impl<'a> Reader<'a> {
         Some(c)
     }
 
-    fn skip_whitespace(&mut self) {
-        while let Some(c) = self.peek() {
-            if c.is_whitespace() || c == ',' {
-                self.bump();
-            } else {
-                break;
+    fn peek_second(&self) -> Option<char> {
+        let mut chars = self.src[self.pos..].chars();
+        chars.next();
+        chars.next()
+    }
+
+    fn skip_trivia(&mut self) -> Result<(), ReadError> {
+        loop {
+            match self.peek() {
+                Some(c) if c.is_whitespace() || c == ',' => {
+                    self.bump();
+                }
+                Some(';') => while !matches!(self.bump(), None | Some('\n')) {},
+                Some('#') if self.peek_second() == Some('|') => self.skip_block_comment()?,
+                Some('#') if self.peek_second() == Some('_') => {
+                    self.bump();
+                    self.bump();
+                    if self.read()?.is_none() {
+                        return Err(self.error("expected a form after `#_`"));
+                    }
+                }
+                _ => return Ok(()),
             }
         }
     }
 
+    fn skip_block_comment(&mut self) -> Result<(), ReadError> {
+        let unclosed = self.error("unclosed `#|`");
+        self.bump();
+        self.bump();
+        let mut depth = 1;
+        while depth > 0 {
+            match self.bump() {
+                None => return Err(unclosed),
+                Some('#') if self.peek() == Some('|') => {
+                    self.bump();
+                    depth += 1;
+                }
+                Some('|') if self.peek() == Some('#') => {
+                    self.bump();
+                    depth -= 1;
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(())
+    }
+
     pub fn read(&mut self) -> Result<Option<Value>, ReadError> {
-        self.skip_whitespace();
+        self.skip_trivia()?;
         let Some(c) = self.peek() else {
             return Ok(None);
         };
@@ -122,7 +160,7 @@ impl<'a> Reader<'a> {
         let unclosed = self.error(format!("unclosed `{open}`"));
         let mut items = Vec::new();
         loop {
-            self.skip_whitespace();
+            self.skip_trivia()?;
             match self.peek() {
                 None => return Err(unclosed),
                 Some(c) if c == close => {
@@ -365,5 +403,26 @@ mod tests {
     fn errors_carry_position() {
         let err = read_str("(1\n  \"oops").unwrap_err();
         assert_eq!((err.line, err.col), (2, 3));
+    }
+
+    #[test]
+    fn skips_line_comments() {
+        assert_eq!(read("; hello\n42"), Value::Int(42));
+        assert_eq!(read("(1 ; two\n 3)"), list(vec![Value::Int(1), Value::Int(3)]));
+        assert_eq!(read_all("7 ; trailing").unwrap(), vec![Value::Int(7)]);
+    }
+
+    #[test]
+    fn skips_datum_comments() {
+        assert_eq!(read("#_ 1 2"), Value::Int(2));
+        assert_eq!(read("(1 #_(2 3) 4)"), list(vec![Value::Int(1), Value::Int(4)]));
+        assert_eq!(read_all("#_1").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn skips_block_comments() {
+        assert_eq!(read("#| note |# 5"), Value::Int(5));
+        assert_eq!(read("#| outer #| inner |# still |# 5"), Value::Int(5));
+        assert!(read_str("#| open").is_err());
     }
 }
