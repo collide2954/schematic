@@ -249,6 +249,7 @@ pub struct Vm {
     next_token: u64,
     output: Box<dyn Write>,
     interrupt: Arc<AtomicBool>,
+    ticks: u32,
 }
 
 impl Default for Vm {
@@ -268,6 +269,7 @@ impl Vm {
             next_token: 0,
             output: Box::new(std::io::stdout()),
             interrupt: Arc::new(AtomicBool::new(false)),
+            ticks: 0,
         }
     }
 
@@ -276,8 +278,9 @@ impl Vm {
     }
 
     #[inline]
-    fn interrupted(&self) -> bool {
-        self.interrupt.load(Ordering::Relaxed) && self.interrupt.swap(false, Ordering::Relaxed)
+    fn interrupted(&mut self) -> bool {
+        self.ticks = self.ticks.wrapping_add(1);
+        self.ticks & 4095 == 0 && self.interrupt.swap(false, Ordering::Relaxed)
     }
 
     pub fn set_frame_limit(&mut self, limit: usize) {
@@ -586,6 +589,9 @@ impl Vm {
                     if self.frames.len() != depth {
                         reload!();
                     }
+                    if self.interrupted() {
+                        throw!(Error::interrupt());
+                    }
                 }
                 Op::TailCall(argc) => {
                     self.frames[frame].ip = ip;
@@ -593,6 +599,9 @@ impl Vm {
                         TailCalled::Same => ip = 0,
                         TailCalled::Other => reload!(),
                         TailCalled::Returned => finish_return!(),
+                    }
+                    if self.interrupted() {
+                        throw!(Error::interrupt());
                     }
                 }
                 Op::PushCatch(target) => {
@@ -710,9 +719,6 @@ impl Vm {
     }
 
     fn call(&mut self, argc: usize) -> Result<(), Error> {
-        if self.interrupted() {
-            return Err(Error::interrupt());
-        }
         let callee_index = self.stack.len() - argc - 1;
         let callee = std::mem::take(&mut self.stack[callee_index]);
         match callee {
@@ -802,9 +808,6 @@ impl Vm {
     }
 
     fn tail_call(&mut self, argc: usize) -> Result<TailCalled, Error> {
-        if self.interrupted() {
-            return Err(Error::interrupt());
-        }
         let callee_index = self.stack.len() - argc - 1;
         let Value::Closure(closure) = self.stack[callee_index].clone() else {
             self.call(argc)?;
