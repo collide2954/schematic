@@ -1,6 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 
+use crate::list::List;
 use crate::symbol::Symbol;
 
 #[derive(Clone, Debug)]
@@ -12,9 +13,14 @@ pub enum Value {
     Symbol(Symbol),
     Keyword(Symbol),
     Str(Rc<str>),
+    List(List),
 }
 
 impl Value {
+    pub fn list(items: impl IntoIterator<Item = Value>) -> Value {
+        Value::List(items.into_iter().collect())
+    }
+
     pub fn symbol(name: &str) -> Value {
         Value::Symbol(Symbol::intern(name))
     }
@@ -48,6 +54,7 @@ impl PartialEq for Value {
             (Symbol(a), Symbol(b)) => a == b,
             (Keyword(a), Keyword(b)) => a == b,
             (Str(a), Str(b)) => a == b,
+            (List(a), List(b)) => a == b,
             _ => false,
         }
     }
@@ -90,8 +97,25 @@ impl fmt::Display for Value {
             Value::Symbol(s) => write!(f, "{s}"),
             Value::Keyword(s) => write!(f, ":{s}"),
             Value::Str(s) => write_string(f, s),
+            Value::List(l) => write_seq(f, "(", l.iter(), ")"),
         }
     }
+}
+
+fn write_seq<'a>(
+    f: &mut fmt::Formatter<'_>,
+    open: &str,
+    items: impl Iterator<Item = &'a Value>,
+    close: &str,
+) -> fmt::Result {
+    f.write_str(open)?;
+    for (i, item) in items.enumerate() {
+        if i > 0 {
+            f.write_str(" ")?;
+        }
+        write!(f, "{item}")?;
+    }
+    f.write_str(close)
 }
 
 #[cfg(test)]
