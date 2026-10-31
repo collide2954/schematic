@@ -95,7 +95,7 @@ every element, a plain number is repeated, and missing values stay missing.
 | `(get coll key [default])` | lookup by key or index, `nil` when absent |
 | `(count coll)`, `(empty? coll)` | size |
 | `(cons x list)` | prepend |
-| `(conj coll x...)` | add in the natural place: end of a vector or array, front of a list, into a set or map |
+| `(conj coll x...)` | add in the natural place: end of a vector or array, front of a list, into a set or map, a row map onto a table |
 | `(assoc coll k v...)` | set keys in a map, indices in a vector, or columns in a table |
 | `(dissoc coll k...)`, `(disj set x...)` | remove keys or members |
 | `(update coll k f args...)` | replace the value at `k` with `(f value args...)` |
@@ -105,7 +105,7 @@ every element, a plain number is repeated, and missing values stay missing.
 | `(merge map...)`, `(select-keys map [k...])`, `(zipmap keys vals)` | map building |
 | `(subvec v start [end])` | vector slice |
 | `(take n coll)`, `(drop n coll)`, `(take-while f coll)`, `(drop-while f coll)` | prefixes and suffixes |
-| `(concat coll...)`, `(into to from)`, `(interleave coll...)`, `(flatten coll)` | combining |
+| `(concat coll...)`, `(into to from)`, `(interleave coll...)`, `(flatten coll)` | combining; `concat` starting from a table stacks tables or row maps |
 | `(distinct coll)`, `(frequencies coll)`, `(partition n [step] coll)`, `(reverse coll)` | reshaping |
 
 Results follow the input: a list in gives a list out, an array gives an array
@@ -152,7 +152,12 @@ when the elements allow it, and anything else gives a vector.
 | `(where coll mask)` | elements where the boolean array is true |
 | `(a i)`, `(a mask)`, `(a [i j])` | element, mask selection, or gather by positions |
 | `(sum a)`, `(mean a)`, `(median a)`, `(variance a)`, `(std a)` | statistics that skip missing values; `variance` and `std` are sample estimates |
-| `(cumsum a)`, `(quantile a q)` | running sum; linear-interpolation quantile |
+| `(quantile a q)` | linear-interpolation quantile |
+| `(running-sum a)`, `(running-max a)`, `(running-min a)` | running aggregates; a missing element stays missing and does not reset the run |
+| `(rank a)` | 1-based ascending rank; ties share the lowest rank |
+| `(lag a [n])`, `(lead a [n])` | shift by `n` (default 1), filling with `nil` |
+| `(diff a)` | change from the previous element |
+| `(rolling n f a)` | `f` over each trailing window of `n` elements, `nil` until the window is full |
 
 ## Tables
 
@@ -165,10 +170,15 @@ when the elements allow it, and anything else gives a vector.
 | `(select t [:a :b])`, `(rename t {:old :new})` | columns |
 | `(assoc t :c values)`, `(dissoc t :c)`, `(update t :c f)` | add, remove, or transform a column; a scalar value fills the column |
 | `(where t mask-or-predicate)` | filter rows |
+| `(distinct t [key-or-keys])` | drop duplicate rows, keeping the first; by every column unless keys are given |
 | `(order-by t key-or-keys [:asc or :desc])` | stable sort |
 | `(head t [n])`, `(tail t [n])` | first or last rows, five by default |
+| `(conj t row-map...)`, `(into t rows)`, `(concat t tables-or-rows...)` | append rows; columns are the union, with `nil` where a value is absent |
 | `(group-by t key-or-keys)` | map from key to sub-table |
 | `(aggregate t [key-or-keys] {:new [f :col] ...})` | summarize, optionally per group; `[f]` applies `f` to the group table |
+| `(window t [key-or-keys] {:new [f :col] ...})` | add columns computed per group, kept in the original row order; `f` returns one value per row or a scalar to repeat |
+| `(pivot t row-keys :col :value [f])` | long to wide: one column per distinct `:col` value; duplicates are an error unless `f` combines them |
+| `(unpivot t [:cols] :key :value)` | wide to long: one row per listed column, with its name in `:key` |
 | `(join left right :key [:inner or :left])` | join on a shared column; clashing right columns get a `-right` suffix |
 | `(describe t)` | count, missing, mean, std, min, and max per numeric column |
 

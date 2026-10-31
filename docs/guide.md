@@ -239,6 +239,22 @@ A boolean array selects elements, and a vector of positions gathers them:
 (drop-missing prices)           ; #[10 20 30]
 ```
 
+A few functions look along an array in order, which is what time series
+and rankings need. `lag` and `lead` shift values, `diff` takes the change
+from the previous element, `rolling` applies a function to each trailing
+window, and `rank` numbers elements from smallest to largest:
+
+```scheme
+(running-sum prices)            ; #[10 30 60 nil]
+(lag prices)                    ; #[nil 10 20 30]
+(diff prices)                   ; #[nil 10 10 nil]
+(rolling 2 mean prices)         ; #[nil 15.0 25.0 30.0]
+(rank #[30 10 20])              ; #[3 1 2]
+```
+
+The last rolling mean is `30.0` rather than missing because `mean` skips
+missing values inside its window, as it does everywhere else.
+
 Comparisons against arrays use `=` elementwise. To ask whether two values
 are the same thing structurally, use `equal?`.
 
@@ -294,6 +310,45 @@ a function and the column it applies to; `[count]` alone counts rows:
 ;; city  total  orders
 ;; Oslo     40       2
 ;; Rome     60       2
+```
+
+`window` has the same shape as `aggregate` but keeps every row, adding a
+column computed within each group. Running totals, shares of a group total,
+and ranks within a group all fit:
+
+```scheme
+(window sales :city {:running [running-sum :amount]
+                     :share (lambda (g) (/ (:amount g) (sum (:amount g))))})
+;; city  amount  year  running  share
+;; Oslo      10  2020       10                0.25
+;; Rome      20  2020       20  0.3333333333333333
+;; Oslo      30  2021       40                0.75
+;; Rome      40  2021       60  0.6666666666666666
+```
+
+`pivot` turns a long table wide, with one column per distinct value of a
+column. `unpivot` goes the other way:
+
+```scheme
+(pivot sales :city :year :amount)
+;; city  2020  2021
+;; Oslo    10    30
+;; Rome    20    40
+
+(unpivot (pivot sales :city :year :amount) [:2020 :2021] :year :amount)
+```
+
+When several rows land in the same cell, pass a function to combine them,
+as in `(pivot sales :city :year :amount sum)`.
+
+Rows are added with the same functions that add to other collections.
+Columns a row lacks are filled with `nil`, and `distinct` drops repeated
+rows:
+
+```scheme
+(conj sales {:city "Oslo" :amount 50 :year 2022})
+(concat sales more-sales)
+(distinct sales :city)
 ```
 
 Join two tables on a shared column name:

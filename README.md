@@ -46,12 +46,14 @@ Early development. Working today:
 - `try`/`catch`/`finally`, `raise`, and `call/ec` escape continuations
 - Hygienic `syntax-rules` macros
 - A standard library of collection, string, numeric, and higher-order functions
-- Typed arrays with missing values, broadcasting arithmetic, and statistics
-- Tables with `select`, `where`, `order-by`, `group-by`, `aggregate`, `join`,
-  `describe`, and CSV reading and writing
+- Typed arrays with missing values, broadcasting arithmetic, statistics, and
+  ordered helpers such as `lag`, `diff`, `rank`, `rolling`, and `running-sum`
+- Tables with `select`, `where`, `distinct`, `order-by`, `group-by`,
+  `aggregate`, `window`, `pivot`, `unpivot`, `join`, `describe`, row
+  appending, and CSV reading and writing
 - A REPL and file runner
 
-Next up: more performance work, plotting-friendly output, and documentation.
+Next up: string formatting, plotting-friendly output, and more performance work.
 
 ## Running
 

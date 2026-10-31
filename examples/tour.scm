@@ -81,6 +81,11 @@
 (check "gather" #[30 10] (prices [2 0]))
 (check "fill" #[10 20 30 0] (fill-missing prices 0))
 (check "drop" #[10 20 30] (drop-missing prices))
+(check "running-sum" #[10 30 60 nil] (running-sum prices))
+(check "lag" #[nil 10 20 30] (lag prices))
+(check "diff" #[nil 10 10 nil] (diff prices))
+(check "rolling" #[nil 15.0 25.0 30.0] (rolling 2 mean prices))
+(check "rank" #[3 1 2] (rank #[30 10 20]))
 
 ;; Tables
 (define sales
@@ -102,6 +107,18 @@
 (check "head" 2 (nrows (head sales 2)))
 (define totals (aggregate sales :city {:total [sum :amount] :orders [count]}))
 (check "aggregate" [{:city "Oslo" :total 40 :orders 2} {:city "Rome" :total 60 :orders 2}] (rows totals))
+(define shares (window sales :city {:running [running-sum :amount]
+                                    :share (lambda (g) (/ (:amount g) (sum (:amount g))))}))
+(check "window running" #[10 20 40 60] (:running shares))
+(check "window share" #[0.25 0.3333333333333333 0.75 0.6666666666666666] (:share shares))
+(define wide (pivot sales :city :year :amount))
+(check "pivot" [{:city "Oslo" :2020 10 :2021 30} {:city "Rome" :2020 20 :2021 40}] (rows wide))
+(check "unpivot" (rows (order-by sales :city)) (rows (unpivot wide [:2020 :2021] :year :amount)))
+(check "pivot combine" #[40 60] (:2021 (pivot (conj sales {:city "Oslo" :amount 10 :year 2021} {:city "Rome" :amount 20 :year 2021}) :city :year :amount sum)))
+(define more-sales (table {:city ["Rome"] :amount [50] :year [2022]}))
+(check "conj row" 5 (nrows (conj sales {:city "Oslo" :amount 50 :year 2022})))
+(check "concat tables" 5 (nrows (concat sales more-sales)))
+(check "distinct" #["Oslo" "Rome"] (:city (distinct sales :city)))
 (define cities (table {:city ["Oslo" "Rome"] :country ["NO" "IT"]}))
 (check "join" [:city :amount :year :country] (columns (join sales cities :city)))
 (check "describe" 2 (nrows (describe sales)))
