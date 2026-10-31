@@ -59,6 +59,32 @@ pub fn column_from(value: &Value, nrows: Option<usize>) -> Result<Rc<Array>, Err
     }
 }
 
+pub fn append(table: &Table, more: &[Value]) -> Result<Value, Error> {
+    let mut parts = vec![table.clone()];
+    for value in more {
+        parts.push(match value {
+            Value::Table(t) => (**t).clone(),
+            Value::Vector(_) | Value::List(_) => from_rows(value)?,
+            other => return Err(expects("concat", "tables or collections of row maps", other)),
+        });
+    }
+    Ok(Value::Table(Rc::new(Table::stack(&parts)?)))
+}
+
+pub fn push_rows(mut table: Table, rows: impl Iterator<Item = Value>) -> Result<Value, Error> {
+    for row in rows {
+        let Value::Map(m) = row else {
+            return Err(expects("conj onto a table", "row maps", &row));
+        };
+        let mut cells = Vec::with_capacity(m.len());
+        for (k, v) in m.iter() {
+            cells.push((column_name("conj", k)?, v.clone()));
+        }
+        table.push_row(&cells)?;
+    }
+    Ok(Value::Table(Rc::new(table)))
+}
+
 fn from_rows(rows: &Value) -> Result<Table, Error> {
     let rows: Vec<Value> = items("table", rows)?.collect();
     let mut names: Vec<Symbol> = Vec::new();

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::tables::{column_from, column_name, distinct_rows};
+use super::tables::{append, column_from, column_name, distinct_rows, push_rows};
 use super::{native, native_owned};
 use crate::array::Array;
 use crate::error::Error;
@@ -226,6 +226,7 @@ fn conj_owned(args: &mut [Value]) -> Result<Value, Error> {
             }
             Ok(Value::Array(Rc::new(out)))
         }
+        Value::Table(t) => push_rows(owned(t), args),
         Value::Map(m) => {
             let mut out = owned(m);
             for addition in args {
@@ -386,6 +387,9 @@ fn take_drop(name: &str, args: &[Value], take: bool) -> Result<Value, Error> {
 }
 
 fn concat(args: &[Value]) -> Result<Value, Error> {
+    if let Some(Value::Table(t)) = args.first() {
+        return append(t, &args[1..]);
+    }
     let mut out = Vec::new();
     for arg in args {
         out.extend(items("concat", arg)?);

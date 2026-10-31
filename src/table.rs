@@ -106,6 +106,41 @@ impl Table {
         Table::new(pairs)
     }
 
+    pub fn push_row(&mut self, cells: &[(Symbol, Value)]) -> Result<(), Error> {
+        let nrows = self.nrows();
+        for (name, _) in cells {
+            if self.column(*name).is_none() {
+                self.names.push(*name);
+                self.columns.push(Rc::new(Array::from_values(std::iter::repeat_n(Value::Nil, nrows))?));
+            }
+        }
+        for (name, column) in self.names.iter().zip(self.columns.iter_mut()) {
+            let value = cells.iter().find(|(n, _)| n == name).map_or(Value::Nil, |(_, v)| v.clone());
+            Rc::make_mut(column).push_mut(value)?;
+        }
+        Ok(())
+    }
+
+    pub fn stack(parts: &[Table]) -> Result<Table, Error> {
+        let mut names: Vec<Symbol> = Vec::new();
+        for name in parts.iter().flat_map(|part| part.names()) {
+            if !names.contains(name) {
+                names.push(*name);
+            }
+        }
+        let mut pairs = Vec::with_capacity(names.len());
+        for name in names {
+            let values = parts.iter().flat_map(|part| -> Box<dyn Iterator<Item = Value>> {
+                match part.column(name) {
+                    Some(column) => Box::new(column.iter()),
+                    None => Box::new(std::iter::repeat_n(Value::Nil, part.nrows())),
+                }
+            });
+            pairs.push((name, Rc::new(Array::from_values(values)?)));
+        }
+        Table::new(pairs)
+    }
+
     pub fn take_rows(&self, indices: &[usize]) -> Table {
         let pairs = self
             .columns()

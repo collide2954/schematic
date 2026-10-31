@@ -161,6 +161,21 @@ fn tables_drop_duplicate_rows() {
 }
 
 #[test]
+fn rows_append_to_tables_with_conj_into_and_concat() {
+    assert_eq!(with_people("(rows (conj t {:name \"Cy\" :age 29}))"), "[{:name \"Ada\", :age 36} {:name \"Bob\", :age 41} {:name \"Cy\", :age 29}]");
+    assert_eq!(with_people("[(row (conj t {:name \"Cy\"}) 2) (nrows (conj t {:name \"Cy\"} {:name \"Di\"})) (nrows t)]"), "[{:name \"Cy\", :age nil} 4 2]");
+    assert_eq!(with_people("(define t2 (conj t {:name \"Cy\" :city \"Oslo\"})) [(columns t2) (:city t2) (:age t2)]"), "[[:name :age :city] #[nil nil \"Oslo\"] #[36 41 nil]]");
+    assert_eq!(with_people("(:age (conj t {:name \"Cy\" :age 29.5}))"), "#[36.0 41.0 29.5]");
+    assert_eq!(with_people("(conj t 5)"), "error: conj onto a table expects row maps, got 5");
+    assert_eq!(with_people("(conj t {:age \"old\"})"), "error: array elements must all be numbers, all booleans, or all strings, got 36 and \"old\"");
+    assert_eq!(with_people("[(nrows (into t [{:name \"Cy\"} {:name \"Di\"}])) (rows (reduce conj (table {}) [{:a 1} {:a 2 :b 3}]))]"), "[4 [{:a 1, :b nil} {:a 2, :b 3}]]");
+    assert_eq!(with_people("(rows (concat t (table {:name [\"Cy\"] :age [29]})))"), "[{:name \"Ada\", :age 36} {:name \"Bob\", :age 41} {:name \"Cy\", :age 29}]");
+    assert_eq!(with_people("(define t3 (concat t (table {:city [\"Oslo\"]}) [{:name \"Di\"}])) [(columns t3) (nrows t3) (:age t3) (:city t3)]"), "[[:name :age :city] 4 #[36 41 nil nil] #[nil nil \"Oslo\" nil]]");
+    assert_eq!(with_people("[(nrows (concat t)) (count (concat [] t)) (nrows (concat (table {}) t))]"), "[2 2 2]");
+    assert_eq!(with_people("(concat t 5)"), "error: concat expects tables or collections of row maps, got 5");
+}
+
+#[test]
 fn tables_join_on_a_shared_key() {
     let setup = "(define p (table {:id [1 2 3] :name [\"Ada\" \"Bob\" \"Cy\"]})) (define o (table {:id [2 1 2 9] :total [5 7 1 0]}))";
     assert_eq!(eval(&format!("{setup} (rows (join p o :id))")), "[{:id 1, :name \"Ada\", :total 7} {:id 2, :name \"Bob\", :total 5} {:id 2, :name \"Bob\", :total 1}]");
