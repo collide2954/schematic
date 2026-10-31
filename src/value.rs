@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use crate::list::List;
 use crate::symbol::Symbol;
+use crate::vector::Vector;
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -14,11 +15,16 @@ pub enum Value {
     Keyword(Symbol),
     Str(Rc<str>),
     List(List),
+    Vector(Rc<Vector>),
 }
 
 impl Value {
     pub fn list(items: impl IntoIterator<Item = Value>) -> Value {
         Value::List(items.into_iter().collect())
+    }
+
+    pub fn vector(items: impl IntoIterator<Item = Value>) -> Value {
+        Value::Vector(Rc::new(items.into_iter().collect()))
     }
 
     pub fn symbol(name: &str) -> Value {
@@ -55,6 +61,7 @@ impl PartialEq for Value {
             (Keyword(a), Keyword(b)) => a == b,
             (Str(a), Str(b)) => a == b,
             (List(a), List(b)) => a == b,
+            (Vector(a), Vector(b)) => Rc::ptr_eq(a, b) || a == b,
             _ => false,
         }
     }
@@ -98,6 +105,7 @@ impl fmt::Display for Value {
             Value::Keyword(s) => write!(f, ":{s}"),
             Value::Str(s) => write_string(f, s),
             Value::List(l) => write_seq(f, "(", l.iter(), ")"),
+            Value::Vector(v) => write_seq(f, "[", v.iter(), "]"),
         }
     }
 }
