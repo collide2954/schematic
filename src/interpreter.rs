@@ -8,6 +8,8 @@ use crate::reader::read_all;
 use crate::value::Value;
 use crate::vm::Vm;
 
+const PRELUDE: &str = include_str!("prelude.scm");
+
 pub struct Interpreter {
     vm: Vm,
 }
@@ -22,7 +24,9 @@ impl Interpreter {
     pub fn new() -> Interpreter {
         let mut vm = Vm::new();
         builtins::install(&mut vm.globals);
-        Interpreter { vm }
+        let mut interp = Interpreter { vm };
+        interp.eval_str(PRELUDE).expect("prelude failed to load");
+        interp
     }
 
     pub fn set_frame_limit(&mut self, limit: usize) {

@@ -871,6 +871,18 @@ fn printing_goes_to_the_interpreter_output() {
 }
 
 #[test]
+fn prelude_function_combinators() {
+    assert_eq!(eval("(identity 5)"), "5");
+    assert_eq!(eval("((constantly 7) 1 2)"), "7");
+    assert_eq!(eval("((complement even?) 3)"), "true");
+    assert_eq!(eval("((partial + 1 2) 3 4)"), "10");
+    assert_eq!(eval("[((comp inc inc) 1) ((comp) 4) ((comp str inc) 1)]"), "[3 4 \"2\"]");
+    assert_eq!(eval("(map (comp inc (partial * 2)) [1 2])"), "[3 5]");
+    assert_eq!(eval("comp"), "#<procedure comp>");
+    assert_eq!(eval("((juxt inc dec) 5)"), "[6 4]");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));
