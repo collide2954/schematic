@@ -557,6 +557,31 @@ fn try_syntax_errors() {
 }
 
 #[test]
+fn call_ec_escapes_early() {
+    assert_eq!(eval("(call/ec (lambda (k) 1 (k 2) 3))"), "2");
+    assert_eq!(eval("(call/ec (lambda (k) 1 2))"), "2");
+    assert_eq!(eval("(+ 1 (call/ec (lambda (k) (+ 10 (k 5)))))"), "6");
+    assert_eq!(eval("(define (f k) (k 'escaped) 'not-here) (call/ec (lambda (k) (f k) 'nope))"), "escaped");
+    assert_eq!(eval("(call/ec (lambda (k) (k)))"), "nil");
+    assert_eq!(eval("(let ((x 1)) (call/ec (lambda (k) (k (+ x 1)))))"), "2");
+}
+
+#[test]
+fn escapes_pass_through_catch_but_run_finally() {
+    assert_eq!(eval("(call/ec (lambda (k) (try (k 'out) (catch e 'caught))))"), "out");
+    assert_eq!(eval("(define log nil) (call/ec (lambda (k) (try (k 'out) (finally (set! log 'cleaned))))) log"), "cleaned");
+    assert_eq!(eval("(try (call/ec (lambda (k) (raise 'inner))) (catch e e))"), "inner");
+}
+
+#[test]
+fn escape_outside_its_extent_is_an_error() {
+    let src = "(define saved nil) (call/ec (lambda (k) (set! saved k))) (saved 1)";
+    assert_eq!(eval(src), "error: escape continuation called outside its extent");
+    assert_eq!(eval("(call/ec (lambda (k) (k 1 2)))"), "error: escape continuation expects 0 to 1 arguments, got 2");
+    assert!(eval("(call/ec)").starts_with("error:"));
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

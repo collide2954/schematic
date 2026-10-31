@@ -27,6 +27,7 @@ pub enum Value {
     Native(Rc<Native>),
     Cell(Rc<RefCell<Value>>),
     Signal(Rc<Error>),
+    Escape(u64),
 }
 
 impl Value {
@@ -75,7 +76,7 @@ impl Value {
             Value::Vector(_) => "vector",
             Value::Map(_) => "map",
             Value::Set(_) => "set",
-            Value::Closure(_) | Value::Native(_) => "function",
+            Value::Closure(_) | Value::Native(_) | Value::Escape(_) => "function",
             Value::Cell(_) => "cell",
             Value::Signal(_) => "signal",
         }
@@ -157,6 +158,7 @@ impl Value {
             Value::Native(n) => mix(Rc::as_ptr(n) as usize as u64 ^ TAG_POINTER),
             Value::Cell(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
             Value::Signal(s) => mix(Rc::as_ptr(s) as usize as u64 ^ TAG_POINTER),
+            Value::Escape(token) => mix(*token ^ TAG_POINTER),
         }
     }
 }
@@ -181,6 +183,7 @@ impl PartialEq for Value {
             (Native(a), Native(b)) => Rc::ptr_eq(a, b),
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
             (Signal(a), Signal(b)) => Rc::ptr_eq(a, b),
+            (Escape(a), Escape(b)) => a == b,
             _ => false,
         }
     }
@@ -243,6 +246,7 @@ impl fmt::Display for Value {
             Value::Native(n) => write!(f, "#<builtin {}>", n.name),
             Value::Cell(_) => f.write_str("#<cell>"),
             Value::Signal(_) => f.write_str("#<signal>"),
+            Value::Escape(_) => f.write_str("#<escape>"),
         }
     }
 }

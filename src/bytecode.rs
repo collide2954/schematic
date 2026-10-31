@@ -33,6 +33,7 @@ pub enum Op {
     Return,
     PushCatch(u32),
     PushFinally(u32),
+    PushEscape(u32),
     PopHandler,
     Rethrow,
     Closure(u32),
@@ -46,7 +47,7 @@ impl Op {
         use Op::*;
         match self {
             Const(_) | Nil | True | False | GetLocal(_) | GetLocalCell(_) | GetUpvalue(_)
-            | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) => 1,
+            | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) | PushEscape(_) => 1,
             Pop | JumpIfFalse(_) | JumpIfTrue(_) | JumpIfFalseOrPop(_) | JumpIfTrueOrPop(_) | Return
             | Rethrow => -1,
             PopUnder(n) | Call(n) | TailCall(n) | Recur(n) => -(n as isize),

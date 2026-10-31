@@ -286,6 +286,7 @@ impl<'a> Compiler<'a> {
             Op::JumpIfTrueOrPop(_) => Op::JumpIfTrueOrPop(target),
             Op::PushCatch(_) => Op::PushCatch(target),
             Op::PushFinally(_) => Op::PushFinally(target),
+            Op::PushEscape(_) => Op::PushEscape(target),
             other => unreachable!("patching a non-jump {other:?}"),
         };
     }
@@ -396,6 +397,7 @@ impl<'a> Compiler<'a> {
                 "loop" => return self.compile_loop(&args, tail),
                 "recur" => return self.compile_recur(&args, tail),
                 "try" => return self.compile_try(&args, tail),
+                "call/ec" => return self.compile_call_ec(&args, tail),
                 "lambda" => {
                     let Some(params) = args.first() else {
                         return Err(syntax_error("lambda", "expected a parameter list"));
@@ -513,6 +515,21 @@ impl<'a> Compiler<'a> {
             self.emit(Op::PopUnder(1));
         }
         self.current().locals.pop();
+        Ok(())
+    }
+
+    fn compile_call_ec(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        if args.len() != 1 {
+            return Err(syntax_error("call/ec", "expected exactly one procedure"));
+        }
+        let depth = self.depth();
+        self.compile(args.first().unwrap(), false)?;
+        let push = self.emit_jump(Op::PushEscape(0));
+        self.emit(Op::Call(1));
+        self.emit(Op::PopHandler);
+        self.patch_jump(push);
+        self.set_depth(depth + 1);
+        self.finish_tail(tail);
         Ok(())
     }
 

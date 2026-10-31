@@ -388,6 +388,13 @@ impl Vm {
                     let len = self.stack.len();
                     self.push_handler(HandlerKind::Finally, len, target as usize);
                 }
+                Op::PushEscape(target) => {
+                    let token = self.next_token;
+                    self.next_token += 1;
+                    let callee_slot = self.stack.len() - 1;
+                    self.push_handler(HandlerKind::Escape(token), callee_slot, target as usize);
+                    self.stack.push(Value::Escape(token));
+                }
                 Op::PopHandler => {
                     self.handlers.pop();
                 }
@@ -522,6 +529,17 @@ impl Vm {
                 self.stack.truncate(callee_index);
                 self.stack.push(result);
                 Ok(())
+            }
+            Value::Escape(token) => {
+                let value = match argc {
+                    0 => Value::Nil,
+                    1 => self.pop(),
+                    _ => {
+                        let message = format!("escape continuation expects {}, got {argc}", Arity::Between(0, 1));
+                        return Err(Error::new("arity-error", message));
+                    }
+                };
+                Err(Error::escape(token, value))
             }
             other => Err(Error::type_error(format!("{other} is not a function"))),
         }
