@@ -1,182 +1,282 @@
 use iced::keyboard::{Key, key};
 use iced::widget::scrollable::{Direction, Scrollbar};
-use iced::widget::text_editor::{Binding, KeyPress};
+use iced::widget::text_editor::{Binding, KeyPress, Status};
 use iced::widget::{
-    button, column, container, pane_grid, pick_list, row, scrollable, space, table, text, text_editor, text_input,
+    Column, button, column, container, pane_grid, row, rule, scrollable, space, table, text, text_editor, tooltip,
 };
-use iced::{Alignment, Border, Element, Font, Length, Theme};
-use schematic_studio::highlight;
+use iced::{Alignment, Element, Font, Length, Padding, Theme};
 
-use crate::{LineKind, Message, PAGE, PaneKind, Studio, console_id};
+use crate::app::{LineKind, Message, PAGE, PaneKind, Studio, console_id};
+use crate::theme::Tint;
+use crate::worker::Grid;
+use crate::{fonts, highlight, theme};
+
+type TextStyle = fn(&Theme) -> text::Style;
+type ButtonStyle = fn(&Theme, button::Status) -> button::Style;
 
 pub fn view(studio: &Studio) -> Element<'_, Message> {
     let panes = pane_grid(&studio.panes, |_, kind, _| {
-        let (title, body, controls): (&str, Element<'_, Message>, Option<Element<'_, Message>>) = match kind {
-            PaneKind::Editor => ("Editor", editor(studio), Some(text(studio.file_label()).size(12).into())),
-            PaneKind::Console => ("Console", console(studio), Some(small_button("Clear", Some(Message::ClearConsole)))),
-            PaneKind::Environment => ("Environment", environment(studio), None),
-            PaneKind::Viewer => ("Data", viewer(studio), Some(viewer_controls(studio))),
-        };
-        let mut bar = pane_grid::TitleBar::new(text(title).size(13)).padding(6).style(title_style);
+        let (label, subtitle, controls, body): (&str, Option<String>, Option<Element<'_, Message>>, Element<'_, Message>) =
+            match kind {
+                PaneKind::Editor => ("EDITOR", Some(editor_label(studio)), None, editor(studio)),
+                PaneKind::Console => {
+                    ("CONSOLE", None, Some(small("Clear", theme::ghost, Some(Message::ClearConsole))), console(studio))
+                }
+                PaneKind::Environment => ("ENVIRONMENT", environment_label(studio), None, environment(studio)),
+                PaneKind::Viewer => {
+                    let grid = studio.grid.as_ref();
+                    ("DATA", grid.map(|g| g.name.clone()), grid.map(pager), viewer(studio))
+                }
+            };
+        let mut header =
+            row![text(label).font(fonts::UI_SEMIBOLD).size(11).style(theme::muted)].spacing(10).align_y(Alignment::Center);
+        if let Some(subtitle) = subtitle {
+            header = header.push(text(subtitle).size(12).style(theme::strong));
+        }
+        let mut bar = pane_grid::TitleBar::new(header).padding([7, 12]).style(theme::card_header);
         if let Some(controls) = controls {
             bar = bar.controls(controls);
         }
-        pane_grid::Content::new(body).title_bar(bar).style(pane_style)
+        pane_grid::Content::new(body).title_bar(bar).style(theme::card)
     })
-    .spacing(6)
-    .on_resize(8, Message::PaneResized)
+    .spacing(10)
+    .style(theme::panes)
+    .on_resize(10, Message::PaneResized)
     .on_drag(Message::PaneDragged);
-
-    let status = text(&studio.status).size(12).style(text::secondary);
-    column![toolbar(studio), panes, status].spacing(6).padding(8).into()
+    let workspace = container(panes).padding(10).width(Length::Fill).height(Length::Fill).style(theme::canvas);
+    column![toolbar(studio), line(), workspace, line(), status_bar(studio)].into()
 }
 
-fn small_button<'a>(label: &'a str, message: Option<Message>) -> Element<'a, Message> {
-    button(text(label).size(12)).padding([2, 8]).on_press_maybe(message).into()
+fn line<'a>() -> Element<'a, Message> {
+    rule::horizontal(1).style(theme::separator).into()
+}
+
+fn small<'a>(label: &'a str, style: ButtonStyle, message: Option<Message>) -> Element<'a, Message> {
+    button(text(label).font(fonts::UI_MEDIUM).size(12)).padding([3, 10]).style(style).on_press_maybe(message).into()
+}
+
+fn action<'a>(label: &'a str, hint: &'a str, style: ButtonStyle, message: Option<Message>) -> Element<'a, Message> {
+    let control = button(text(label).font(fonts::UI_MEDIUM).size(13)).padding([6, 12]).style(style).on_press_maybe(message);
+    let bubble = container(text(hint).size(12)).padding([4, 8]).style(theme::tip);
+    tooltip(control, bubble, tooltip::Position::Bottom).gap(6).into()
+}
+
+fn divider<'a>() -> Element<'a, Message> {
+    container(rule::vertical(1).style(theme::separator)).height(22).padding([0, 4]).into()
 }
 
 fn toolbar(studio: &Studio) -> Element<'_, Message> {
     let ready = studio.worker.is_some();
-    let run = button(text("Run form").size(13)).on_press_maybe(ready.then_some(Message::RunForm));
-    let run_file = button(text("Run file").size(13)).on_press_maybe(ready.then_some(Message::RunFile));
-    let stop = button(text("Stop").size(13)).style(button::danger).on_press_maybe(studio.running.then_some(Message::Stop));
-    let path = text_input("path/to/script.scm", &studio.path)
-        .on_input(Message::PathChanged)
-        .on_submit(Message::Open)
-        .size(13)
-        .width(360);
-    let open = button(text("Open").size(13)).on_press(Message::Open);
-    let save = button(text("Save").size(13)).on_press(Message::Save);
-    let theme = pick_list(Theme::ALL, Some(studio.theme.clone()), Message::ThemeChanged).text_size(13);
-    row![run, run_file, stop, space::horizontal(), path, open, save, theme]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
+    let brand = row![
+        text("Schematic").font(fonts::UI_SEMIBOLD).size(15).style(theme::strong),
+        text("Studio").size(15).style(theme::muted)
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    let run = action("Run form", "Ctrl+Enter", theme::primary, ready.then_some(Message::RunForm));
+    let run_file = action("Run file", "Ctrl+Shift+Enter", theme::subtle, ready.then_some(Message::RunFile));
+    let stop = action("Stop", "Interrupt the running code", theme::danger, studio.running.then_some(Message::Stop));
+    let open = action("Open", "Ctrl+O", theme::subtle, Some(Message::Open));
+    let save = action("Save", "Ctrl+S", theme::subtle, Some(Message::Save));
+    let save_as = action("Save as", "Ctrl+Shift+S", theme::ghost, Some(Message::SaveAs));
+    let mode = if theme::is_dark(&studio.theme) { "Light" } else { "Dark" };
+    let toggle = action(mode, "Switch the theme", theme::ghost, Some(Message::ToggleTheme));
+    let bar = row![brand, divider(), run, run_file, stop, space::horizontal(), open, save, save_as, divider(), toggle]
+        .spacing(8)
+        .align_y(Alignment::Center);
+    container(bar).padding([8, 14]).width(Length::Fill).style(theme::bar).into()
 }
 
-fn key_binding(press: KeyPress) -> Option<Binding<Message>> {
+fn status_bar(studio: &Studio) -> Element<'_, Message> {
+    let (line, column) = studio.cursor();
+    let dot_style: TextStyle = if studio.running { theme::accent } else { theme::faint };
+    let status_style: TextStyle = if studio.status.starts_with("Error") { theme::alarm } else { theme::muted };
+    let path = studio.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+    let bar = row![
+        text("•").size(14).style(dot_style),
+        text(&studio.status).size(12).style(status_style),
+        space::horizontal(),
+        text(path).size(12).style(theme::faint),
+        text(format!("Ln {line}, Col {column}")).size(12).style(theme::muted),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+    container(bar).padding([5, 14]).width(Length::Fill).style(theme::bar).into()
+}
+
+fn editor_label(studio: &Studio) -> String {
+    format!("{}{}", studio.file_name(), if studio.dirty { " •" } else { "" })
+}
+
+fn environment_label(studio: &Studio) -> Option<String> {
+    match studio.bindings.len() {
+        0 => None,
+        1 => Some("1 binding".to_string()),
+        n => Some(format!("{n} bindings")),
+    }
+}
+
+fn editor_binding(press: KeyPress) -> Option<Binding<Message>> {
     let command = press.modifiers.command();
-    let custom = match &press.key {
-        Key::Named(key::Named::Enter) if command => {
-            Some(if press.modifiers.shift() { Message::RunFile } else { Message::RunForm })
-        }
-        Key::Character(c) if command && c.as_str() == "s" => Some(Message::Save),
+    let shift = press.modifiers.shift();
+    let global = match &press.key {
+        Key::Named(key::Named::Enter) if command => Some(if shift { Message::RunFile } else { Message::RunForm }),
+        Key::Character(c) if command && c.eq_ignore_ascii_case("s") => Some(if shift { Message::SaveAs } else { Message::Save }),
+        Key::Character(c) if command && c.eq_ignore_ascii_case("o") => Some(Message::Open),
         _ => None,
     };
-    if let Some(message) = custom {
+    if let Some(message) = global {
         return Some(Binding::Custom(message));
     }
-    if matches!(press.key, Key::Named(key::Named::Tab)) {
+    if matches!(press.key, Key::Named(key::Named::Tab)) && matches!(press.status, Status::Focused { .. }) {
         return Some(Binding::Sequence(vec![Binding::Insert(' '), Binding::Insert(' ')]));
     }
     Binding::from_key_press(press)
 }
 
+fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Message>> {
+    let cursor = studio.input.cursor().position.line;
+    let first_line = cursor == 0;
+    let last_line = cursor + 1 >= studio.input.line_count();
+    let browsing = studio.recalled.is_some();
+    move |press| {
+        if !matches!(press.status, Status::Focused { .. }) {
+            return None;
+        }
+        let plain = !press.modifiers.shift() && !press.modifiers.command();
+        match &press.key {
+            Key::Named(key::Named::Enter) if plain => Some(Binding::Custom(Message::Submit)),
+            Key::Named(key::Named::ArrowUp) if plain && first_line => Some(Binding::Custom(Message::HistoryBack)),
+            Key::Named(key::Named::ArrowDown) if plain && last_line && browsing => {
+                Some(Binding::Custom(Message::HistoryForward))
+            }
+            Key::Named(key::Named::Tab) => Some(Binding::Sequence(vec![Binding::Insert(' '), Binding::Insert(' ')])),
+            _ => Binding::from_key_press(press),
+        }
+    }
+}
+
 fn editor(studio: &Studio) -> Element<'_, Message> {
     text_editor(&studio.editor)
         .on_action(Message::Edit)
-        .font(Font::MONOSPACE)
-        .size(14)
+        .placeholder("Open a script or start typing. Ctrl+Enter runs the form at the cursor.")
+        .font(fonts::MONO)
+        .size(13.5)
+        .line_height(1.55)
+        .padding(12)
         .height(Length::Fill)
         .wrapping(text::Wrapping::None)
-        .highlight_with::<highlight::Schematic>((), highlight::format)
-        .key_binding(key_binding)
+        .style(theme::editor)
+        .highlight_with::<highlight::Schematic>(studio.marks.clone(), highlight::format)
+        .key_binding(editor_binding)
         .into()
 }
 
 fn console(studio: &Studio) -> Element<'_, Message> {
     let lines = studio.console.iter().map(|line| {
-        let (prefix, style): (&str, Option<fn(&Theme) -> text::Style>) = match line.kind {
-            LineKind::Input => ("> ", None),
-            LineKind::Output => ("", None),
-            LineKind::Result => ("", Some(text::primary)),
-            LineKind::Error => ("", Some(text::danger)),
-            LineKind::Note => ("", Some(text::secondary)),
+        let (marker, marker_style, style, font): (&str, TextStyle, TextStyle, Font) = match line.kind {
+            LineKind::Input => ("›", theme::accent, theme::strong, fonts::MONO),
+            LineKind::Output => ("", theme::faint, theme::strong, fonts::MONO),
+            LineKind::Result => ("=", theme::faint, theme::strong, fonts::MONO),
+            LineKind::Error => ("!", theme::alarm, theme::alarm, fonts::MONO),
+            LineKind::Note => ("", theme::faint, theme::muted, fonts::MONO_ITALIC),
         };
-        let mut shown = text(format!("{prefix}{}", line.text.trim_end_matches('\n'))).font(Font::MONOSPACE).size(13);
-        if let Some(style) = style {
-            shown = shown.style(style);
-        }
-        Element::from(shown)
+        row![
+            container(text(marker).font(fonts::MONO_BOLD).size(13).style(marker_style)).width(14),
+            text(line.text.trim_end_matches('\n')).font(font).size(13).style(style).width(Length::Fill),
+        ]
+        .spacing(8)
+        .into()
     });
-    let history = scrollable(column(lines).spacing(2).padding(6).width(Length::Fill)).id(console_id()).height(Length::Fill);
-    let prompt = if studio.pending.is_empty() { ">" } else { "..." };
-    let input = text_input("Type an expression and press Enter", &studio.input)
-        .on_input(Message::InputChanged)
-        .on_submit(Message::Submit)
-        .font(Font::MONOSPACE)
-        .size(13);
-    let entry = row![text(prompt).font(Font::MONOSPACE).size(13), input].spacing(6).align_y(Alignment::Center).padding([4, 6]);
-    column![history, entry].into()
+    let history = scrollable(column(lines).spacing(4).padding([10, 12]).width(Length::Fill))
+        .id(console_id())
+        .height(Length::Fill)
+        .style(theme::scroll);
+    let prompt = if studio.pending.is_empty() { "›" } else { "…" };
+    let input = text_editor(&studio.input)
+        .on_action(Message::Input)
+        .placeholder("Type an expression and press Enter")
+        .font(fonts::MONO)
+        .size(13)
+        .padding(Padding { top: 8.0, right: 0.0, bottom: 8.0, left: 0.0 })
+        .style(theme::editor)
+        .key_binding(console_binding(studio));
+    let marker = container(text(prompt).font(fonts::MONO_BOLD).size(13).style(theme::accent))
+        .width(14)
+        .padding(Padding { top: 8.0, right: 0.0, bottom: 8.0, left: 0.0 });
+    let entry = row![marker, input].spacing(8).padding([0, 12]);
+    column![history, line(), entry].into()
 }
 
 fn environment(studio: &Studio) -> Element<'_, Message> {
-    if studio.bindings.is_empty() {
-        return hint("Nothing defined yet. Values you define appear here; click one to view it.");
+    let groups = studio.groups();
+    if groups.is_empty() {
+        return hint("Nothing defined yet. Values you define appear here; click one to open it in the data pane.");
     }
-    let rows = studio.bindings.iter().map(|binding| {
-        row![
-            button(text(&binding.name).font(Font::MONOSPACE).size(13))
-                .style(button::text)
-                .padding([2, 4])
-                .on_press(Message::Inspect(binding.name.clone())),
-            text(&binding.kind).size(12).style(text::secondary).width(70),
-            text(&binding.summary).size(12).width(Length::Fill),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .into()
-    });
-    scrollable(column(rows).spacing(2).padding(6).width(Length::Fill)).height(Length::Fill).into()
+    let selected = studio.grid.as_ref().map(|g| g.name.as_str());
+    let mut list = Column::new().spacing(2).padding([6, 8]).width(Length::Fill);
+    for (group, members) in groups {
+        let heading = text(group.label().to_uppercase()).font(fonts::UI_SEMIBOLD).size(10.5).style(theme::faint);
+        list = list.push(container(heading).padding(Padding { top: 10.0, right: 8.0, bottom: 4.0, left: 8.0 }));
+        for binding in members {
+            let tint = match binding.kind.as_str() {
+                "table" => Tint::Accent,
+                "array" => Tint::Violet,
+                "function" => Tint::Amber,
+                _ => Tint::Neutral,
+            };
+            let content = row![
+                text(&binding.name).font(fonts::MONO).size(13).style(theme::strong).width(Length::FillPortion(2)),
+                container(text(&binding.kind).font(fonts::UI_MEDIUM).size(11)).padding([1, 7]).style(theme::pill(tint)),
+                text(&binding.summary).size(12).style(theme::muted).width(Length::FillPortion(3)),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center);
+            let chosen = selected == Some(binding.name.as_str());
+            list = list.push(
+                button(content)
+                    .padding([5, 8])
+                    .width(Length::Fill)
+                    .style(theme::row(chosen))
+                    .on_press(Message::Inspect(binding.name.clone())),
+            );
+        }
+    }
+    scrollable(list).height(Length::Fill).style(theme::scroll).into()
 }
 
-fn viewer_controls(studio: &Studio) -> Element<'_, Message> {
-    let Some(grid) = &studio.grid else {
-        return space::horizontal().into();
-    };
+fn pager(grid: &Grid) -> Element<'_, Message> {
     let first = grid.offset + usize::from(!grid.rows.is_empty());
     let last = grid.offset + grid.rows.len();
-    let label = format!("{}: rows {first} to {last} of {}", grid.name, grid.total);
-    let previous = small_button("Previous", (grid.offset > 0).then_some(Message::Page(-1)));
-    let next = small_button("Next", (grid.offset + PAGE < grid.total).then_some(Message::Page(1)));
-    row![text(label).size(12), previous, next].spacing(6).align_y(Alignment::Center).into()
+    let label = text(format!("{first}–{last} of {}", grid.total)).size(12).style(theme::muted);
+    let previous = button(text("‹").size(15)).padding([0, 8]).style(theme::ghost);
+    let next = button(text("›").size(15)).padding([0, 8]).style(theme::ghost);
+    row![
+        label,
+        previous.on_press_maybe((grid.offset > 0).then_some(Message::Page(-1))),
+        next.on_press_maybe((grid.offset + PAGE < grid.total).then_some(Message::Page(1))),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 fn viewer(studio: &Studio) -> Element<'_, Message> {
     let Some(grid) = &studio.grid else {
         return hint("Click a name in the environment to view it here.");
     };
+    let index = grid.columns.first().is_some_and(|c| c == "#");
     let columns = grid.columns.iter().enumerate().map(|(c, name)| {
-        let header = text(name).font(Font::MONOSPACE).size(12).style(text::secondary);
-        table::column(header, move |r: usize| text(&grid.rows[r][c]).font(Font::MONOSPACE).size(13))
+        let header = text(name).font(fonts::UI_SEMIBOLD).size(11).style(theme::muted);
+        let style: TextStyle = if index && c == 0 { theme::faint } else { theme::strong };
+        let column = table::column(header, move |r: usize| text(&grid.rows[r][c]).font(fonts::MONO).size(12.5).style(style));
+        if grid.numeric.get(c).copied().unwrap_or(false) { column.align_x(Alignment::End) } else { column }
     });
-    let body = table(columns, 0..grid.rows.len()).padding_x(8).padding_y(3);
+    let body = table(columns, 0..grid.rows.len()).padding_x(10).padding_y(5);
     let both = Direction::Both { vertical: Scrollbar::default(), horizontal: Scrollbar::default() };
-    scrollable(body).direction(both).width(Length::Fill).height(Length::Fill).into()
+    scrollable(body).direction(both).width(Length::Fill).height(Length::Fill).style(theme::scroll).into()
 }
 
 fn hint(message: &str) -> Element<'_, Message> {
-    container(text(message).size(13).style(text::secondary)).padding(10).into()
-}
-
-fn pane_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-    container::Style {
-        background: Some(palette.background.base.color.into()),
-        border: Border { color: palette.background.strong.color, width: 1.0, radius: 6.0.into() },
-        ..container::Style::default()
-    }
-}
-
-fn title_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-    container::Style {
-        background: Some(palette.background.weak.color.into()),
-        text_color: Some(palette.background.weak.text),
-        border: Border {
-            radius: iced::border::Radius { top_left: 6.0, top_right: 6.0, bottom_right: 0.0, bottom_left: 0.0 },
-            ..Border::default()
-        },
-        ..container::Style::default()
-    }
+    container(text(message).size(13).style(theme::faint)).padding(14).into()
 }

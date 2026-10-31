@@ -84,6 +84,56 @@ pub fn top_level_forms(text: &str) -> Vec<Range<usize>> {
     forms
 }
 
+pub fn bracket_pairs(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut pairs = Vec::new();
+    let mut open = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b';' => i = text[i..].find('\n').map_or(bytes.len(), |n| i + n),
+            b'#' if bytes.get(i + 1) == Some(&b'|') => {
+                i = text[i + 2..].find("|#").map_or(bytes.len(), |n| i + 4 + n);
+            }
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b'(' | b'[' | b'{' => {
+                open.push(i);
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                if let Some(start) = open.pop() {
+                    pairs.push((start, i));
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    pairs
+}
+
+pub fn matching_bracket(text: &str, offset: usize) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let opens = offset < bytes.len() && matches!(bytes[offset], b'(' | b'[' | b'{');
+    let closes = offset > 0 && matches!(bytes[offset - 1], b')' | b']' | b'}');
+    if !opens && !closes {
+        return None;
+    }
+    bracket_pairs(text).into_iter().find(|&(start, end)| (opens && start == offset) || (closes && end + 1 == offset))
+}
+
+pub fn line_offset(text: &str, offset: usize) -> (usize, usize) {
+    let before = &text[..offset.min(text.len())];
+    let line_start = before.rfind('\n').map_or(0, |n| n + 1);
+    (before.matches('\n').count(), before.len() - line_start)
+}
+
 pub fn form_at(text: &str, offset: usize) -> Option<Range<usize>> {
     let forms = top_level_forms(text);
     forms
@@ -169,6 +219,30 @@ mod tests {
         assert_eq!(next_form(SRC, 12), Some(14..24));
         assert_eq!(next_form(SRC, 14), Some(14..24));
         assert_eq!(next_form("(a)", 3), None);
+    }
+
+    #[test]
+    fn matching_bracket_pairs_the_bracket_at_or_before_the_cursor() {
+        let src = "(a [b] \"(\" ; )\n c)";
+        let end = src.len() - 1;
+        assert_eq!(matching_bracket(src, 0), Some((0, end)));
+        assert_eq!(matching_bracket(src, src.len()), Some((0, end)));
+        assert_eq!(matching_bracket(src, 3), Some((3, 5)));
+        assert_eq!(matching_bracket(src, 6), Some((3, 5)));
+        assert_eq!(matching_bracket(src, 8), None);
+        assert_eq!(matching_bracket(src, 1), None);
+        assert_eq!(matching_bracket("#[1 2]", 1), Some((1, 5)));
+        assert_eq!(matching_bracket("(a", 0), None);
+        assert_eq!(matching_bracket("", 0), None);
+    }
+
+    #[test]
+    fn line_offsets_count_bytes_within_the_line() {
+        let text = "ab\ncdé\nf";
+        assert_eq!(line_offset(text, 0), (0, 0));
+        assert_eq!(line_offset(text, 7), (1, 4));
+        assert_eq!(line_offset(text, 8), (2, 0));
+        assert_eq!(line_offset(text, 99), (2, 1));
     }
 
     #[test]

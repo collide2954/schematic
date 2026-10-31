@@ -28,6 +28,7 @@ pub struct Binding {
 pub struct Grid {
     pub name: String,
     pub columns: Vec<String>,
+    pub numeric: Vec<bool>,
     pub rows: Vec<Vec<String>>,
     pub offset: usize,
     pub total: usize,
@@ -161,13 +162,19 @@ fn cell(value: &Value) -> String {
     Shown(value).to_string()
 }
 
+fn is_number(value: &Value) -> bool {
+    matches!(value, Value::Int(_) | Value::Float(_))
+}
+
 fn grid(name: &str, value: &Value, offset: usize, limit: usize) -> Grid {
-    let (columns, total, row): (Vec<String>, usize, Box<dyn Fn(usize) -> Vec<String>>) = match value {
+    let (columns, numeric, total, row): (Vec<String>, Vec<bool>, usize, Box<dyn Fn(usize) -> Vec<String>>) = match value {
         Value::Table(t) => {
             let mut columns = vec!["#".to_string()];
             columns.extend(t.names().iter().map(|n| n.to_string()));
+            let mut numeric = vec![true];
+            numeric.extend(t.columns().map(|(_, column)| matches!(column.kind(), "int" | "float")));
             let t = t.clone();
-            (columns, t.nrows(), Box::new(move |i| {
+            (columns, numeric, t.nrows(), Box::new(move |i| {
                 let mut cells = vec![i.to_string()];
                 cells.extend(t.columns().map(|(_, column)| cell(&column.get(i).unwrap_or(Value::Nil))));
                 cells
@@ -175,20 +182,22 @@ fn grid(name: &str, value: &Value, offset: usize, limit: usize) -> Grid {
         }
         Value::Map(m) => {
             let pairs: Vec<(Value, Value)> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            (vec!["key".into(), "value".into()], pairs.len(), Box::new(move |i| vec![pairs[i].0.to_string(), cell(&pairs[i].1)]))
+            let numeric = vec![false, pairs.iter().all(|(_, v)| is_number(v))];
+            (vec!["key".into(), "value".into()], numeric, pairs.len(), Box::new(move |i| vec![pairs[i].0.to_string(), cell(&pairs[i].1)]))
         }
         Value::Vector(_) | Value::List(_) | Value::Set(_) | Value::Array(_) => {
             let items: Vec<Value> = schematic::builtins::collections::seq_items(value).map(Iterator::collect).unwrap_or_default();
-            (vec!["#".into(), "value".into()], items.len(), Box::new(move |i| vec![i.to_string(), cell(&items[i])]))
+            let numeric = vec![true, items.iter().all(is_number)];
+            (vec!["#".into(), "value".into()], numeric, items.len(), Box::new(move |i| vec![i.to_string(), cell(&items[i])]))
         }
         other => {
             let shown = cell(other);
-            (vec!["value".into()], 1, Box::new(move |_| vec![shown.clone()]))
+            (vec!["value".into()], vec![is_number(other)], 1, Box::new(move |_| vec![shown.clone()]))
         }
     };
     let end = (offset + limit).min(total);
     let rows = (offset.min(end)..end).map(row).collect();
-    Grid { name: name.to_string(), columns, rows, offset: offset.min(total), total }
+    Grid { name: name.to_string(), columns, numeric, rows, offset: offset.min(total), total }
 }
 
 #[cfg(test)]
@@ -288,10 +297,11 @@ mod tests {
             inspect("t", 99, 10),
             inspect("nope", 0, 10),
         ]);
-        let grid = |name: &str, columns: &[&str], rows: &[&[&str]], offset, total| {
+        let grid = |name: &str, columns: &[&str], numeric: &[bool], rows: &[&[&str]], offset, total| {
             Event::Grid(Grid {
                 name: name.into(),
                 columns: columns.iter().map(|c| c.to_string()).collect(),
+                numeric: numeric.to_vec(),
                 rows: rows.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect(),
                 offset,
                 total,
@@ -300,11 +310,11 @@ mod tests {
         assert_eq!(
             events[2..],
             [
-                grid("t", &["#", "city", "n"], &[&["1", "Rome", "2"]], 1, 3),
-                grid("v", &["#", "value"], &[&["0", "10"], &["1", "20"]], 0, 2),
-                grid("m", &["key", "value"], &[&[":a", "1"]], 0, 1),
-                grid("s", &["value"], &[&["text"]], 0, 1),
-                grid("t", &["#", "city", "n"], &[], 3, 3),
+                grid("t", &["#", "city", "n"], &[true, false, true], &[&["1", "Rome", "2"]], 1, 3),
+                grid("v", &["#", "value"], &[true, true], &[&["0", "10"], &["1", "20"]], 0, 2),
+                grid("m", &["key", "value"], &[false, true], &[&[":a", "1"]], 0, 1),
+                grid("s", &["value"], &[false], &[&["text"]], 0, 1),
+                grid("t", &["#", "city", "n"], &[true, false, true], &[], 3, 3),
                 Event::Error("nope is not defined".into()),
             ]
         );

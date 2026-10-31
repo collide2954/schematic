@@ -1,7 +1,9 @@
 use std::ops::Range;
 
 use iced::advanced::text::highlighter::{Format, Highlighter};
-use iced::{Color, Font, Theme};
+use iced::{Font, Theme};
+
+use crate::{fonts, theme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -12,6 +14,7 @@ pub enum Kind {
     Special,
     Constant,
     Bracket(u8),
+    Match,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -19,6 +22,11 @@ pub struct LineState {
     pub depth: usize,
     pub block_comment: bool,
     pub in_string: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Marks {
+    pub pair: Option<[(usize, usize); 2]>,
 }
 
 const SPECIALS: &[&str] = &[
@@ -140,18 +148,20 @@ fn string_end(text: &str) -> Option<usize> {
 pub struct Schematic {
     states: Vec<LineState>,
     current: usize,
+    marks: Marks,
 }
 
 impl Highlighter for Schematic {
-    type Settings = ();
+    type Settings = Marks;
     type Highlight = Kind;
     type Iterator<'a> = std::vec::IntoIter<(Range<usize>, Kind)>;
 
-    fn new(_settings: &()) -> Self {
-        Schematic { states: vec![LineState::default()], current: 0 }
+    fn new(settings: &Marks) -> Self {
+        Schematic { states: vec![LineState::default()], current: 0, marks: settings.clone() }
     }
 
-    fn update(&mut self, _settings: &()) {
+    fn update(&mut self, settings: &Marks) {
+        self.marks = settings.clone();
         self.states.truncate(1);
         self.current = 0;
     }
@@ -162,7 +172,16 @@ impl Highlighter for Schematic {
 
     fn highlight_line(&mut self, line: &str) -> Self::Iterator<'_> {
         let mut state = self.states.get(self.current).copied().unwrap_or_default();
-        let out = tokens(line, &mut state);
+        let mut out = tokens(line, &mut state);
+        for &(mark_line, column) in self.marks.pair.iter().flatten() {
+            if mark_line == self.current {
+                for (range, kind) in &mut out {
+                    if matches!(kind, Kind::Bracket(_)) && range.contains(&column) {
+                        *kind = Kind::Match;
+                    }
+                }
+            }
+        }
         self.current += 1;
         if self.states.len() <= self.current {
             self.states.push(state);
@@ -178,24 +197,18 @@ impl Highlighter for Schematic {
 }
 
 pub fn format(kind: &Kind, theme: &Theme) -> Format<Font> {
-    let palette = theme.extended_palette();
-    let dark = palette.is_dark;
-    let pick = |light: (f32, f32, f32), night: (f32, f32, f32)| {
-        let (r, g, b) = if dark { night } else { light };
-        Color::from_rgb(r, g, b)
+    let t = theme::tones(theme);
+    let (color, font) = match kind {
+        Kind::Comment => (t.comment, Some(fonts::MONO_ITALIC)),
+        Kind::Str => (t.string, None),
+        Kind::Number => (t.number, None),
+        Kind::Keyword => (t.keyword, None),
+        Kind::Special => (t.special, None),
+        Kind::Constant => (t.constant, None),
+        Kind::Bracket(depth) => (t.brackets[*depth as usize % 3], None),
+        Kind::Match => (t.accent, Some(fonts::MONO_BOLD)),
     };
-    let color = match kind {
-        Kind::Comment => pick((0.45, 0.50, 0.55), (0.50, 0.56, 0.60)),
-        Kind::Str => pick((0.10, 0.50, 0.25), (0.55, 0.80, 0.55)),
-        Kind::Number => pick((0.65, 0.30, 0.10), (0.90, 0.65, 0.40)),
-        Kind::Keyword => pick((0.45, 0.25, 0.65), (0.75, 0.60, 0.95)),
-        Kind::Special => pick((0.10, 0.30, 0.75), (0.50, 0.70, 1.00)),
-        Kind::Constant => pick((0.70, 0.20, 0.40), (0.95, 0.55, 0.70)),
-        Kind::Bracket(0) => pick((0.30, 0.30, 0.30), (0.75, 0.75, 0.75)),
-        Kind::Bracket(1) => pick((0.20, 0.45, 0.60), (0.55, 0.75, 0.85)),
-        Kind::Bracket(_) => pick((0.60, 0.40, 0.20), (0.85, 0.70, 0.50)),
-    };
-    Format { color: Some(color), font: None }
+    Format { color: Some(color), font }
 }
 
 #[cfg(test)]
@@ -266,8 +279,19 @@ mod tests {
     }
 
     #[test]
+    fn marked_brackets_highlight_as_a_match() {
+        let marks = Marks { pair: Some([(0, 3), (1, 5)]) };
+        let mut h = Schematic::new(&marks);
+        assert_eq!(h.highlight_line("(a #[1").collect::<Vec<_>>(), [(0..1, Kind::Bracket(0)), (3..5, Kind::Match), (5..6, Kind::Number)]);
+        assert_eq!(h.highlight_line("   2])").collect::<Vec<_>>(), [(3..4, Kind::Number), (4..5, Kind::Bracket(1)), (5..6, Kind::Match)]);
+        h.update(&Marks::default());
+        assert_eq!(h.current_line(), 0);
+        assert_eq!(h.highlight_line("(a #[1").collect::<Vec<_>>(), [(0..1, Kind::Bracket(0)), (3..5, Kind::Bracket(1)), (5..6, Kind::Number)]);
+    }
+
+    #[test]
     fn the_highlighter_rehighlights_from_a_changed_line() {
-        let mut h = Schematic::new(&());
+        let mut h = Schematic::new(&Marks::default());
         assert_eq!(h.highlight_line("(x #|").count(), 2);
         assert_eq!(h.highlight_line("y").collect::<Vec<_>>(), [(0..1, Kind::Comment)]);
         h.change_line(0);
