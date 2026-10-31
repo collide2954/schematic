@@ -168,6 +168,60 @@ impl Array {
     }
 }
 
+pub fn is_array(value: &Value) -> bool {
+    matches!(value, Value::Array(_))
+}
+
+pub fn element(value: &Value, index: usize) -> Value {
+    match value {
+        Value::Array(a) => a.get(index).unwrap_or(Value::Nil),
+        other => other.clone(),
+    }
+}
+
+pub fn broadcast(a: &Value, b: &Value, f: &dyn Fn(&Value, &Value) -> Result<Value, Error>) -> Result<Value, Error> {
+    let len_of = |v: &Value| match v {
+        Value::Array(a) => Some(a.len()),
+        _ => None,
+    };
+    let len = match (len_of(a), len_of(b)) {
+        (Some(x), Some(y)) if x != y => {
+            return Err(Error::new("value-error", format!("array lengths differ: {x} and {y}")));
+        }
+        (Some(x), _) | (None, Some(x)) => x,
+        (None, None) => return f(a, b),
+    };
+    let mut out = Array::new();
+    for i in 0..len {
+        let (x, y) = (element(a, i), element(b, i));
+        if matches!(x, Value::Nil) || matches!(y, Value::Nil) {
+            out.push_mut(Value::Nil)?;
+        } else {
+            out.push_mut(f(&x, &y)?)?;
+        }
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+pub fn map_array(a: &Array, f: &dyn Fn(&Value) -> Result<Value, Error>) -> Result<Value, Error> {
+    let mut out = Array::new();
+    for x in a.iter() {
+        if matches!(x, Value::Nil) {
+            out.push_mut(Value::Nil)?;
+        } else {
+            out.push_mut(f(&x)?)?;
+        }
+    }
+    Ok(Value::Array(Rc::new(out)))
+}
+
+pub fn unary(value: &Value, f: &dyn Fn(&Value) -> Result<Value, Error>) -> Result<Value, Error> {
+    match value {
+        Value::Array(a) => map_array(a, f),
+        other => f(other),
+    }
+}
+
 impl PartialEq for Array {
     fn eq(&self, other: &Array) -> bool {
         self.len() == other.len() && self.iter().eq(other.iter())

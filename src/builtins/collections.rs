@@ -195,10 +195,6 @@ pub fn take(args: &mut [Value], index: usize) -> Value {
     std::mem::take(&mut args[index])
 }
 
-fn conj(args: &[Value]) -> Result<Value, Error> {
-    conj_owned(&mut args.to_vec())
-}
-
 fn conj_owned(args: &mut [Value]) -> Result<Value, Error> {
     let target = take(args, 0);
     let mut args = args[1..].iter_mut().map(std::mem::take);

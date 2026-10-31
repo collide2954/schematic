@@ -34,6 +34,29 @@ fn array_literals_read_and_print() {
 }
 
 #[test]
+fn arithmetic_broadcasts_over_arrays() {
+    assert_eq!(eval("[(+ #[1 2 3] 1) (* #[1 2] #[10 20]) (- 10 #[1 2]) (* 2 #[1 2 3])]"), "[#[2 3 4] #[10 40] #[9 8] #[2 4 6]]");
+    assert_eq!(eval("[(/ #[1 2] 2) (+ #[1 2] 0.5) (- #[1 2]) (+ #[1 2] #[1 2] #[1 2])]"), "[#[0.5 1.0] #[1.5 2.5] #[-1 -2] #[3 6]]");
+    assert_eq!(eval("[(+ #[1 nil] 1) (* #[1 2] nil)]"), "[#[2 nil] #[nil nil]]");
+    assert_eq!(eval("(+ #[1 2] #[1 2 3])"), "error: array lengths differ: 2 and 3");
+    assert_eq!(eval("(+ #[1] \"a\")"), "error: + expects numbers, got \"a\"");
+    assert_eq!(eval("(+ #[true] 1)"), "error: + expects numbers, got true");
+    assert_eq!(eval("[(quot #[7 8] 2) (mod #[7 8] 3) (pow #[2 3] 2) (sqrt #[4 9]) (abs #[-1 2]) (inc #[1])]"), "[#[3 4] #[1 2] #[4 9] #[2.0 3.0] #[1 2] #[2]]");
+    assert_eq!(eval("[(floor #[1.5 2.5]) (even? #[1 2]) (zero? #[0 1 nil]) (log #[1 100] 10)]"), "[#[1 2] #[false true] #[true false nil] #[0.0 2.0]]");
+    assert_eq!(eval("(+ #[9223372036854775807] 1)"), "error: integer overflow");
+}
+
+#[test]
+fn comparisons_broadcast_into_masks() {
+    assert_eq!(eval("[(< #[1 2 3] 2) (>= #[1 2] #[2 1]) (= #[1 2 nil] 2) (= #[\"a\" \"b\"] \"a\")]"), "[#[true false false] #[false true] #[false true nil] #[true false]]");
+    assert_eq!(eval("[(not #[true false nil]) (not #[1 2])]"), "[#[false true nil] #[false false]]");
+    assert_eq!(eval("[(mask-and #[true false] #[true true]) (mask-or #[true false] #[false false]) (mask-and #[true nil] true)]"), "[#[true false] #[true false] #[true nil]]");
+    assert_eq!(eval("(< 1 #[2 3] 3)"), "#[true false]");
+    assert_eq!(eval("(< #[1 2] \"a\")"), "error: < expects numbers, got \"a\"");
+    assert_eq!(eval("[(max #[1 5] 3) (min #[1 5] #[2 2]) (max #[1 5 nil]) (min #[])]"), "[#[3 5] #[1 2] 5 nil]");
+}
+
+#[test]
 fn arrays_act_as_sequences() {
     assert_eq!(eval("[(count #[1 2 3]) (nth #[1 2 3] 1) (#[1 2 3] 0) (get #[1 2] 5) (first #[7 8]) (last #[1 2])]"), "[3 2 1 nil 7 2]");
     assert_eq!(eval("[(rest #[7 8 9]) (vec #[1 nil]) (map inc #[1 2]) (reduce + #[1 2 3]) (empty? #[]) (nth #[1 nil] 1)]"), "[(8 9) [1 nil] [2 3] 6 true nil]");

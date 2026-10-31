@@ -4,6 +4,7 @@ use std::fmt;
 use std::io::Write;
 use std::rc::Rc;
 
+use crate::array::is_array;
 use crate::builtins::math;
 use crate::bytecode::{Intrinsic, Op, Proto};
 use crate::error::Error;
@@ -366,7 +367,7 @@ impl Vm {
                         (Intrinsic::Le, Value::Int(a), Value::Int(b)) => Some(a <= b),
                         (Intrinsic::Gt, Value::Int(a), Value::Int(b)) => Some(a > b),
                         (Intrinsic::Ge, Value::Int(a), Value::Int(b)) => Some(a >= b),
-                        (Intrinsic::NumEq, a, b) => Some(a == b),
+                        (Intrinsic::NumEq, a, b) if !is_array(a) && !is_array(b) => Some(a == b),
                         _ => None,
                     };
                     let holds = match fast {
@@ -388,7 +389,7 @@ impl Vm {
                         (Intrinsic::Le, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a <= b)),
                         (Intrinsic::Gt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a > b)),
                         (Intrinsic::Ge, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a >= b)),
-                        (Intrinsic::NumEq, a, b) => Some(Value::Bool(a == b)),
+                        (Intrinsic::NumEq, a, b) if !is_array(a) && !is_array(b) => Some(Value::Bool(a == b)),
                         _ => None,
                     };
                     let result = match fast {
@@ -400,7 +401,11 @@ impl Vm {
                 }
                 Op::Not => {
                     let v = self.pop();
-                    self.stack.push(Value::Bool(!v.is_truthy()));
+                    let result = match v {
+                        Value::Array(_) => tri!(math::not(std::slice::from_ref(&v))),
+                        other => Value::Bool(!other.is_truthy()),
+                    };
+                    self.stack.push(result);
                 }
                 Op::Nil => self.stack.push(Value::Nil),
                 Op::True => self.stack.push(Value::Bool(true)),
