@@ -43,6 +43,16 @@ const CASES: &[(&str, &str, &str)] = &[
         "",
         "(count (loop ((i 0) (s \"\")) (if (= i 2000) s (recur (+ i 1) (str s \"ab\")))))",
     ),
+    (
+        "arith",
+        "",
+        "(loop ((i 0) (a 0) (b 1)) (if (< i 500000) (recur (+ i 1) (+ a (* i 2)) (- (+ b i) a)) a))",
+    ),
+    (
+        "array",
+        "(define xs (array (map float (range 1000000))))",
+        "(sum (+ (* xs 2.0) 1.0))",
+    ),
 ];
 
 fn main() {

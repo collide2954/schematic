@@ -215,8 +215,8 @@ impl Vm {
     pub fn new() -> Vm {
         Vm {
             globals: Globals::default(),
-            stack: Vec::new(),
-            frames: Vec::new(),
+            stack: Vec::with_capacity(1024),
+            frames: Vec::with_capacity(64),
             handlers: Vec::new(),
             frame_limit: DEFAULT_FRAME_LIMIT,
             next_token: 0,
@@ -636,7 +636,7 @@ impl Vm {
 
     fn call(&mut self, argc: usize) -> Result<(), Error> {
         let callee_index = self.stack.len() - argc - 1;
-        let callee = self.stack[callee_index].clone();
+        let callee = std::mem::take(&mut self.stack[callee_index]);
         match callee {
             Value::Closure(closure) => {
                 if self.frames.len() >= self.frame_limit {
@@ -691,7 +691,11 @@ impl Vm {
     }
 
     pub fn call_value(&mut self, f: &Value, args: &[Value]) -> Result<Value, Error> {
-        self.call_values(f, args.to_vec())
+        let depth = self.frames.len();
+        let base = self.stack.len();
+        self.stack.push(f.clone());
+        self.stack.extend_from_slice(args);
+        self.finish_call(depth, base, args.len())
     }
 
     pub fn call_values(&mut self, f: &Value, args: Vec<Value>) -> Result<Value, Error> {
@@ -700,6 +704,10 @@ impl Vm {
         let argc = args.len();
         self.stack.push(f.clone());
         self.stack.extend(args);
+        self.finish_call(depth, base, argc)
+    }
+
+    fn finish_call(&mut self, depth: usize, base: usize, argc: usize) -> Result<Value, Error> {
         let result = match self.call(argc) {
             Ok(()) if self.frames.len() > depth => self.run(depth),
             Ok(()) => Ok(self.pop()),
