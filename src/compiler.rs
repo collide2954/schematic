@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use crate::bytecode::{Capture, Op, Proto};
 use crate::error::Error;
@@ -47,6 +48,39 @@ impl FunctionState {
 
 fn syntax_error(form: &str, message: &str) -> Error {
     Error::syntax(format!("{form}: {message}"))
+}
+
+fn parse_params(params: &Value) -> Result<(Vec<Symbol>, bool), Error> {
+    let items = match params {
+        Value::Symbol(s) => return Ok((vec![*s], true)),
+        Value::List(l) => l,
+        other => return Err(syntax_error("lambda", &format!("expected parameter names, got {other}"))),
+    };
+    let mut names = Vec::new();
+    let mut rest = false;
+    let mut items = items.iter();
+    while let Some(item) = items.next() {
+        let Value::Symbol(name) = item else {
+            return Err(syntax_error("lambda", &format!("{item} is not a valid parameter name")));
+        };
+        if &*name.name() == "&" {
+            match (items.next(), items.next()) {
+                (Some(Value::Symbol(rest_name)), None) => {
+                    names.push(*rest_name);
+                    rest = true;
+                }
+                _ => return Err(syntax_error("lambda", "expected exactly one name after &")),
+            }
+            break;
+        }
+        names.push(*name);
+    }
+    for (i, name) in names.iter().enumerate() {
+        if names[..i].contains(name) {
+            return Err(syntax_error("lambda", &format!("duplicate parameter {name}")));
+        }
+    }
+    Ok((names, rest))
 }
 
 impl<'a> Compiler<'a> {
@@ -205,10 +239,56 @@ impl<'a> Compiler<'a> {
                 "define" => return self.compile_define(&args, tail),
                 "set!" => return self.compile_set(&args, tail),
                 "begin" => return self.compile_sequence(&args, tail),
+                "lambda" => {
+                    let Some(params) = args.first() else {
+                        return Err(syntax_error("lambda", "expected a parameter list"));
+                    };
+                    self.compile_lambda(params, &args.rest(), None)?;
+                    self.finish_tail(tail);
+                    return Ok(());
+                }
                 _ => {}
             }
         }
         self.compile_call(list, tail)
+    }
+
+    fn compile_lambda(&mut self, params: &Value, body: &List, name: Option<Symbol>) -> Result<(), Error> {
+        if body.is_empty() {
+            return Err(syntax_error("lambda", "expected a body"));
+        }
+        let (names, rest) = parse_params(params)?;
+        let mut f = FunctionState::new(name);
+        f.proto.params = names.len() - rest as usize;
+        f.proto.rest = rest;
+        for (i, &name) in names.iter().enumerate() {
+            let boxed = f.boxed_names.contains(&name);
+            if boxed {
+                f.proto.boxed_params.push(i as u32);
+            }
+            f.locals.push(Local { name, slot: i, boxed });
+        }
+        f.depth = names.len();
+        self.functions.push(f);
+        self.compile_body(body, true)?;
+        let f = self.functions.pop().unwrap();
+        let protos = &mut self.current().proto.protos;
+        protos.push(Rc::new(f.proto));
+        let index = (protos.len() - 1) as u32;
+        self.emit(Op::Closure(index));
+        Ok(())
+    }
+
+    fn compile_body(&mut self, body: &List, tail: bool) -> Result<(), Error> {
+        self.compile_sequence(body, tail)
+    }
+
+    fn is_lambda_form(&mut self, form: &Value) -> bool {
+        let Value::List(l) = form else { return false };
+        match l.first() {
+            Some(head) => self.is_special(head).is_some_and(|s| &*s.name() == "lambda"),
+            None => false,
+        }
     }
 
     fn compile_sequence(&mut self, forms: &List, tail: bool) -> Result<(), Error> {
@@ -233,21 +313,36 @@ impl<'a> Compiler<'a> {
         let Some(target) = args.first() else {
             return Err(syntax_error("define", "expected a name"));
         };
-        let Value::Symbol(name) = target else {
-            return Err(syntax_error("define", &format!("cannot define {target}")));
-        };
         let body = args.rest();
-        if body.len() > 1 {
-            return Err(syntax_error("define", "expected a single value"));
-        }
         if self.functions.len() > 1 {
             return Err(syntax_error("define", "internal define is not supported here"));
         }
-        let slot = self.globals.slot(*name) as u32;
-        match body.first() {
-            Some(value) => self.compile(value, false)?,
-            None => self.emit(Op::Nil),
-        }
+        let name = match target {
+            Value::Symbol(name) => {
+                if body.len() > 1 {
+                    return Err(syntax_error("define", "expected a single value"));
+                }
+                match body.first() {
+                    Some(value) if self.is_lambda_form(value) => {
+                        let Value::List(l) = value else { unreachable!() };
+                        let lambda_args = l.rest();
+                        self.compile_lambda(lambda_args.first().unwrap(), &lambda_args.rest(), Some(*name))?;
+                    }
+                    Some(value) => self.compile(value, false)?,
+                    None => self.emit(Op::Nil),
+                }
+                *name
+            }
+            Value::List(signature) => {
+                let Some(Value::Symbol(name)) = signature.first() else {
+                    return Err(syntax_error("define", &format!("cannot define {target}")));
+                };
+                self.compile_lambda(&Value::List(signature.rest()), &body, Some(*name))?;
+                *name
+            }
+            other => return Err(syntax_error("define", &format!("cannot define {other}"))),
+        };
+        let slot = self.globals.slot(name) as u32;
         self.emit(Op::DefineGlobal(slot));
         self.finish_tail(tail);
         Ok(())

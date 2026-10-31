@@ -204,6 +204,74 @@ fn calling_a_non_function_is_an_error() {
 }
 
 #[test]
+fn lambdas_are_called_with_arguments() {
+    assert_eq!(eval("((lambda (x) x) 5)"), "5");
+    assert_eq!(eval("((lambda (x y) (- x y)) 10 3)"), "7");
+    assert_eq!(eval("((lambda () 1))"), "1");
+    assert_eq!(eval("((lambda (x) (* x 2) (+ x 1)) 5)"), "6");
+}
+
+#[test]
+fn define_has_a_function_shorthand() {
+    assert_eq!(eval("(define (square x) (* x x)) (square 4)"), "16");
+    assert_eq!(eval("(define (square x) (* x x)) square"), "#<procedure square>");
+    assert_eq!(eval("(define cube (lambda (x) (* x x x))) cube"), "#<procedure cube>");
+    assert_eq!(eval("(lambda (x) x)"), "#<procedure>");
+}
+
+#[test]
+fn closures_capture_their_environment() {
+    assert_eq!(eval("(define (adder n) (lambda (x) (+ x n))) ((adder 5) 10)"), "15");
+    assert_eq!(eval("(define add5 ((lambda (n) (lambda (x) (+ x n))) 5)) [(add5 1) (add5 2)]"), "[6 7]");
+    assert_eq!(eval("(define (f a) (lambda (b) (lambda (c) (+ a b c)))) (((f 1) 2) 3)"), "6");
+}
+
+#[test]
+fn recursion_works_through_globals() {
+    assert_eq!(eval("(define (fact n) (if (< n 2) 1 (* n (fact (- n 1))))) (fact 10)"), "3628800");
+    assert_eq!(eval("(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) (fib 15)"), "610");
+}
+
+#[test]
+fn arity_errors_name_the_function() {
+    assert_eq!(eval("(define (f x) x) (f)"), "error: f expects 1 argument, got 0");
+    assert_eq!(eval("((lambda (x y) x) 1)"), "error: procedure expects 2 arguments, got 1");
+}
+
+#[test]
+fn variadic_parameters_collect_a_list() {
+    assert_eq!(eval("(define (f a & rest) rest) (f 1 2 3)"), "(2 3)");
+    assert_eq!(eval("(define (f a & rest) rest) (f 1)"), "()");
+    assert_eq!(eval("((lambda args args) 1 2)"), "(1 2)");
+    assert_eq!(eval("(define (f a & rest) a) (f)"), "error: f expects at least 1 argument, got 0");
+}
+
+#[test]
+fn functions_are_first_class() {
+    assert_eq!(eval("(define (twice f x) (f (f x))) (twice (lambda (x) (* x 2)) 3)"), "12");
+    assert_eq!(
+        eval("(define (compose f g) (lambda (x) (f (g x)))) ((compose (lambda (x) (+ x 1)) (lambda (x) (* x 2))) 5)"),
+        "11"
+    );
+    assert_eq!(eval("(define (apply-to-five f) (f 5)) (apply-to-five -)"), "-5");
+}
+
+#[test]
+fn parameters_shadow_globals_and_special_forms() {
+    assert_eq!(eval("(define x 1) ((lambda (x) x) 2)"), "2");
+    assert_eq!(eval("((lambda (if) (if 1 2)) -)"), "-1");
+}
+
+#[test]
+fn lambda_syntax_errors() {
+    assert!(eval("(lambda)").starts_with("error:"));
+    assert!(eval("(lambda (1) 1)").starts_with("error:"));
+    assert!(eval("(lambda (x))").starts_with("error:"));
+    assert!(eval("(lambda (x x) x)").starts_with("error:"));
+    assert!(eval("(lambda (x &) x)").starts_with("error:"));
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));
