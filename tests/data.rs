@@ -96,6 +96,28 @@ fn table_columns_and_rows_are_accessible() {
 }
 
 #[test]
+fn table_columns_can_be_added_removed_and_selected() {
+    assert_eq!(with_people("(define t2 (assoc t :senior (> (:age t) 40))) [(columns t2) (:senior t2) (columns t)]"), "[[:name :age :senior] #[false true] [:name :age]]");
+    assert_eq!(with_people("[(:tag (assoc t :tag \"x\")) (:age (assoc t :age [1 2])) (columns (assoc t :age [1 2]))]"), "[#[\"x\" \"x\"] #[1 2] [:name :age]]");
+    assert_eq!(with_people("(assoc t :bad [1])"), "error: table columns must have the same length: :name has 2 rows but :bad has 1");
+    assert_eq!(with_people("[(columns (dissoc t :age)) (columns (select t [:age :name])) (columns (select t :age)) (columns (rename t {:age :years}))]"), "[[:name] [:age :name] [:age] [:name :years]]");
+    assert_eq!(with_people("(select t [:nope])"), "error: table has no column :nope");
+    assert_eq!(with_people("[(:age (update t :age inc)) (:age (update t :age (lambda (col) (* col 2))))]"), "[#[37 42] #[72 82]]");
+    assert_eq!(with_people("(rows (assoc t :name (map string-upcase (:name t))))"), "[{:name \"ADA\", :age 36} {:name \"BOB\", :age 41}]");
+}
+
+#[test]
+fn tables_filter_sort_and_slice() {
+    assert_eq!(with_people("[(rows (where t (> (:age t) 40))) (nrows (where t #[false false]))]"), "[[{:name \"Bob\", :age 41}] 0]");
+    assert_eq!(with_people("(rows (where t (lambda (r) (= (:name r) \"Ada\"))))"), "[{:name \"Ada\", :age 36}]");
+    assert_eq!(with_people("(where t 5)"), "error: where expects a mask or a predicate, got 5");
+    let t3 = "(define t3 (table {:n [\"b\" \"a\" \"c\"] :v [2 1 2]}))";
+    assert_eq!(eval(&format!("{t3} [(:n (order-by t3 :v)) (:n (order-by t3 :v :desc)) (:n (order-by t3 [:v :n] :desc)) (:n (order-by t3 :n))]")), "[#[\"a\" \"b\" \"c\"] #[\"b\" \"c\" \"a\"] #[\"c\" \"b\" \"a\"] #[\"a\" \"b\" \"c\"]]");
+    assert_eq!(eval(&format!("{t3} [(:n (head t3 2)) (:n (tail t3 1)) (nrows (head t3 10)) (:v (order-by (table {{:v [nil 2 1]}}) :v))]")), "[#[\"b\" \"a\"] #[\"c\"] 3 #[nil 1 2]]");
+    assert_eq!(with_people("(:name (where t (> (:age t) 40)))"), "#[\"Bob\"]");
+}
+
+#[test]
 fn tables_print_as_grids_with_missing_values_and_truncation() {
     assert_eq!(eval("(table {:n [\"x\" nil] :v [1.5 nil]})"), "n    v\nx    1.5\nnil  nil\n(2 rows, 2 columns)");
     let big = eval("(table {:x (range 25)})");

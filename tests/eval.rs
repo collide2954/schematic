@@ -714,7 +714,7 @@ fn assoc_and_dissoc_update_maps_and_vectors() {
     assert_eq!(eval("[(assoc [1 2] 0 9) (assoc [1 2] 2 3)]"), "[[9 2] [1 2 3]]");
     assert_eq!(eval("(assoc [1 2] 5 0)"), "error: index 5 is out of bounds for a vector of length 2");
     assert_eq!(eval("(assoc {} :a)"), "error: assoc expects an even number of key and value arguments, got 1");
-    assert_eq!(eval("(assoc 5 :a 1)"), "error: assoc expects a map or vector, got 5");
+    assert_eq!(eval("(assoc 5 :a 1)"), "error: assoc expects a map, vector, or table, got 5");
     assert_eq!(eval("[(dissoc {:a 1, :b 2} :a) (dissoc {:a 1} :zz) (dissoc {:a 1, :b 2, :c 3} :a :c) (dissoc nil :a)]"), "[{:b 2} {:a 1} {:b 2} nil]");
 }
 

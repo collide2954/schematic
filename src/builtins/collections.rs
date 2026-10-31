@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use super::tables::{column_from, column_name};
 use super::{native, native_owned};
 use crate::array::Array;
 use crate::error::Error;
@@ -83,7 +84,6 @@ pub fn install(globals: &mut Globals) {
         other => Ok(Value::Int(items("count-missing", other)?.filter(|v| matches!(v, Value::Nil)).count() as i64)),
     });
     native(globals, "equal?", Arity::Exact(2), |args| Ok(Value::Bool(args[0] == args[1])));
-    native(globals, "where", Arity::Exact(2), |args| select_mask(&args[0], &args[1]));
     native(globals, "drop-missing", Arity::Exact(1), drop_missing);
     native(globals, "fill-missing", Arity::Exact(2), fill_missing);
     native(globals, "missing?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Nil))));
@@ -520,6 +520,15 @@ fn assoc_owned(args: &mut [Value]) -> Result<Value, Error> {
     let target = take(args, 0);
     let mut pairs = args[1..].iter_mut().map(std::mem::take);
     match target {
+        Value::Table(t) => {
+            let mut out = owned(t);
+            while let (Some(k), Some(v)) = (pairs.next(), pairs.next()) {
+                let name = column_name("assoc", &k)?;
+                let nrows = if out.ncols() > 0 { Some(out.nrows()) } else { None };
+                out.set_column(name, column_from(&v, nrows)?)?;
+            }
+            Ok(Value::Table(Rc::new(out)))
+        }
         Value::Nil | Value::Map(_) => {
             let mut out = match target {
                 Value::Map(m) => owned(m),
@@ -545,13 +554,20 @@ fn assoc_owned(args: &mut [Value]) -> Result<Value, Error> {
             }
             Ok(Value::Vector(Rc::new(out)))
         }
-        other => Err(expects("assoc", "a map or vector", &other)),
+        other => Err(expects("assoc", "a map, vector, or table", &other)),
     }
 }
 
 fn dissoc(args: &mut [Value]) -> Result<Value, Error> {
     match take(args, 0) {
         Value::Nil => Ok(Value::Nil),
+        Value::Table(t) => {
+            let mut out = (*t).clone();
+            for k in &args[1..] {
+                out = out.without(column_name("dissoc", k)?);
+            }
+            Ok(Value::Table(Rc::new(out)))
+        }
         Value::Map(m) => {
             let mut out = owned(m);
             args[1..].iter().for_each(|k| {

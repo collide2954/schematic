@@ -1,16 +1,24 @@
+use std::cmp::Ordering;
 use std::rc::Rc;
 
-use super::collections::{expects, items, out_of_bounds, seq_items};
-use super::native;
+use super::collections::{expects, items, out_of_bounds, select_mask, seq_items};
+use super::functional::compare_values;
+use super::{native, native_vm};
 use crate::array::Array;
 use crate::error::Error;
 use crate::symbol::Symbol;
 use crate::table::Table;
 use crate::value::Value;
-use crate::vm::{Arity, Globals};
+use crate::vm::{Arity, Globals, Vm};
 
 pub fn install(globals: &mut Globals) {
     native(globals, "table", Arity::AtLeast(0), table);
+    native(globals, "select", Arity::AtLeast(2), select);
+    native(globals, "rename", Arity::Exact(2), rename);
+    native_vm(globals, "where", Arity::Exact(2), where_fn);
+    native(globals, "order-by", Arity::Between(2, 3), order_by);
+    native(globals, "head", Arity::Between(1, 2), |args| slice("head", args, true));
+    native(globals, "tail", Arity::Between(1, 2), |args| slice("tail", args, false));
     native(globals, "table?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Table(_)))));
     native(globals, "columns", Arity::Exact(1), |args| {
         Ok(Value::vector(as_table("columns", &args[0])?.names().iter().map(|n| Value::Keyword(*n))))
@@ -112,6 +120,96 @@ fn col(args: &[Value]) -> Result<Value, Error> {
         Some(c) => Ok(Value::Array(c.clone())),
         None => Err(Error::new("value-error", format!("table has no column :{name}"))),
     }
+}
+
+fn column_names(name: &str, args: &[Value]) -> Result<Vec<Symbol>, Error> {
+    match args {
+        [Value::Vector(_) | Value::List(_)] => items(name, &args[0])?.map(|v| column_name(name, &v)).collect(),
+        _ => args.iter().map(|v| column_name(name, v)).collect(),
+    }
+}
+
+fn select(args: &[Value]) -> Result<Value, Error> {
+    let table = as_table("select", &args[0])?;
+    let names = column_names("select", &args[1..])?;
+    Ok(Value::Table(Rc::new(table.select(&names)?)))
+}
+
+fn rename(args: &[Value]) -> Result<Value, Error> {
+    let mut table = as_table("rename", &args[0])?.clone();
+    let Value::Map(renames) = &args[1] else {
+        return Err(expects("rename", "a map from old to new column names", &args[1]));
+    };
+    for (from, to) in renames.iter() {
+        table = table.rename(column_name("rename", from)?, column_name("rename", to)?)?;
+    }
+    Ok(Value::Table(Rc::new(table)))
+}
+
+fn where_fn(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
+    let Value::Table(table) = &args[0] else {
+        return select_mask(&args[0], &args[1]);
+    };
+    let keep: Vec<usize> = match &args[1] {
+        Value::Array(_) | Value::Vector(_) | Value::List(_) => {
+            let flags: Vec<Value> = items("where", &args[1])?.collect();
+            if flags.len() != table.nrows() {
+                let message = format!("mask length {} does not match table length {}", flags.len(), table.nrows());
+                return Err(Error::new("value-error", message));
+            }
+            flags.iter().enumerate().filter(|(_, f)| f.is_truthy()).map(|(i, _)| i).collect()
+        }
+        f @ (Value::Closure(_) | Value::Native(_) | Value::Keyword(_)) => {
+            let mut keep = Vec::new();
+            for (i, row) in table.rows().enumerate() {
+                if vm.call_value(f, &[row])?.is_truthy() {
+                    keep.push(i);
+                }
+            }
+            keep
+        }
+        other => return Err(expects("where", "a mask or a predicate", other)),
+    };
+    Ok(Value::Table(Rc::new(table.take_rows(&keep))))
+}
+
+fn order_by(args: &[Value]) -> Result<Value, Error> {
+    let table = as_table("order-by", &args[0])?;
+    let descending = match args.get(2) {
+        None => false,
+        Some(Value::Keyword(k)) if &*k.name() == "desc" => true,
+        Some(Value::Keyword(k)) if &*k.name() == "asc" => false,
+        Some(other) => return Err(expects("order-by", ":asc or :desc", other)),
+    };
+    let names = column_names("order-by", &args[1..2])?;
+    let mut keys = Vec::with_capacity(names.len());
+    for name in names {
+        keys.push(table.column(name).ok_or_else(|| Table::missing(name))?.clone());
+    }
+    let mut indices: Vec<usize> = (0..table.nrows()).collect();
+    indices.sort_by(|&a, &b| {
+        for key in &keys {
+            let ordering = compare_values("order-by", &key.get(a).unwrap(), &key.get(b).unwrap()).unwrap_or(Ordering::Equal);
+            if ordering != Ordering::Equal {
+                return if descending { ordering.reverse() } else { ordering };
+            }
+        }
+        Ordering::Equal
+    });
+    Ok(Value::Table(Rc::new(table.take_rows(&indices))))
+}
+
+fn slice(name: &str, args: &[Value], from_start: bool) -> Result<Value, Error> {
+    let table = as_table(name, &args[0])?;
+    let n = match args.get(1) {
+        None => 5,
+        Some(Value::Int(n)) if *n >= 0 => *n as usize,
+        Some(other) => return Err(expects(name, "a non-negative count", other)),
+    };
+    let total = table.nrows();
+    let n = n.min(total);
+    let indices: Vec<usize> = if from_start { (0..n).collect() } else { (total - n..total).collect() };
+    Ok(Value::Table(Rc::new(table.take_rows(&indices))))
 }
 
 fn row(args: &[Value]) -> Result<Value, Error> {

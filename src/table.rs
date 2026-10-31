@@ -82,6 +82,41 @@ impl Table {
         (0..self.nrows()).map(move |i| self.row(i).unwrap())
     }
 
+    pub fn without(&self, name: Symbol) -> Table {
+        let pairs = self.columns().filter(|(n, _)| *n != name).map(|(n, c)| (n, c.clone())).collect();
+        Table::new(pairs).unwrap()
+    }
+
+    pub fn select(&self, names: &[Symbol]) -> Result<Table, Error> {
+        let mut pairs = Vec::with_capacity(names.len());
+        for &name in names {
+            let column = self.column(name).ok_or_else(|| Table::missing(name))?;
+            pairs.push((name, column.clone()));
+        }
+        Table::new(pairs)
+    }
+
+    pub fn missing(name: Symbol) -> Error {
+        Error::new("value-error", format!("table has no column :{name}"))
+    }
+
+    pub fn rename(&self, from: Symbol, to: Symbol) -> Result<Table, Error> {
+        self.column(from).ok_or_else(|| Table::missing(from))?;
+        let pairs = self.columns().map(|(n, c)| (if n == from { to } else { n }, c.clone())).collect();
+        Table::new(pairs)
+    }
+
+    pub fn take_rows(&self, indices: &[usize]) -> Table {
+        let pairs = self
+            .columns()
+            .map(|(name, column)| {
+                let values = indices.iter().map(|&i| column.get(i).unwrap_or(Value::Nil));
+                (name, Rc::new(Array::from_values(values).unwrap()))
+            })
+            .collect();
+        Table::new(pairs).unwrap()
+    }
+
     pub fn format(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let nrows = self.nrows();
         let shown = nrows.min(PRINT_ROWS);
