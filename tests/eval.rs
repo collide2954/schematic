@@ -108,6 +108,102 @@ fn define_and_set_syntax_errors() {
 }
 
 #[test]
+fn integer_arithmetic() {
+    assert_eq!(eval("(+ 1 2)"), "3");
+    assert_eq!(eval("(+)"), "0");
+    assert_eq!(eval("(+ 1 2 3 4)"), "10");
+    assert_eq!(eval("(- 10 3)"), "7");
+    assert_eq!(eval("(- 5)"), "-5");
+    assert_eq!(eval("(- 10 1 2)"), "7");
+    assert_eq!(eval("(* 2 3 4)"), "24");
+    assert_eq!(eval("(*)"), "1");
+}
+
+#[test]
+fn floats_contaminate_arithmetic() {
+    assert_eq!(eval("(+ 1 2.5)"), "3.5");
+    assert_eq!(eval("(* 2 0.5)"), "1.0");
+    assert_eq!(eval("(- 1.5)"), "-1.5");
+    assert_eq!(eval("(- 3 0.5)"), "2.5");
+}
+
+#[test]
+fn division_always_yields_a_float() {
+    assert_eq!(eval("(/ 6 3)"), "2.0");
+    assert_eq!(eval("(/ 1 2)"), "0.5");
+    assert_eq!(eval("(/ 2)"), "0.5");
+    assert_eq!(eval("(/ 12 2 3)"), "2.0");
+    assert_eq!(eval("(/ 1 0)"), "+inf.0");
+    assert_eq!(eval("(/ 0 0)"), "+nan.0");
+}
+
+#[test]
+fn integer_division_and_remainders() {
+    assert_eq!(eval("(quot 7 2)"), "3");
+    assert_eq!(eval("(quot -7 2)"), "-3");
+    assert_eq!(eval("(rem -7 2)"), "-1");
+    assert_eq!(eval("(mod -7 2)"), "1");
+    assert_eq!(eval("(mod 7 -2)"), "-1");
+    assert_eq!(eval("(quot 7.5 2)"), "3.0");
+    assert_eq!(eval("(quot 1 0)"), "error: division by zero");
+    assert_eq!(eval("(mod 7 0)"), "error: division by zero");
+}
+
+#[test]
+fn integer_overflow_is_an_error() {
+    assert_eq!(eval("(+ 9223372036854775807 1)"), "error: integer overflow");
+    assert_eq!(eval("(* 4611686018427387904 2)"), "error: integer overflow");
+    assert_eq!(eval("(- -9223372036854775808)"), "error: integer overflow");
+    assert_eq!(eval("(quot -9223372036854775808 -1)"), "error: integer overflow");
+}
+
+#[test]
+fn comparisons_chain_across_numbers() {
+    assert_eq!(eval("(< 1 2 3)"), "true");
+    assert_eq!(eval("(< 1 3 2)"), "false");
+    assert_eq!(eval("(<= 1 1 2)"), "true");
+    assert_eq!(eval("(> 3 2 1)"), "true");
+    assert_eq!(eval("(>= 2 2 1)"), "true");
+    assert_eq!(eval("(< 1 2.5)"), "true");
+    assert_eq!(eval("(< 1)"), "true");
+    assert_eq!(eval("(< 1 'a)"), "error: < expects numbers, got a");
+}
+
+#[test]
+fn equality_is_structural_and_numeric() {
+    assert_eq!(eval("(= 1 1)"), "true");
+    assert_eq!(eval("(= 1 1.0)"), "true");
+    assert_eq!(eval("(= 1 2)"), "false");
+    assert_eq!(eval("(= [1 2] [1 2])"), "true");
+    assert_eq!(eval("(= '(1) [1])"), "false");
+    assert_eq!(eval("(= {:a 1} {:a 1})"), "true");
+    assert_eq!(eval("(= 1 1 1)"), "true");
+    assert_eq!(eval("(= 1 1 2)"), "false");
+    assert_eq!(eval("(not true)"), "false");
+    assert_eq!(eval("(not nil)"), "true");
+    assert_eq!(eval("(not 0)"), "false");
+}
+
+#[test]
+fn arithmetic_type_errors_name_the_offender() {
+    assert_eq!(eval("(+ 1 \"a\")"), "error: + expects numbers, got \"a\"");
+    assert_eq!(eval("(* :k 2)"), "error: * expects numbers, got :k");
+}
+
+#[test]
+fn builtins_are_values() {
+    assert_eq!(eval("+"), "#<builtin +>");
+    assert_eq!(eval("(define plus +) (plus 1 2)"), "3");
+}
+
+#[test]
+fn calling_a_non_function_is_an_error() {
+    assert_eq!(eval("(1 2)"), "error: 1 is not a function");
+    assert_eq!(eval("(+ 1 2 3 4 5)"), "15");
+    assert_eq!(eval("(not)"), "error: not expects 1 argument, got 0");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

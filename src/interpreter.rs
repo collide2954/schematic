@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use crate::builtins;
 use crate::compiler::Compiler;
 use crate::error::Error;
 use crate::reader::read_all;
@@ -18,7 +19,9 @@ impl Default for Interpreter {
 
 impl Interpreter {
     pub fn new() -> Interpreter {
-        Interpreter { vm: Vm::new() }
+        let mut vm = Vm::new();
+        builtins::install(&mut vm.globals);
+        Interpreter { vm }
     }
 
     pub fn eval_str(&mut self, src: &str) -> Result<Value, Error> {
