@@ -31,6 +31,10 @@ pub enum Op {
     TailCall(u32),
     Recur(u32),
     Return,
+    PushCatch(u32),
+    PushFinally(u32),
+    PopHandler,
+    Rethrow,
     Closure(u32),
     MakeVector(u32),
     MakeMap(u32),
@@ -43,10 +47,11 @@ impl Op {
         match self {
             Const(_) | Nil | True | False | GetLocal(_) | GetLocalCell(_) | GetUpvalue(_)
             | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) => 1,
-            Pop | JumpIfFalse(_) | JumpIfTrue(_) | JumpIfFalseOrPop(_) | JumpIfTrueOrPop(_) | Return => -1,
+            Pop | JumpIfFalse(_) | JumpIfTrue(_) | JumpIfFalseOrPop(_) | JumpIfTrueOrPop(_) | Return
+            | Rethrow => -1,
             PopUnder(n) | Call(n) | TailCall(n) | Recur(n) => -(n as isize),
             SetLocal(_) | SetLocalCell(_) | SetUpvalueCell(_) | SetGlobal(_) | DefineGlobal(_)
-            | MakeCell | Jump(_) => 0,
+            | MakeCell | Jump(_) | PushCatch(_) | PushFinally(_) | PopHandler => 0,
             MakeVector(n) | MakeSet(n) => 1 - n as isize,
             MakeMap(n) => 1 - 2 * n as isize,
         }

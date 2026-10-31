@@ -3,9 +3,11 @@ use std::rc::Rc;
 use crate::value::Value;
 use crate::vm::{Arity, Globals, Native, NativeFn};
 
+mod core;
 mod math;
 
 pub fn install(globals: &mut Globals) {
+    core::install(globals);
     math::install(globals);
 }
 

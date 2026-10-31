@@ -284,6 +284,8 @@ impl<'a> Compiler<'a> {
             Op::JumpIfTrue(_) => Op::JumpIfTrue(target),
             Op::JumpIfFalseOrPop(_) => Op::JumpIfFalseOrPop(target),
             Op::JumpIfTrueOrPop(_) => Op::JumpIfTrueOrPop(target),
+            Op::PushCatch(_) => Op::PushCatch(target),
+            Op::PushFinally(_) => Op::PushFinally(target),
             other => unreachable!("patching a non-jump {other:?}"),
         };
     }
@@ -393,6 +395,7 @@ impl<'a> Compiler<'a> {
                 "unless" => return self.compile_when(&args, tail, false),
                 "loop" => return self.compile_loop(&args, tail),
                 "recur" => return self.compile_recur(&args, tail),
+                "try" => return self.compile_try(&args, tail),
                 "lambda" => {
                     let Some(params) = args.first() else {
                         return Err(syntax_error("lambda", "expected a parameter list"));
@@ -510,6 +513,81 @@ impl<'a> Compiler<'a> {
             self.emit(Op::PopUnder(1));
         }
         self.current().locals.pop();
+        Ok(())
+    }
+
+    fn compile_try(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        let mut body = Vec::new();
+        let mut catch: Option<(Symbol, List)> = None;
+        let mut finally: Option<List> = None;
+        for form in args.iter() {
+            let parts = match form {
+                Value::List(l) => Some(l),
+                _ => None,
+            };
+            let clause = parts.and_then(|l| l.first()).and_then(|head| self.is_special(head)).map(|s| s.name());
+            match clause.as_deref() {
+                Some("catch") => {
+                    if catch.is_some() || finally.is_some() {
+                        return Err(syntax_error("try", "catch must appear once, before finally"));
+                    }
+                    let rest = parts.unwrap().rest();
+                    let Some(Value::Symbol(name)) = rest.first() else {
+                        return Err(syntax_error("catch", "expected a variable name"));
+                    };
+                    catch = Some((*name, rest.rest()));
+                }
+                Some("finally") => {
+                    if finally.is_some() {
+                        return Err(syntax_error("try", "only one finally clause is allowed"));
+                    }
+                    finally = Some(parts.unwrap().rest());
+                }
+                _ => {
+                    if catch.is_some() || finally.is_some() {
+                        return Err(syntax_error("try", "body forms must come before catch and finally"));
+                    }
+                    body.push(form.clone());
+                }
+            }
+        }
+        let body: List = body.into_iter().collect();
+        let depth = self.depth();
+        let push_finally = finally.as_ref().map(|_| self.emit_jump(Op::PushFinally(0)));
+        match &catch {
+            Some((name, handler)) => {
+                let push_catch = self.emit_jump(Op::PushCatch(0));
+                self.compile_sequence(&body, false)?;
+                self.emit(Op::PopHandler);
+                let to_end = self.emit_jump(Op::Jump(0));
+                self.patch_jump(push_catch);
+                self.set_depth(depth + 1);
+                let boxed = self.current().boxed_names.contains(name);
+                if boxed {
+                    self.emit(Op::MakeCell);
+                }
+                self.current().locals.push(Local { name: *name, slot: depth, boxed });
+                self.compile_sequence(handler, false)?;
+                self.emit(Op::PopUnder(1));
+                self.current().locals.pop();
+                self.patch_jump(to_end);
+            }
+            None => self.compile_sequence(&body, false)?,
+        }
+        if let (Some(fin), Some(push_finally)) = (&finally, push_finally) {
+            self.emit(Op::PopHandler);
+            self.compile_sequence(fin, false)?;
+            self.emit(Op::Pop);
+            let to_end = self.emit_jump(Op::Jump(0));
+            self.patch_jump(push_finally);
+            self.set_depth(depth + 1);
+            self.compile_sequence(fin, false)?;
+            self.emit(Op::Pop);
+            self.emit(Op::Rethrow);
+            self.patch_jump(to_end);
+            self.set_depth(depth + 1);
+        }
+        self.finish_tail(tail);
         Ok(())
     }
 

@@ -6,6 +6,7 @@ use crate::value::Value;
 #[derive(Debug, Clone)]
 pub struct Error {
     pub payload: Value,
+    pub escape: Option<u64>,
 }
 
 impl Error {
@@ -14,11 +15,15 @@ impl Error {
             (Value::keyword("kind"), Value::keyword(kind)),
             (Value::keyword("message"), Value::string(&message.into())),
         ]);
-        Error { payload }
+        Error { payload, escape: None }
     }
 
     pub fn raise(payload: Value) -> Error {
-        Error { payload }
+        Error { payload, escape: None }
+    }
+
+    pub fn escape(token: u64, value: Value) -> Error {
+        Error { payload: value, escape: Some(token) }
     }
 
     pub fn syntax(message: impl Into<String>) -> Error {

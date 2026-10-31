@@ -133,13 +133,29 @@ struct Frame {
     base: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HandlerKind {
+    Catch,
+    Finally,
+    Escape(u64),
+}
+
+struct Handler {
+    kind: HandlerKind,
+    frame_depth: usize,
+    stack_len: usize,
+    target: usize,
+}
+
 const DEFAULT_FRAME_LIMIT: usize = 1_000_000;
 
 pub struct Vm {
     pub globals: Globals,
     stack: Vec<Value>,
     frames: Vec<Frame>,
+    handlers: Vec<Handler>,
     frame_limit: usize,
+    next_token: u64,
 }
 
 impl Default for Vm {
@@ -154,7 +170,9 @@ impl Vm {
             globals: Globals::default(),
             stack: Vec::new(),
             frames: Vec::new(),
+            handlers: Vec::new(),
             frame_limit: DEFAULT_FRAME_LIMIT,
+            next_token: 0,
         }
     }
 
@@ -166,14 +184,54 @@ impl Vm {
         let closure = Rc::new(Closure { proto, upvalues: Vec::new() });
         let stack_base = self.stack.len();
         let frame_base = self.frames.len();
+        let handler_base = self.handlers.len();
         self.stack.push(Value::Closure(closure.clone()));
         self.frames.push(Frame { closure, ip: 0, base: stack_base + 1 });
         let result = self.run(frame_base);
         if result.is_err() {
             self.frames.truncate(frame_base);
             self.stack.truncate(stack_base);
+            self.handlers.truncate(handler_base);
         }
-        result
+        result.map_err(|e| {
+            if e.escape.is_some() {
+                Error::new("escape", "escape continuation called outside its extent")
+            } else {
+                e
+            }
+        })
+    }
+
+    fn push_handler(&mut self, kind: HandlerKind, stack_len: usize, target: usize) {
+        let frame_depth = self.frames.len();
+        self.handlers.push(Handler { kind, frame_depth, stack_len, target });
+    }
+
+    fn unwind(&mut self, err: Error, stop_depth: usize) -> Result<(), Error> {
+        while let Some(handler) = self.handlers.last() {
+            if handler.frame_depth <= stop_depth {
+                break;
+            }
+            let handler = self.handlers.pop().unwrap();
+            let caught = match handler.kind {
+                HandlerKind::Catch => err.escape.is_none(),
+                HandlerKind::Finally => true,
+                HandlerKind::Escape(token) => err.escape == Some(token),
+            };
+            if !caught {
+                continue;
+            }
+            self.frames.truncate(handler.frame_depth);
+            self.stack.truncate(handler.stack_len);
+            let value = match handler.kind {
+                HandlerKind::Finally => Value::Signal(Rc::new(err)),
+                _ => err.payload,
+            };
+            self.stack.push(value);
+            self.frames.last_mut().unwrap().ip = handler.target;
+            return Ok(());
+        }
+        Err(err)
     }
 
     fn pop(&mut self) -> Value {
@@ -197,6 +255,22 @@ impl Vm {
     }
 
     fn run(&mut self, stop_depth: usize) -> Result<Value, Error> {
+        macro_rules! throw {
+            ($err:expr) => {
+                match self.unwind($err, stop_depth) {
+                    Ok(()) => continue,
+                    Err(e) => return Err(e),
+                }
+            };
+        }
+        macro_rules! tri {
+            ($expr:expr) => {
+                match $expr {
+                    Ok(v) => v,
+                    Err(e) => throw!(e),
+                }
+            };
+        }
         loop {
             let frame = self.frames.last_mut().expect("no frame");
             let op = frame.closure.proto.code[frame.ip];
@@ -255,11 +329,11 @@ impl Vm {
                         let v = v.clone();
                         self.stack.push(v);
                     }
-                    None => return Err(self.unbound(i as usize)),
+                    None => throw!(self.unbound(i as usize)),
                 },
                 Op::SetGlobal(i) => {
                     if self.globals.get(i as usize).is_none() {
-                        return Err(self.unbound(i as usize));
+                        throw!(self.unbound(i as usize));
                     }
                     let v = self.top().clone();
                     self.globals.set(i as usize, v);
@@ -298,13 +372,30 @@ impl Vm {
                         self.pop();
                     }
                 }
-                Op::Call(argc) => self.call(argc as usize)?,
+                Op::Call(argc) => tri!(self.call(argc as usize)),
                 Op::TailCall(argc) => {
-                    if !self.tail_call(argc as usize)? {
+                    if !tri!(self.tail_call(argc as usize)) {
                         if let Some(result) = self.do_return(stop_depth) {
                             return Ok(result);
                         }
                     }
+                }
+                Op::PushCatch(target) => {
+                    let len = self.stack.len();
+                    self.push_handler(HandlerKind::Catch, len, target as usize);
+                }
+                Op::PushFinally(target) => {
+                    let len = self.stack.len();
+                    self.push_handler(HandlerKind::Finally, len, target as usize);
+                }
+                Op::PopHandler => {
+                    self.handlers.pop();
+                }
+                Op::Rethrow => {
+                    let Value::Signal(signal) = self.pop() else {
+                        panic!("rethrow without a signal");
+                    };
+                    throw!(Rc::try_unwrap(signal).unwrap_or_else(|rc| (*rc).clone()));
                 }
                 Op::Recur(n) => {
                     let n = n as usize;

@@ -496,6 +496,67 @@ fn collections_are_lookup_functions() {
 }
 
 #[test]
+fn error_raises_a_catchable_map() {
+    assert_eq!(eval("(error \"boom\")"), "error: boom");
+    assert_eq!(eval("(try (error \"boom\") (catch e (:message e)))"), "\"boom\"");
+    assert_eq!(eval("(try (error \"boom\" {:code 7}) (catch e (:data e)))"), "{:code 7}");
+    assert_eq!(eval("(try (error \"boom\") (catch e (:kind e)))"), ":user");
+}
+
+#[test]
+fn runtime_errors_are_catchable() {
+    assert_eq!(eval("(try (+ 1 \"a\") (catch e (:kind e)))"), ":type-error");
+    assert_eq!(eval("(try (undefined-thing) (catch e (:message e)))"), "\"undefined-thing is not defined\"");
+    assert_eq!(eval("(try (quot 1 0) (catch e (:kind e)))"), ":arithmetic");
+    assert_eq!(eval("(try ((lambda (x) x)) (catch e (:kind e)))"), ":arity-error");
+}
+
+#[test]
+fn raise_throws_any_value() {
+    assert_eq!(eval("(try (raise 42) (catch e (+ e 1)))"), "43");
+    assert_eq!(eval("(raise :oops)"), "error: :oops");
+    assert_eq!(eval("(try (raise {:message \"custom\"}) (catch e (:message e)))"), "\"custom\"");
+}
+
+#[test]
+fn try_returns_the_body_value_when_nothing_is_raised() {
+    assert_eq!(eval("(try 1 2 3 (catch e 'caught))"), "3");
+    assert_eq!(eval("(try (+ 1 2))"), "3");
+    assert_eq!(eval("[(try (raise 1) (catch e e)) (try 2 (catch e e))]"), "[1 2]");
+}
+
+#[test]
+fn errors_unwind_through_nested_calls_and_scopes() {
+    assert_eq!(eval("(define (f) (g)) (define (g) (error \"deep\")) (try (f) (catch e (:message e)))"), "\"deep\"");
+    let safe_div = "(define (safe-div a b) (try (if (= b 0) (error \"zero\") (/ a b)) (catch e nil))) [(safe-div 1 2) (safe-div 1 0)]";
+    assert_eq!(eval(safe_div), "[0.5 nil]");
+    assert_eq!(eval("(try (try (raise 1) (catch e (raise (+ e 1)))) (catch e (* e 10)))"), "20");
+    assert_eq!(eval("(let ((x 1)) (try (raise 2) (catch e (+ x e))))"), "3");
+    assert_eq!(eval("(define (f) (try (raise 1) (catch e e))) (define (g n) (if (= n 0) (f) (g (- n 1)))) (g 50)"), "1");
+    assert_eq!(eval("(try (raise 1) (catch e e)) (+ 1 2)"), "3");
+}
+
+#[test]
+fn finally_runs_on_every_path() {
+    assert_eq!(eval("(define log nil) (try 1 (finally (set! log 'ran))) log"), "ran");
+    assert_eq!(eval("(define log nil) (try (raise 1) (catch e e) (finally (set! log 'ran))) log"), "ran");
+    assert_eq!(eval("(define log nil) (try (try (raise 1) (finally (set! log 'ran))) (catch e [e log]))"), "[1 ran]");
+    assert_eq!(eval("(try (raise 1) (finally 2))"), "error: 1");
+    assert_eq!(eval("(try 'body (finally 'ignored))"), "body");
+    let nested = "(define log nil) (try (try (raise 1) (catch e (raise 2)) (finally (set! log 'ran))) (catch e [e log]))";
+    assert_eq!(eval(nested), "[2 ran]");
+}
+
+#[test]
+fn try_syntax_errors() {
+    assert!(eval("(try 1 (catch))").starts_with("error:"));
+    assert!(eval("(try 1 (catch 1 2))").starts_with("error:"));
+    assert!(eval("(try 1 (finally 2) (catch e 3))").starts_with("error:"));
+    assert!(eval("(try 1 (catch e 2) (catch e 3))").starts_with("error:"));
+    assert!(eval("(try (catch e 1) 2)").starts_with("error:"));
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
+use crate::error::Error;
 use crate::list::List;
 use crate::map::Map;
 use crate::set::Set;
@@ -25,6 +26,7 @@ pub enum Value {
     Closure(Rc<Closure>),
     Native(Rc<Native>),
     Cell(Rc<RefCell<Value>>),
+    Signal(Rc<Error>),
 }
 
 impl Value {
@@ -75,6 +77,7 @@ impl Value {
             Value::Set(_) => "set",
             Value::Closure(_) | Value::Native(_) => "function",
             Value::Cell(_) => "cell",
+            Value::Signal(_) => "signal",
         }
     }
 }
@@ -153,6 +156,7 @@ impl Value {
             Value::Closure(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
             Value::Native(n) => mix(Rc::as_ptr(n) as usize as u64 ^ TAG_POINTER),
             Value::Cell(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
+            Value::Signal(s) => mix(Rc::as_ptr(s) as usize as u64 ^ TAG_POINTER),
         }
     }
 }
@@ -176,6 +180,7 @@ impl PartialEq for Value {
             (Closure(a), Closure(b)) => Rc::ptr_eq(a, b),
             (Native(a), Native(b)) => Rc::ptr_eq(a, b),
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
+            (Signal(a), Signal(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -237,6 +242,7 @@ impl fmt::Display for Value {
             },
             Value::Native(n) => write!(f, "#<builtin {}>", n.name),
             Value::Cell(_) => f.write_str("#<cell>"),
+            Value::Signal(_) => f.write_str("#<signal>"),
         }
     }
 }
