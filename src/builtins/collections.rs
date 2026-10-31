@@ -38,6 +38,16 @@ pub fn install(globals: &mut Globals) {
     native(globals, "select-keys", Arity::Exact(2), select_keys);
     native(globals, "zipmap", Arity::Exact(2), zipmap);
     native(globals, "subvec", Arity::Between(2, 3), subvec);
+    native(globals, "take", Arity::Exact(2), |args| take_drop("take", args, true));
+    native(globals, "drop", Arity::Exact(2), |args| take_drop("drop", args, false));
+    native(globals, "concat", Arity::AtLeast(0), concat);
+    native(globals, "into", Arity::Exact(2), into);
+    native(globals, "distinct", Arity::Exact(1), distinct);
+    native(globals, "frequencies", Arity::Exact(1), frequencies);
+    native(globals, "partition", Arity::Between(2, 3), partition);
+    native(globals, "interleave", Arity::AtLeast(0), interleave);
+    native(globals, "flatten", Arity::Exact(1), flatten);
+    native(globals, "second", Arity::Exact(1), |args| Ok(items("second", &args[0])?.nth(1).unwrap_or(Value::Nil)));
     native(globals, "nil?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Nil))));
     native(globals, "boolean?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Bool(_)))));
     native(globals, "integer?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Int(_)))));
@@ -242,11 +252,122 @@ fn reverse(args: &[Value]) -> Result<Value, Error> {
     }
 }
 
+fn like(template: &Value, out: Vec<Value>) -> Value {
+    match template {
+        Value::List(_) => Value::list(out),
+        _ => Value::vector(out),
+    }
+}
+
+fn count_arg(name: &str, value: &Value) -> Result<usize, Error> {
+    match value {
+        Value::Int(n) if *n >= 0 => Ok(*n as usize),
+        other => Err(expects(name, "a non-negative count", other)),
+    }
+}
+
+fn take_drop(name: &str, args: &[Value], take: bool) -> Result<Value, Error> {
+    let n = count_arg(name, &args[0])?;
+    let iter = items(name, &args[1])?;
+    let out: Vec<Value> = if take { iter.take(n).collect() } else { iter.skip(n).collect() };
+    Ok(like(&args[1], out))
+}
+
+fn concat(args: &[Value]) -> Result<Value, Error> {
+    let mut out = Vec::new();
+    for arg in args {
+        out.extend(items("concat", arg)?);
+    }
+    Ok(like(args.first().unwrap_or(&Value::Nil), out))
+}
+
+fn into(args: &[Value]) -> Result<Value, Error> {
+    let mut conj_args = vec![args[0].clone()];
+    conj_args.extend(items("into", &args[1])?);
+    conj(&conj_args)
+}
+
+fn distinct(args: &[Value]) -> Result<Value, Error> {
+    let mut seen = Set::new();
+    let mut out = Vec::new();
+    for x in items("distinct", &args[0])? {
+        if !seen.contains(&x) {
+            seen.insert_mut(x.clone());
+            out.push(x);
+        }
+    }
+    Ok(like(&args[0], out))
+}
+
+fn frequencies(args: &[Value]) -> Result<Value, Error> {
+    let mut counts = Map::new();
+    for x in items("frequencies", &args[0])? {
+        let n = match counts.get(&x) {
+            Some(Value::Int(n)) => n + 1,
+            _ => 1,
+        };
+        counts.insert_mut(x, Value::Int(n));
+    }
+    Ok(Value::Map(Rc::new(counts)))
+}
+
+fn partition(args: &[Value]) -> Result<Value, Error> {
+    let n = count_arg("partition", &args[0])?;
+    let (step, coll) = match args.len() {
+        3 => (count_arg("partition", &args[1])?, &args[2]),
+        _ => (n, &args[1]),
+    };
+    if n == 0 || step == 0 {
+        return Err(Error::new("arithmetic", "partition size and step must be positive"));
+    }
+    let all: Vec<Value> = items("partition", coll)?.collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start + n <= all.len() {
+        out.push(Value::vector(all[start..start + n].iter().cloned()));
+        start += step;
+    }
+    Ok(like(coll, out))
+}
+
+fn interleave(args: &[Value]) -> Result<Value, Error> {
+    let mut iters = args.iter().map(|c| items("interleave", c)).collect::<Result<Vec<_>, _>>()?;
+    let mut out = Vec::new();
+    if iters.is_empty() {
+        return Ok(Value::vector(out));
+    }
+    loop {
+        let mut round = Vec::with_capacity(iters.len());
+        for iter in iters.iter_mut() {
+            match iter.next() {
+                Some(v) => round.push(v),
+                None => return Ok(Value::vector(out)),
+            }
+        }
+        out.extend(round);
+    }
+}
+
+fn flatten_into(value: Value, out: &mut Vec<Value>) {
+    match value {
+        Value::Vector(_) | Value::List(_) => seq_items(&value).unwrap().for_each(|v| flatten_into(v, out)),
+        other => out.push(other),
+    }
+}
+
+fn flatten(args: &[Value]) -> Result<Value, Error> {
+    let mut out = Vec::new();
+    for x in items("flatten", &args[0])? {
+        flatten_into(x, &mut out);
+    }
+    Ok(Value::vector(out))
+}
+
 fn char_at(s: &str, index: usize) -> Option<Value> {
     s.chars().nth(index).map(|c| Value::string(c.encode_utf8(&mut [0; 4])))
 }
 
-fn get(args: &[Value]) -> Result<Value, Error> {
+pub fn get(args: &[Value]) -> Result<Value, Error> {
     let index = |i: &i64| usize::try_from(*i).ok();
     let found = match (&args[0], &args[1]) {
         (Value::Map(m), key) => m.get(key).cloned(),
@@ -269,7 +390,7 @@ fn find(args: &[Value]) -> Result<Value, Error> {
     }
 }
 
-fn assoc(args: &[Value]) -> Result<Value, Error> {
+pub fn assoc(args: &[Value]) -> Result<Value, Error> {
     let (target, pairs) = args.split_first().unwrap();
     if pairs.len() % 2 != 0 {
         let message = format!("assoc expects an even number of key and value arguments, got {}", pairs.len());

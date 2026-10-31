@@ -19,6 +19,91 @@ pub fn install(globals: &mut Globals) {
     native(globals, ">=", Arity::AtLeast(1), |args| compare(">=", args, |o| o != Ordering::Less));
     native(globals, "=", Arity::AtLeast(1), equal);
     native(globals, "not", Arity::Exact(1), |args| Ok(Value::Bool(!args[0].is_truthy())));
+    native(globals, "max", Arity::AtLeast(1), |args| extremum("max", args, Ordering::Greater));
+    native(globals, "min", Arity::AtLeast(1), |args| extremum("min", args, Ordering::Less));
+    native(globals, "abs", Arity::Exact(1), abs);
+    native(globals, "inc", Arity::Exact(1), |args| arith("inc", &args[0], &Value::Int(1), i64::checked_add, |a, b| a + b));
+    native(globals, "dec", Arity::Exact(1), |args| arith("dec", &args[0], &Value::Int(1), i64::checked_sub, |a, b| a - b));
+    native(globals, "even?", Arity::Exact(1), |args| parity("even?", &args[0], 0));
+    native(globals, "odd?", Arity::Exact(1), |args| parity("odd?", &args[0], 1));
+    native(globals, "zero?", Arity::Exact(1), |args| Ok(Value::Bool(as_float("zero?", &args[0])? == 0.0)));
+    native(globals, "pos?", Arity::Exact(1), |args| Ok(Value::Bool(as_float("pos?", &args[0])? > 0.0)));
+    native(globals, "neg?", Arity::Exact(1), |args| Ok(Value::Bool(as_float("neg?", &args[0])? < 0.0)));
+    native(globals, "floor", Arity::Exact(1), |args| to_integer("floor", &args[0], f64::floor));
+    native(globals, "ceil", Arity::Exact(1), |args| to_integer("ceil", &args[0], f64::ceil));
+    native(globals, "round", Arity::Exact(1), |args| to_integer("round", &args[0], f64::round_ties_even));
+    native(globals, "truncate", Arity::Exact(1), |args| to_integer("truncate", &args[0], f64::trunc));
+    native(globals, "int", Arity::Exact(1), |args| to_integer("int", &args[0], f64::trunc));
+    native(globals, "float", Arity::Exact(1), |args| Ok(Value::Float(as_float("float", &args[0])?)));
+    native(globals, "sqrt", Arity::Exact(1), |args| Ok(Value::Float(as_float("sqrt", &args[0])?.sqrt())));
+    native(globals, "exp", Arity::Exact(1), |args| Ok(Value::Float(as_float("exp", &args[0])?.exp())));
+    native(globals, "log", Arity::Between(1, 2), log);
+    native(globals, "pow", Arity::Exact(2), pow);
+}
+
+fn extremum(name: &str, args: &[Value], wanted: Ordering) -> Result<Value, Error> {
+    let mut best = &args[0];
+    as_float(name, best)?;
+    for candidate in &args[1..] {
+        let ordering = match (candidate, best) {
+            (Value::Int(a), Value::Int(b)) => a.cmp(b),
+            (a, b) => as_float(name, a)?.partial_cmp(&as_float(name, b)?).unwrap_or(Ordering::Equal),
+        };
+        if ordering == wanted {
+            best = candidate;
+        }
+    }
+    Ok(best.clone())
+}
+
+fn abs(args: &[Value]) -> Result<Value, Error> {
+    match &args[0] {
+        Value::Int(i) => i.checked_abs().map(Value::Int).ok_or_else(overflow),
+        Value::Float(x) => Ok(Value::Float(x.abs())),
+        other => Err(not_a_number("abs", other)),
+    }
+}
+
+fn parity(name: &str, value: &Value, remainder: i64) -> Result<Value, Error> {
+    match value {
+        Value::Int(i) => Ok(Value::Bool(i.rem_euclid(2) == remainder)),
+        other => Err(Error::type_error(format!("{name} expects an integer, got {other}"))),
+    }
+}
+
+fn float_to_int(x: f64) -> Result<Value, Error> {
+    if x.is_finite() && (-9.223372036854776e18..9.223372036854776e18).contains(&x) {
+        Ok(Value::Int(x as i64))
+    } else {
+        Err(Error::new("arithmetic", format!("cannot convert {} to an integer", Value::Float(x))))
+    }
+}
+
+fn to_integer(name: &str, value: &Value, round: fn(f64) -> f64) -> Result<Value, Error> {
+    match value {
+        Value::Int(_) => Ok(value.clone()),
+        Value::Float(x) => float_to_int(round(*x)),
+        other => Err(not_a_number(name, other)),
+    }
+}
+
+fn log(args: &[Value]) -> Result<Value, Error> {
+    let x = as_float("log", &args[0])?.ln();
+    match args.get(1) {
+        Some(base) => Ok(Value::Float(x / as_float("log", base)?.ln())),
+        None => Ok(Value::Float(x)),
+    }
+}
+
+fn pow(args: &[Value]) -> Result<Value, Error> {
+    match (&args[0], &args[1]) {
+        (Value::Int(base), Value::Int(exponent)) if *exponent >= 0 => u32::try_from(*exponent)
+            .ok()
+            .and_then(|e| base.checked_pow(e))
+            .map(Value::Int)
+            .ok_or_else(overflow),
+        (a, b) => Ok(Value::Float(as_float("pow", a)?.powf(as_float("pow", b)?))),
+    }
 }
 
 fn overflow() -> Error {

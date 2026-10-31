@@ -742,6 +742,72 @@ fn errors_and_escapes_cross_native_callbacks_cleanly() {
 }
 
 #[test]
+fn sort_orders_values_naturally_or_by_a_comparator() {
+    assert_eq!(eval("[(sort [3 1 2]) (sort '(3 1 2)) (sort [1.5 1 2]) (sort []) (sort nil)]"), "[[1 2 3] (1 2 3) [1 1.5 2] [] []]");
+    assert_eq!(eval("[(sort [\"b\" \"a\"]) (sort [:b :a]) (sort ['b 'a]) (sort [true false])]"), "[[\"a\" \"b\"] [:a :b] [a b] [false true]]");
+    assert_eq!(eval("(sort [[1 2] [1 1] [0 9]])"), "[[0 9] [1 1] [1 2]]");
+    assert_eq!(eval("(sort > [1 3 2])"), "[3 2 1]");
+    assert_eq!(eval("(sort (lambda (a b) (- b a)) [1 3 2])"), "[3 2 1]");
+    assert_eq!(eval("(sort [1 \"a\"])"), "error: sort cannot compare 1 and \"a\"");
+    assert_eq!(eval("(sort (lambda (a b) (< (:n a) (:n b))) [{:n 2 :k 1} {:n 1} {:n 2 :k 2}])"), "[{:n 1} {:n 2, :k 1} {:n 2, :k 2}]");
+}
+
+#[test]
+fn sort_by_and_compare() {
+    assert_eq!(eval("(sort-by :age [{:age 30} {:age 20}])"), "[{:age 20} {:age 30}]");
+    assert_eq!(eval("(sort-by count [\"ccc\" \"a\" \"bb\"])"), "[\"a\" \"bb\" \"ccc\"]");
+    assert_eq!(eval("(sort-by :age > [{:age 30} {:age 20}])"), "[{:age 30} {:age 20}]");
+    assert_eq!(eval("(sort-by - '(1 3 2))"), "(3 2 1)");
+    assert_eq!(
+        eval("[(compare 1 2) (compare 2 1) (compare 1 1) (compare \"a\" \"b\") (compare :a :b) (compare [1 2] [1 3]) (compare nil 1) (compare 1 1.0)]"),
+        "[-1 1 0 -1 -1 -1 -1 0]"
+    );
+    assert_eq!(eval("(compare 1 :a)"), "error: compare cannot compare 1 and :a");
+}
+
+#[test]
+fn nested_updates() {
+    assert_eq!(eval("(update {:a 1} :a + 10)"), "{:a 11}");
+    assert_eq!(eval("(update {:a 1} :b (lambda (x) (if x 1 0)))"), "{:a 1, :b 0}");
+    assert_eq!(eval("(update [1 2] 0 - 5)"), "[-4 2]");
+    assert_eq!(eval("[(get-in {:a {:b 1}} [:a :b]) (get-in {:a {:b 1}} [:a :c]) (get-in {:a {:b 1}} [:a :c] 0)]"), "[1 nil 0]");
+    assert_eq!(eval("[(get-in {:a [10 20]} [:a 1]) (get-in nil [:a]) (get-in {:a 1} [])]"), "[20 nil {:a 1}]");
+    assert_eq!(eval("[(assoc-in {} [:a :b] 1) (assoc-in {:a {:b 1}} [:a :c] 2) (assoc-in {:a [1 2]} [:a 0] 9)]"), "[{:a {:b 1}} {:a {:b 1, :c 2}} {:a [9 2]}]");
+    assert_eq!(eval("[(update-in {:a {:b 1}} [:a :b] + 1) (update-in {} [:a :b] (lambda (x) (if x x 'new)))]"), "[{:a {:b 2}} {:a {:b new}}]");
+    assert_eq!(eval("(assoc-in {} [] 1)"), "error: assoc-in expects at least one key");
+}
+
+#[test]
+fn take_drop_and_other_sequence_transformations() {
+    assert_eq!(eval("[(take 2 [1 2 3]) (take 5 [1 2]) (take 0 [1]) (drop 1 [1 2 3]) (drop 5 [1 2]) (take 2 '(1 2 3))]"), "[[1 2] [1 2] [] [2 3] [] (1 2)]");
+    assert_eq!(eval("[(take-while even? [2 4 5 6]) (drop-while even? [2 4 5 6])]"), "[[2 4] [5 6]]");
+    assert_eq!(eval("[(concat [1 2] '(3) nil [4]) (concat) (concat '(1) [2])]"), "[[1 2 3 4] [] (1 2)]");
+    assert_eq!(eval("[(into [] '(1 2)) (into '() [1 2]) (into #{} [1 1 2]) (into {} [[:a 1]]) (into {:a 1} {:b 2})]"), "[[1 2] (2 1) #{1 2} {:a 1} {:a 1, :b 2}]");
+    assert_eq!(eval("[(distinct [1 2 1 3 2]) (distinct '(1 1))]"), "[[1 2 3] (1)]");
+    assert_eq!(eval("(frequencies [:a :b :a])"), "{:a 2, :b 1}");
+    assert_eq!(eval("(group-by even? [1 2 3 4])"), "{false [1 3], true [2 4]}");
+    assert_eq!(eval("(group-by :k [{:k 1 :v :a} {:k 2} {:k 1 :v :b}])"), "{1 [{:k 1, :v :a} {:k 1, :v :b}], 2 [{:k 2}]}");
+    assert_eq!(eval("[(partition 2 [1 2 3 4 5]) (partition 2 1 [1 2 3])]"), "[[[1 2] [3 4]] [[1 2] [2 3]]]");
+    assert_eq!(eval("[(interleave [1 2] [:a :b]) (flatten [1 [2 [3]] 4]) (second [1 2 3]) (second [1])]"), "[[1 :a 2 :b] [1 2 3 4] 2 nil]");
+    assert_eq!(eval("(take 1 5)"), "error: take expects a collection, got 5");
+    assert_eq!(eval("(take -1 [1])"), "error: take expects a non-negative count, got -1");
+}
+
+#[test]
+fn numeric_builtins() {
+    assert_eq!(eval("[(max 1 3 2) (min 1 3 2) (max 1 2.5) (abs -3) (abs -2.5) (inc 1) (dec 1)]"), "[3 1 2.5 3 2.5 2 0]");
+    assert_eq!(eval("[(even? 2) (odd? 2) (zero? 0) (zero? 0.0) (pos? 1) (neg? -1) (pos? 0)]"), "[true false true true true true false]");
+    assert_eq!(eval("[(floor 2.7) (ceil 2.1) (round 2.5) (round 3.5) (round -2.5) (round 2.4) (truncate -2.7) (floor 3)]"), "[2 3 2 4 -2 2 -2 3]");
+    assert_eq!(eval("[(sqrt 16) (sqrt 2.25) (pow 2 10) (pow 2 0.5) (pow 2.0 2) (pow 2 -1)]"), "[4.0 1.5 1024 1.4142135623730951 4.0 0.5]");
+    assert_eq!(eval("[(exp 0) (log 1) (log 100 10) (log 8 2)]"), "[1.0 0.0 2.0 3.0]");
+    assert_eq!(eval("[(int 2.7) (int -2.7) (int 3) (float 2) (float 2.5)]"), "[2 -2 3 2.0 2.5]");
+    assert_eq!(eval("(floor +inf.0)"), "error: cannot convert +inf.0 to an integer");
+    assert_eq!(eval("(max 1 'a)"), "error: max expects numbers, got a");
+    assert_eq!(eval("(even? 1.5)"), "error: even? expects an integer, got 1.5");
+    assert_eq!(eval("(pow 2 100)"), "error: integer overflow");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));
