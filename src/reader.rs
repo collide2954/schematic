@@ -510,6 +510,13 @@ mod tests {
     }
 
     #[test]
+    fn printed_values_read_back_equal() {
+        let src = "(define data {:name \"A\\\"da\\n\", :scores [1 2.5 -3e10 +inf.0], :tags #{:x :y}, :none nil, :ok true, :nested '(a [b {c d}])})";
+        let value = read(src);
+        assert_eq!(read(&value.to_string()), value);
+    }
+
+    #[test]
     fn unknown_dispatch_is_an_error() {
         assert!(read_str("#x").is_err());
         assert!(read_str("#").is_err());
