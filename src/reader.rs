@@ -1,5 +1,7 @@
 use std::fmt;
+use std::rc::Rc;
 
+use crate::map::Map;
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,6 +129,7 @@ impl<'a> Reader<'a> {
             '"' => self.read_string()?,
             '(' => Value::List(self.read_items(')')?.into_iter().collect()),
             '[' => Value::vector(self.read_items(']')?),
+            '{' => self.read_map()?,
             ')' | ']' | '}' => return Err(self.error(format!("unexpected `{c}`"))),
             '\'' => self.read_prefixed("quote")?,
             '`' => self.read_prefixed("quasiquote")?,
@@ -142,6 +145,22 @@ impl<'a> Reader<'a> {
             _ => self.read_atom()?,
         };
         Ok(Some(value))
+    }
+
+    fn read_map(&mut self) -> Result<Value, ReadError> {
+        let items = self.read_items('}')?;
+        if items.len() % 2 != 0 {
+            return Err(self.error("map literal needs an even number of forms"));
+        }
+        let mut map = Map::new();
+        let mut items = items.into_iter();
+        while let (Some(k), Some(v)) = (items.next(), items.next()) {
+            if map.contains_key(&k) {
+                return Err(self.error(format!("duplicate key {k} in map literal")));
+            }
+            map.insert_mut(k, v);
+        }
+        Ok(Value::Map(Rc::new(map)))
     }
 
     fn read_prefixed(&mut self, name: &str) -> Result<Value, ReadError> {
@@ -433,6 +452,32 @@ mod tests {
         );
         assert!(read_str("[1 2").is_err());
         assert!(read_str("[1 2)").is_err());
+    }
+
+    #[test]
+    fn reads_maps() {
+        assert_eq!(
+            read("{:name \"Ada\", :age 36}"),
+            Value::map([
+                (Value::keyword("name"), Value::string("Ada")),
+                (Value::keyword("age"), Value::Int(36))
+            ])
+        );
+        assert_eq!(read("{}"), Value::map([]));
+        assert_eq!(
+            read("{:a {:b [1]}}"),
+            Value::map([(
+                Value::keyword("a"),
+                Value::map([(Value::keyword("b"), Value::vector([Value::Int(1)]))])
+            )])
+        );
+    }
+
+    #[test]
+    fn map_literal_errors() {
+        assert!(read_str("{:a}").is_err());
+        assert!(read_str("{:a 1 :a 2}").is_err());
+        assert!(read_str("{:a 1").is_err());
     }
 
     #[test]
