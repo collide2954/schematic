@@ -5,11 +5,18 @@ use crate::value::Value;
 const BITS: u32 = 5;
 const MASK: u64 = (1 << BITS) - 1;
 const MAX_SHIFT: u32 = 60;
+const SMALL_LIMIT: usize = 8;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Map {
     len: usize,
-    root: Rc<Node>,
+    repr: Repr,
+}
+
+#[derive(Clone, Debug)]
+enum Repr {
+    Small(Vec<(u64, Value, Value)>),
+    Hashed(Rc<Node>),
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +35,12 @@ enum Shape {
     Empty,
     Single(u64, Value, Value),
     Many,
+}
+
+impl Default for Map {
+    fn default() -> Map {
+        Map { len: 0, repr: Repr::Small(Vec::new()) }
+    }
 }
 
 impl Default for Node {
@@ -86,10 +99,15 @@ impl Map {
     }
 
     pub fn iter(&self) -> Iter<'_> {
-        let Node::Bitmap { entries, .. } = &*self.root else {
-            unreachable!("root is always a bitmap node");
-        };
-        Iter { stack: vec![entries.iter()], collision: None }
+        match &self.repr {
+            Repr::Small(entries) => Iter { small: entries.iter(), stack: Vec::new(), collision: None },
+            Repr::Hashed(root) => {
+                let Node::Bitmap { entries, .. } = &**root else {
+                    unreachable!("root is always a bitmap node");
+                };
+                Iter { small: [].iter(), stack: vec![entries.iter()], collision: None }
+            }
+        }
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &Value> {
@@ -101,45 +119,84 @@ impl Map {
     }
 
     fn get_hashed(&self, hash: u64, key: &Value) -> Option<&Value> {
-        let mut node = &*self.root;
-        let mut shift = 0;
-        loop {
-            match node {
-                Node::Bitmap { bitmap, entries } => {
-                    let bit = bit_for(hash, shift);
-                    if bitmap & bit == 0 {
-                        return None;
-                    }
-                    match &entries[index_of(*bitmap, bit)] {
-                        Entry::Pair(h, k, v) => {
-                            return if *h == hash && k == key { Some(v) } else { None };
-                        }
-                        Entry::Child(child) => {
-                            node = child;
-                            shift += BITS;
-                        }
-                    }
+        match &self.repr {
+            Repr::Small(entries) => {
+                entries.iter().find(|(h, k, _)| *h == hash && k == key).map(|(_, _, v)| v)
+            }
+            Repr::Hashed(root) => get_in(root, hash, key),
+        }
+    }
+
+    fn insert_hashed(&mut self, hash: u64, key: Value, value: Value) {
+        match &mut self.repr {
+            Repr::Small(entries) => {
+                if let Some(entry) = entries.iter_mut().find(|(h, k, _)| *h == hash && *k == key) {
+                    entry.2 = value;
+                    return;
                 }
-                Node::Collision { pairs, .. } => {
-                    return pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+                if entries.len() < SMALL_LIMIT {
+                    entries.push((hash, key, value));
+                } else {
+                    let mut root = Node::default();
+                    for (h, k, v) in entries.drain(..) {
+                        insert_in(&mut root, 0, h, k, v);
+                    }
+                    insert_in(&mut root, 0, hash, key, value);
+                    self.repr = Repr::Hashed(Rc::new(root));
+                }
+                self.len += 1;
+            }
+            Repr::Hashed(root) => {
+                if insert_in(Rc::make_mut(root), 0, hash, key, value) {
+                    self.len += 1;
                 }
             }
         }
     }
 
-    fn insert_hashed(&mut self, hash: u64, key: Value, value: Value) {
-        if insert_in(Rc::make_mut(&mut self.root), 0, hash, key, value) {
-            self.len += 1;
-        }
-    }
-
     fn remove_hashed(&mut self, hash: u64, key: &Value) -> bool {
-        if self.get_hashed(hash, key).is_none() {
-            return false;
+        match &mut self.repr {
+            Repr::Small(entries) => {
+                let Some(i) = entries.iter().position(|(h, k, _)| *h == hash && k == key) else {
+                    return false;
+                };
+                entries.remove(i);
+            }
+            Repr::Hashed(root) => {
+                if get_in(root, hash, key).is_none() {
+                    return false;
+                }
+                remove_in(Rc::make_mut(root), 0, hash, key);
+            }
         }
-        remove_in(Rc::make_mut(&mut self.root), 0, hash, key);
         self.len -= 1;
         true
+    }
+}
+
+fn get_in<'a>(mut node: &'a Node, hash: u64, key: &Value) -> Option<&'a Value> {
+    let mut shift = 0;
+    loop {
+        match node {
+            Node::Bitmap { bitmap, entries } => {
+                let bit = bit_for(hash, shift);
+                if bitmap & bit == 0 {
+                    return None;
+                }
+                match &entries[index_of(*bitmap, bit)] {
+                    Entry::Pair(h, k, v) => {
+                        return if *h == hash && k == key { Some(v) } else { None };
+                    }
+                    Entry::Child(child) => {
+                        node = child;
+                        shift += BITS;
+                    }
+                }
+            }
+            Node::Collision { pairs, .. } => {
+                return pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+            }
+        }
     }
 }
 
@@ -253,6 +310,7 @@ impl Node {
 }
 
 pub struct Iter<'a> {
+    small: std::slice::Iter<'a, (u64, Value, Value)>,
     stack: Vec<std::slice::Iter<'a, Entry>>,
     collision: Option<std::slice::Iter<'a, (Value, Value)>>,
 }
@@ -261,6 +319,9 @@ impl<'a> Iterator for Iter<'a> {
     type Item = (&'a Value, &'a Value);
 
     fn next(&mut self) -> Option<(&'a Value, &'a Value)> {
+        if let Some((_, k, v)) = self.small.next() {
+            return Some((k, v));
+        }
         loop {
             if let Some(pairs) = &mut self.collision {
                 if let Some((k, v)) = pairs.next() {
@@ -394,15 +455,16 @@ mod tests {
     #[test]
     fn colliding_hashes_are_handled() {
         let mut m = Map::new();
-        for i in 0..5 {
+        for i in 0..12 {
             m.insert_hashed(42, Value::Int(i), Value::Int(-i));
         }
-        assert_eq!(m.len(), 5);
-        for i in 0..5 {
+        assert_eq!(m.len(), 12);
+        assert!(matches!(m.repr, Repr::Hashed(_)));
+        for i in 0..12 {
             assert_eq!(m.get_hashed(42, &Value::Int(i)), Some(&Value::Int(-i)));
         }
-        assert!(m.get_hashed(42, &Value::Int(9)).is_none());
-        for i in 0..5 {
+        assert!(m.get_hashed(42, &Value::Int(99)).is_none());
+        for i in 0..12 {
             assert!(m.remove_hashed(42, &Value::Int(i)));
             assert!(m.get_hashed(42, &Value::Int(i)).is_none());
         }
@@ -436,8 +498,45 @@ mod tests {
     fn prints_with_braces() {
         assert_eq!(Value::map([(kw("a"), Value::Int(1))]).to_string(), "{:a 1}");
         assert_eq!(Value::map([]).to_string(), "{}");
-        let two = Value::map([(kw("a"), Value::Int(1)), (kw("b"), Value::Int(2))]).to_string();
-        assert!(two == "{:a 1, :b 2}" || two == "{:b 2, :a 1}", "{two}");
+        let two = Value::map([(kw("b"), Value::Int(2)), (kw("a"), Value::Int(1))]).to_string();
+        assert_eq!(two, "{:b 2, :a 1}");
+    }
+
+    #[test]
+    fn small_maps_keep_insertion_order() {
+        let m = Map::new()
+            .insert(kw("z"), Value::Int(1))
+            .insert(kw("a"), Value::Int(2))
+            .insert(kw("m"), Value::Int(3))
+            .insert(kw("a"), Value::Int(4))
+            .remove(&kw("z"))
+            .insert(kw("z"), Value::Int(5));
+        let keys: Vec<String> = m.keys().map(|k| k.to_string()).collect();
+        assert_eq!(keys, vec![":a", ":m", ":z"]);
+        assert_eq!(m.get(&kw("a")), Some(&Value::Int(4)));
+    }
+
+    #[test]
+    fn small_and_large_maps_compare_equal_by_content() {
+        let mut big = int_map(12);
+        for i in 7..12 {
+            big = big.remove(&Value::Int(i));
+        }
+        assert_eq!(big, int_map(7));
+        assert_eq!(int_map(7), big);
+        assert_eq!(Value::Map(Rc::new(big)).hash_code(), Value::Map(Rc::new(int_map(7))).hash_code());
+    }
+
+    #[test]
+    fn growing_past_the_small_limit_keeps_every_entry() {
+        let mut m = Map::new();
+        for i in 0..20 {
+            m = m.insert(Value::Int(i), Value::Int(i));
+            assert_eq!(m.len(), (i + 1) as usize);
+            for j in 0..=i {
+                assert_eq!(m.get(&Value::Int(j)), Some(&Value::Int(j)));
+            }
+        }
     }
 
     #[test]
