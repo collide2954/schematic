@@ -150,6 +150,17 @@ fn tables_group_and_aggregate() {
 }
 
 #[test]
+fn tables_drop_duplicate_rows() {
+    let setup = "(define d (table {:city [\"Oslo\" \"Rome\" \"Oslo\" \"Oslo\"] :year [2020 2020 2020 2021]}))";
+    assert_eq!(eval(&format!("{setup} (rows (distinct d))")), "[{:city \"Oslo\", :year 2020} {:city \"Rome\", :year 2020} {:city \"Oslo\", :year 2021}]");
+    assert_eq!(eval(&format!("{setup} [(:city (distinct d :year)) (nrows (distinct d [:city :year])) (nrows (distinct d :city))]")), "[#[\"Oslo\" \"Oslo\"] 3 2]");
+    assert_eq!(eval(&format!("{setup} (distinct d :nope)")), "error: table has no column :nope");
+    assert_eq!(eval(&format!("{setup} (distinct d 5)")), "error: distinct expects a keyword column name, got 5");
+    assert_eq!(eval("(distinct [1 1 2] :x)"), "error: distinct expects a table when given column names, got [1 1 2]");
+    assert_eq!(eval("(distinct [1 1 2])"), "[1 2]");
+}
+
+#[test]
 fn tables_join_on_a_shared_key() {
     let setup = "(define p (table {:id [1 2 3] :name [\"Ada\" \"Bob\" \"Cy\"]})) (define o (table {:id [2 1 2 9] :total [5 7 1 0]}))";
     assert_eq!(eval(&format!("{setup} (rows (join p o :id))")), "[{:id 1, :name \"Ada\", :total 7} {:id 2, :name \"Bob\", :total 5} {:id 2, :name \"Bob\", :total 1}]");

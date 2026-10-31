@@ -203,12 +203,12 @@ fn order_by(args: &[Value]) -> Result<Value, Error> {
     Ok(Value::Table(Rc::new(table.take_rows(&indices))))
 }
 
-fn key_columns(table: &Table, spec: &Value) -> Result<Vec<Symbol>, Error> {
+fn key_columns(name: &str, table: &Table, spec: &Value) -> Result<Vec<Symbol>, Error> {
     let names: Vec<Symbol> = match spec {
         Value::Vector(_) | Value::List(_) => {
-            items("group-by", spec)?.map(|v| column_name("group-by", &v)).collect::<Result<_, _>>()?
+            items(name, spec)?.map(|v| column_name(name, &v)).collect::<Result<_, _>>()?
         }
-        other => vec![column_name("group-by", other)?],
+        other => vec![column_name(name, other)?],
     };
     for name in &names {
         table.column(*name).ok_or_else(|| Table::missing(*name))?;
@@ -238,11 +238,20 @@ fn group_rows(table: &Table, names: &[Symbol]) -> Vec<(Value, Vec<usize>)> {
 }
 
 pub fn group_by_table(table: &Table, spec: &Value) -> Result<Value, Error> {
-    let names = key_columns(table, spec)?;
+    let names = key_columns("group-by", table, spec)?;
     let pairs = group_rows(table, &names)
         .into_iter()
         .map(|(key, rows)| (key, Value::Table(Rc::new(table.take_rows(&rows)))));
     Ok(Value::map(pairs))
+}
+
+pub fn distinct_rows(table: &Table, by: Option<&Value>) -> Result<Value, Error> {
+    let names = match by {
+        Some(spec) => key_columns("distinct", table, spec)?,
+        None => table.names().to_vec(),
+    };
+    let keep: Vec<usize> = group_rows(table, &names).into_iter().map(|(_, rows)| rows[0]).collect();
+    Ok(Value::Table(Rc::new(table.take_rows(&keep))))
 }
 
 fn apply_aggregate(vm: &mut Vm, how: &Value, group: &Table) -> Result<Value, Error> {
@@ -275,7 +284,7 @@ fn aggregate(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
         return Err(expects("aggregate", "a map from new column names to [function column] pairs", spec));
     };
     let names = match by {
-        Some(spec) => key_columns(table, spec)?,
+        Some(spec) => key_columns("aggregate", table, spec)?,
         None => Vec::new(),
     };
     let groups = if names.is_empty() {

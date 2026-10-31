@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::tables::{column_from, column_name};
+use super::tables::{column_from, column_name, distinct_rows};
 use super::{native, native_owned};
 use crate::array::Array;
 use crate::error::Error;
@@ -44,7 +44,7 @@ pub fn install(globals: &mut Globals) {
     native(globals, "drop", Arity::Exact(2), |args| take_drop("drop", args, false));
     native(globals, "concat", Arity::AtLeast(0), concat);
     native_owned(globals, "into", Arity::Exact(2), into);
-    native(globals, "distinct", Arity::Exact(1), distinct);
+    native(globals, "distinct", Arity::Between(1, 2), distinct);
     native(globals, "frequencies", Arity::Exact(1), frequencies);
     native(globals, "partition", Arity::Between(2, 3), partition);
     native(globals, "interleave", Arity::AtLeast(0), interleave);
@@ -401,6 +401,12 @@ fn into(args: &mut [Value]) -> Result<Value, Error> {
 }
 
 fn distinct(args: &[Value]) -> Result<Value, Error> {
+    if let Value::Table(t) = &args[0] {
+        return distinct_rows(t, args.get(1));
+    }
+    if args.len() == 2 {
+        return Err(expects("distinct", "a table when given column names", &args[0]));
+    }
     let mut seen = Set::new();
     let mut out = Vec::new();
     for x in items("distinct", &args[0])? {
