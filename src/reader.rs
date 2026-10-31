@@ -1,0 +1,259 @@
+use std::fmt;
+
+use crate::value::Value;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadError {
+    pub message: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}: {}", self.line, self.col, self.message)
+    }
+}
+
+impl std::error::Error for ReadError {}
+
+pub fn read_str(src: &str) -> Result<Value, ReadError> {
+    let mut reader = Reader::new(src);
+    match reader.read()? {
+        Some(v) => Ok(v),
+        None => Err(reader.error("unexpected end of input")),
+    }
+}
+
+pub fn read_all(src: &str) -> Result<Vec<Value>, ReadError> {
+    let mut reader = Reader::new(src);
+    let mut out = Vec::new();
+    while let Some(v) = reader.read()? {
+        out.push(v);
+    }
+    Ok(out)
+}
+
+pub struct Reader<'a> {
+    src: &'a str,
+    pos: usize,
+    line: usize,
+    col: usize,
+}
+
+fn is_delimiter(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ',' | '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';')
+}
+
+impl<'a> Reader<'a> {
+    pub fn new(src: &'a str) -> Reader<'a> {
+        Reader { src, pos: 0, line: 1, col: 1 }
+    }
+
+    fn error(&self, message: impl Into<String>) -> ReadError {
+        ReadError { message: message.into(), line: self.line, col: self.col }
+    }
+
+    fn peek(&self) -> Option<char> {
+        self.src[self.pos..].chars().next()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let c = self.peek()?;
+        self.pos += c.len_utf8();
+        if c == '\n' {
+            self.line += 1;
+            self.col = 1;
+        } else {
+            self.col += 1;
+        }
+        Some(c)
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(c) = self.peek() {
+            if c.is_whitespace() || c == ',' {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub fn read(&mut self) -> Result<Option<Value>, ReadError> {
+        self.skip_whitespace();
+        let Some(c) = self.peek() else {
+            return Ok(None);
+        };
+        let value = match c {
+            '"' => self.read_string()?,
+            _ => self.read_atom()?,
+        };
+        Ok(Some(value))
+    }
+
+    fn read_string(&mut self) -> Result<Value, ReadError> {
+        let start = self.error("unterminated string");
+        self.bump();
+        let mut out = String::new();
+        loop {
+            match self.bump() {
+                None => return Err(start),
+                Some('"') => return Ok(Value::Str(out.into())),
+                Some('\\') => {
+                    let escaped = match self.bump() {
+                        Some('n') => '\n',
+                        Some('t') => '\t',
+                        Some('r') => '\r',
+                        Some('0') => '\0',
+                        Some('"') => '"',
+                        Some('\\') => '\\',
+                        Some(c) => return Err(self.error(format!("unknown escape `\\{c}`"))),
+                        None => return Err(start),
+                    };
+                    out.push(escaped);
+                }
+                Some(c) => out.push(c),
+            }
+        }
+    }
+
+    fn read_token(&mut self) -> &'a str {
+        let start = self.pos;
+        while let Some(c) = self.peek() {
+            if is_delimiter(c) {
+                break;
+            }
+            self.bump();
+        }
+        &self.src[start..self.pos]
+    }
+
+    fn read_atom(&mut self) -> Result<Value, ReadError> {
+        let token = self.read_token();
+        if token.is_empty() {
+            let c = self.peek().unwrap_or(' ');
+            return Err(self.error(format!("unexpected `{c}`")));
+        }
+        match token {
+            "true" => return Ok(Value::Bool(true)),
+            "false" => return Ok(Value::Bool(false)),
+            "nil" => return Ok(Value::Nil),
+            _ => {}
+        }
+        if let Some(name) = token.strip_prefix(':') {
+            if name.is_empty() {
+                return Err(self.error("keyword needs a name"));
+            }
+            return Ok(Value::keyword(name));
+        }
+        match parse_number(token) {
+            Some(Ok(v)) => Ok(v),
+            Some(Err(msg)) => Err(self.error(msg)),
+            None => Ok(Value::symbol(token)),
+        }
+    }
+}
+
+fn parse_number(token: &str) -> Option<Result<Value, String>> {
+    match token {
+        "+inf.0" => return Some(Ok(Value::Float(f64::INFINITY))),
+        "-inf.0" => return Some(Ok(Value::Float(f64::NEG_INFINITY))),
+        "+nan.0" => return Some(Ok(Value::Float(f64::NAN))),
+        _ => {}
+    }
+    let body = token.strip_prefix(['+', '-']).unwrap_or(token);
+    if !body.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let cleaned: String = token.chars().filter(|&c| c != '_').collect();
+    if cleaned.contains(['.', 'e', 'E']) {
+        Some(
+            cleaned
+                .parse::<f64>()
+                .map(Value::Float)
+                .map_err(|_| format!("invalid number `{token}`")),
+        )
+    } else {
+        Some(
+            cleaned
+                .parse::<i64>()
+                .map(Value::Int)
+                .map_err(|_| format!("integer out of range `{token}`")),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(src: &str) -> Value {
+        read_str(src).unwrap()
+    }
+
+    #[test]
+    fn reads_integers() {
+        assert_eq!(read("42"), Value::Int(42));
+        assert_eq!(read("-7"), Value::Int(-7));
+        assert_eq!(read("+3"), Value::Int(3));
+        assert_eq!(read("1_000_000"), Value::Int(1_000_000));
+    }
+
+    #[test]
+    fn reads_floats() {
+        assert_eq!(read("3.14"), Value::Float(3.14));
+        assert_eq!(read("-0.5"), Value::Float(-0.5));
+        assert_eq!(read("1e3"), Value::Float(1000.0));
+        assert_eq!(read("2.5e-2"), Value::Float(0.025));
+        assert_eq!(read("+inf.0"), Value::Float(f64::INFINITY));
+        assert_eq!(read("-inf.0"), Value::Float(f64::NEG_INFINITY));
+        assert!(matches!(read("+nan.0"), Value::Float(x) if x.is_nan()));
+    }
+
+    #[test]
+    fn reads_literals() {
+        assert_eq!(read("true"), Value::Bool(true));
+        assert_eq!(read("false"), Value::Bool(false));
+        assert_eq!(read("nil"), Value::Nil);
+    }
+
+    #[test]
+    fn reads_symbols() {
+        for name in ["map", "+", "-", "set!", "string->number", "<=", "...", "x1"] {
+            assert_eq!(read(name), Value::symbol(name));
+        }
+    }
+
+    #[test]
+    fn reads_keywords() {
+        assert_eq!(read(":name"), Value::keyword("name"));
+    }
+
+    #[test]
+    fn reads_strings_with_escapes() {
+        assert_eq!(read("\"hi\""), Value::string("hi"));
+        assert_eq!(read("\"a\\nb\\t\\\"c\\\\\""), Value::string("a\nb\t\"c\\"));
+        assert_eq!(read("\"héllo ✓\""), Value::string("héllo ✓"));
+    }
+
+    #[test]
+    fn skips_whitespace_and_commas() {
+        assert_eq!(read("  \n\t, 7 "), Value::Int(7));
+    }
+
+    #[test]
+    fn integer_overflow_is_an_error() {
+        assert!(read_str("99999999999999999999").is_err());
+    }
+
+    #[test]
+    fn unterminated_string_is_an_error() {
+        assert!(read_str("\"open").is_err());
+    }
+
+    #[test]
+    fn empty_input_is_an_error() {
+        assert!(read_str("   ").is_err());
+    }
+}
