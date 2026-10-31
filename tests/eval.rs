@@ -300,6 +300,52 @@ fn deep_non_tail_recursion_works_until_the_limit() {
 }
 
 #[test]
+fn let_binds_locals_in_parallel() {
+    assert_eq!(eval("(let ((x 1) (y 2)) (+ x y))"), "3");
+    assert_eq!(eval("(define x 10) (let ((x 1) (y x)) y)"), "10");
+    assert_eq!(eval("(let () 5)"), "5");
+    assert_eq!(eval("(let ((x 1)) (let ((x 2)) x))"), "2");
+    assert_eq!(eval("(let ((x 1)) (let ((y 2)) x))"), "1");
+    assert_eq!(eval("(let ((x 1)) 'ignored x)"), "1");
+}
+
+#[test]
+fn let_works_with_temporaries_beneath_it() {
+    assert_eq!(eval("[(let ((x 1)) x) 2]"), "[1 2]");
+    assert_eq!(eval("(+ 100 (let ((x 1) (y 2)) (* x y)))"), "102");
+    assert_eq!(eval("(- (let ((a 5)) a) (let ((b 2)) b))"), "3");
+}
+
+#[test]
+fn let_star_binds_sequentially() {
+    assert_eq!(eval("(let* ((x 1) (y (+ x 1))) y)"), "2");
+    assert_eq!(eval("(let* ((x 1) (x (+ x 1))) x)"), "2");
+    assert_eq!(eval("(let* () 7)"), "7");
+}
+
+#[test]
+fn let_locals_can_be_captured() {
+    assert_eq!(eval("(define f (let ((n 5)) (lambda (x) (+ x n)))) (f 1)"), "6");
+    assert_eq!(eval("(let ((x 1)) ((lambda () x)))"), "1");
+    assert_eq!(eval("(define (f a) (let ((b 2)) (lambda (c) (+ a b c)))) ((f 1) 3)"), "6");
+}
+
+#[test]
+fn let_in_tail_position_keeps_tail_calls() {
+    let src = "(define (f n) (let ((m (* n 2))) (if (= m 0) 'zero (f (- n 1))))) (f 10000)";
+    assert_eq!(eval_with_frame_limit(src, 100), "zero");
+}
+
+#[test]
+fn let_syntax_errors() {
+    assert!(eval("(let)").starts_with("error:"));
+    assert!(eval("(let (x 1) x)").starts_with("error:"));
+    assert!(eval("(let ((x)) x)").starts_with("error:"));
+    assert!(eval("(let ((1 2)) 1)").starts_with("error:"));
+    assert!(eval("(let ((x 1)))").starts_with("error:"));
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

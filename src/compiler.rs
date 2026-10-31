@@ -50,6 +50,24 @@ fn syntax_error(form: &str, message: &str) -> Error {
     Error::syntax(format!("{form}: {message}"))
 }
 
+fn parse_bindings(form: &str, bindings: &Value) -> Result<Vec<(Symbol, Value)>, Error> {
+    let Value::List(items) = bindings else {
+        return Err(syntax_error(form, "expected a list of bindings"));
+    };
+    items
+        .iter()
+        .map(|binding| {
+            if let Value::List(pair) = binding {
+                let rest = pair.rest();
+                if let (Some(Value::Symbol(name)), Some(init), 2) = (pair.first(), rest.first(), pair.len()) {
+                    return Ok((*name, init.clone()));
+                }
+            }
+            Err(syntax_error(form, &format!("bad binding {binding}, expected (name value)")))
+        })
+        .collect()
+}
+
 fn parse_params(params: &Value) -> Result<(Vec<Symbol>, bool), Error> {
     let items = match params {
         Value::Symbol(s) => return Ok((vec![*s], true)),
@@ -239,6 +257,8 @@ impl<'a> Compiler<'a> {
                 "define" => return self.compile_define(&args, tail),
                 "set!" => return self.compile_set(&args, tail),
                 "begin" => return self.compile_sequence(&args, tail),
+                "let" => return self.compile_let(&args, tail, false),
+                "let*" => return self.compile_let(&args, tail, true),
                 "lambda" => {
                     let Some(params) = args.first() else {
                         return Err(syntax_error("lambda", "expected a parameter list"));
@@ -281,6 +301,41 @@ impl<'a> Compiler<'a> {
 
     fn compile_body(&mut self, body: &List, tail: bool) -> Result<(), Error> {
         self.compile_sequence(body, tail)
+    }
+
+    fn compile_let(&mut self, args: &List, tail: bool, sequential: bool) -> Result<(), Error> {
+        let form = if sequential { "let*" } else { "let" };
+        let Some(bindings) = args.first() else {
+            return Err(syntax_error(form, "expected bindings and a body"));
+        };
+        let body = args.rest();
+        if body.is_empty() {
+            return Err(syntax_error(form, "expected a body"));
+        }
+        let bindings = parse_bindings(form, bindings)?;
+        let locals_before = self.current().locals.len();
+        let mut pending = Vec::new();
+        for (name, init) in &bindings {
+            let slot = self.depth();
+            self.compile(init, false)?;
+            let boxed = self.current().boxed_names.contains(name);
+            if boxed {
+                self.emit(Op::MakeCell);
+            }
+            let local = Local { name: *name, slot, boxed };
+            if sequential {
+                self.current().locals.push(local);
+            } else {
+                pending.push(local);
+            }
+        }
+        self.current().locals.extend(pending);
+        self.compile_body(&body, tail)?;
+        if !tail && !bindings.is_empty() {
+            self.emit(Op::PopUnder(bindings.len() as u32));
+        }
+        self.current().locals.truncate(locals_before);
+        Ok(())
     }
 
     fn is_lambda_form(&mut self, form: &Value) -> bool {
