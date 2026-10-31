@@ -22,6 +22,7 @@ struct FunctionState {
     depth: usize,
     boxed_names: HashSet<Symbol>,
     movable: HashSet<Symbol>,
+    label_floor: usize,
 }
 
 struct Local {
@@ -46,7 +47,25 @@ impl FunctionState {
             depth: 0,
             boxed_names: HashSet::new(),
             movable: HashSet::new(),
+            label_floor: 0,
         }
+    }
+
+    fn fusable(&self, count: usize) -> bool {
+        self.proto.code.len() >= count && self.proto.code.len() - count >= self.label_floor
+    }
+
+    fn pop_op(&mut self) -> Op {
+        let op = self.proto.code.pop().unwrap();
+        self.depth = (self.depth as isize - op.stack_effect()) as usize;
+        op
+    }
+}
+
+fn local_slot(op: Op) -> Option<u16> {
+    match op {
+        Op::GetLocal(slot) | Op::TakeLocal(slot) => u16::try_from(slot).ok(),
+        _ => None,
     }
 }
 
@@ -357,9 +376,47 @@ impl<'a> Compiler<'a> {
     }
 
     fn emit(&mut self, op: Op) {
+        if let Op::Binary(kind) = op {
+            if let Some(fused) = self.fuse_binary(kind) {
+                return self.emit(fused);
+            }
+        }
         let f = self.current();
         f.depth = (f.depth as isize + op.stack_effect()) as usize;
         f.proto.code.push(op);
+    }
+
+    fn fuse_binary(&mut self, kind: Intrinsic) -> Option<Op> {
+        let f = self.current();
+        let code = &f.proto.code;
+        let last = *code.last()?;
+        let before = if f.fusable(2) { Some(code[code.len() - 2]) } else { None };
+        if !f.fusable(1) {
+            return None;
+        }
+        match (before.and_then(local_slot), last) {
+            (Some(a), Op::SmallInt(k)) => {
+                f.pop_op();
+                f.pop_op();
+                Some(Op::BinaryLocalConst(kind, a, k))
+            }
+            (Some(a), _) if local_slot(last).is_some() => {
+                let b = local_slot(last).unwrap();
+                f.pop_op();
+                f.pop_op();
+                Some(Op::BinaryLocals(kind, a, b))
+            }
+            (_, Op::SmallInt(k)) => {
+                f.pop_op();
+                Some(Op::BinaryConst(kind, k))
+            }
+            (_, _) if local_slot(last).is_some() => {
+                let b = local_slot(last).unwrap();
+                f.pop_op();
+                Some(Op::BinaryLocal(kind, b))
+            }
+            _ => None,
+        }
     }
 
     fn constant(&mut self, value: Value) -> u32 {
@@ -393,15 +450,16 @@ impl<'a> Compiler<'a> {
     }
 
     fn emit_jump_if_false(&mut self) -> usize {
-        let fused = match self.current().proto.code.last() {
-            Some(Op::Binary(kind)) if !matches!(kind, Intrinsic::Add | Intrinsic::Sub | Intrinsic::Mul) => Some(*kind),
+        let f = self.current();
+        let fused = match f.proto.code.last() {
+            Some(Op::Binary(kind)) if f.fusable(1) && !matches!(kind, Intrinsic::Add | Intrinsic::Sub | Intrinsic::Mul) => {
+                Some(*kind)
+            }
             _ => None,
         };
         match fused {
             Some(kind) => {
-                let f = self.current();
-                f.proto.code.pop();
-                f.depth += 1;
+                self.current().pop_op();
                 self.emit_jump(Op::JumpUnless(kind, 0))
             }
             None => self.emit_jump(Op::JumpIfFalse(0)),
@@ -410,6 +468,7 @@ impl<'a> Compiler<'a> {
 
     fn patch_jump(&mut self, at: usize) {
         let target = self.current().proto.code.len() as u32;
+        self.current().label_floor = target as usize;
         let code = &mut self.current().proto.code;
         code[at] = match code[at] {
             Op::Jump(_) => Op::Jump(target),
@@ -418,6 +477,7 @@ impl<'a> Compiler<'a> {
             Op::JumpIfTrue(_) => Op::JumpIfTrue(target),
             Op::JumpIfFalseOrPop(_) => Op::JumpIfFalseOrPop(target),
             Op::JumpIfTrueOrPop(_) => Op::JumpIfTrueOrPop(target),
+            Op::JumpUnless(kind, _) => Op::JumpUnless(kind, target),
             Op::PushCatch(_) => Op::PushCatch(target),
             Op::PushFinally(_) => Op::PushFinally(target),
             Op::PushEscape(_) => Op::PushEscape(target),

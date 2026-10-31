@@ -123,6 +123,21 @@ impl Globals {
     }
 }
 
+#[inline]
+fn fast_binary(kind: Intrinsic, x: &Value, y: &Value) -> Option<Value> {
+    match (kind, x, y) {
+        (Intrinsic::Add, Value::Int(a), Value::Int(b)) => a.checked_add(*b).map(Value::Int),
+        (Intrinsic::Sub, Value::Int(a), Value::Int(b)) => a.checked_sub(*b).map(Value::Int),
+        (Intrinsic::Mul, Value::Int(a), Value::Int(b)) => a.checked_mul(*b).map(Value::Int),
+        (Intrinsic::Lt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a < b)),
+        (Intrinsic::Le, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a <= b)),
+        (Intrinsic::Gt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a > b)),
+        (Intrinsic::Ge, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a >= b)),
+        (Intrinsic::NumEq, a, b) if !is_array(a) && !is_array(b) => Some(Value::Bool(a == b)),
+        _ => None,
+    }
+}
+
 fn lookup(callee: &Value, args: &[Value]) -> Result<Value, Error> {
     if !(1..=2).contains(&args.len()) {
         let message = format!("{callee} expects {}, got {}", Arity::Between(1, 2), args.len());
@@ -370,16 +385,8 @@ impl Vm {
                 Op::SmallInt(i) => self.stack.push(Value::Int(i as i64)),
                 Op::JumpUnless(kind, target) => {
                     let len = self.stack.len();
-                    let fast = match (kind, &self.stack[len - 2], &self.stack[len - 1]) {
-                        (Intrinsic::Lt, Value::Int(a), Value::Int(b)) => Some(a < b),
-                        (Intrinsic::Le, Value::Int(a), Value::Int(b)) => Some(a <= b),
-                        (Intrinsic::Gt, Value::Int(a), Value::Int(b)) => Some(a > b),
-                        (Intrinsic::Ge, Value::Int(a), Value::Int(b)) => Some(a >= b),
-                        (Intrinsic::NumEq, a, b) if !is_array(a) && !is_array(b) => Some(a == b),
-                        _ => None,
-                    };
-                    let holds = match fast {
-                        Some(b) => b,
+                    let holds = match fast_binary(kind, &self.stack[len - 2], &self.stack[len - 1]) {
+                        Some(v) => v.is_truthy(),
                         None => tri!(math::binary(kind, &self.stack[len - 2], &self.stack[len - 1])).is_truthy(),
                     };
                     self.stack.truncate(len - 2);
@@ -389,23 +396,47 @@ impl Vm {
                 }
                 Op::Binary(kind) => {
                     let len = self.stack.len();
-                    let fast = match (kind, &self.stack[len - 2], &self.stack[len - 1]) {
-                        (Intrinsic::Add, Value::Int(a), Value::Int(b)) => a.checked_add(*b).map(Value::Int),
-                        (Intrinsic::Sub, Value::Int(a), Value::Int(b)) => a.checked_sub(*b).map(Value::Int),
-                        (Intrinsic::Mul, Value::Int(a), Value::Int(b)) => a.checked_mul(*b).map(Value::Int),
-                        (Intrinsic::Lt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a < b)),
-                        (Intrinsic::Le, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a <= b)),
-                        (Intrinsic::Gt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a > b)),
-                        (Intrinsic::Ge, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a >= b)),
-                        (Intrinsic::NumEq, a, b) if !is_array(a) && !is_array(b) => Some(Value::Bool(a == b)),
-                        _ => None,
-                    };
-                    let result = match fast {
+                    let result = match fast_binary(kind, &self.stack[len - 2], &self.stack[len - 1]) {
                         Some(v) => v,
                         None => tri!(math::binary(kind, &self.stack[len - 2], &self.stack[len - 1])),
                     };
                     self.stack.truncate(len - 2);
                     self.stack.push(result);
+                }
+                Op::BinaryLocals(kind, a, b) => {
+                    let (x, y) = (&self.stack[base + a as usize], &self.stack[base + b as usize]);
+                    let result = match fast_binary(kind, x, y) {
+                        Some(v) => v,
+                        None => tri!(math::binary(kind, x, y)),
+                    };
+                    self.stack.push(result);
+                }
+                Op::BinaryLocalConst(kind, a, k) => {
+                    let x = &self.stack[base + a as usize];
+                    let y = Value::Int(k as i64);
+                    let result = match fast_binary(kind, x, &y) {
+                        Some(v) => v,
+                        None => tri!(math::binary(kind, x, &y)),
+                    };
+                    self.stack.push(result);
+                }
+                Op::BinaryLocal(kind, b) => {
+                    let len = self.stack.len();
+                    let (x, y) = (&self.stack[len - 1], &self.stack[base + b as usize]);
+                    let result = match fast_binary(kind, x, y) {
+                        Some(v) => v,
+                        None => tri!(math::binary(kind, x, y)),
+                    };
+                    self.stack[len - 1] = result;
+                }
+                Op::BinaryConst(kind, k) => {
+                    let len = self.stack.len();
+                    let y = Value::Int(k as i64);
+                    let result = match fast_binary(kind, &self.stack[len - 1], &y) {
+                        Some(v) => v,
+                        None => tri!(math::binary(kind, &self.stack[len - 1], &y)),
+                    };
+                    self.stack[len - 1] = result;
                 }
                 Op::Not => {
                     let v = self.pop();

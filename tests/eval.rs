@@ -232,6 +232,19 @@ fn arithmetic_respects_shadowing_and_redefinition() {
 }
 
 #[test]
+fn fused_arithmetic_keeps_jump_targets_and_semantics() {
+    assert_eq!(eval("(define (f c x y) (+ (if c x y) 1)) [(f true 1 10) (f false 1 10)]"), "[2 11]");
+    assert_eq!(eval("(define (f c) (if (< (if c 0 5) 1) 'small 'big)) [(f true) (f false)]"), "[small big]");
+    assert_eq!(eval("(define (g a b) (- a b)) (define (h a) (* 3 a)) (define (k a) (- a 1.5)) [(g 10 3) (h 4) (k 1)]"), "[7 12 -0.5]");
+    assert_eq!(eval("(let ((x 7)) [(+ x 1) (< x 10) (= x 7) (* x x)])"), "[8 true true 49]");
+    assert_eq!(eval("(define (p a) (< a \"s\")) (p 1)"), "error: < expects numbers, got \"s\"");
+    assert_eq!(eval("(define (q a) (+ a 1)) (q 9223372036854775807)"), "error: integer overflow");
+    assert_eq!(eval("(define (r a b) (if (= a b) (+ a b) (- a b))) [(r 2 2) (r 5 2)]"), "[4 3]");
+    assert_eq!(eval("(define (s v) (+ v 1)) (s #[1 2])"), "#[2 3]");
+    assert_eq!(eval("(loop ((i 0) (acc 0)) (if (< i 10) (recur (+ i 1) (+ acc i)) acc))"), "45");
+}
+
+#[test]
 fn builtins_are_values() {
     assert_eq!(eval("+"), "#<builtin +>");
     assert_eq!(eval("(define plus +) (plus 1 2)"), "3");

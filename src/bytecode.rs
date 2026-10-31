@@ -21,6 +21,10 @@ pub enum Op {
     Const(u32),
     SmallInt(i32),
     Binary(Intrinsic),
+    BinaryLocals(Intrinsic, u16, u16),
+    BinaryLocalConst(Intrinsic, u16, i32),
+    BinaryLocal(Intrinsic, u16),
+    BinaryConst(Intrinsic, i32),
     JumpUnless(Intrinsic, u32),
     Not,
     Nil,
@@ -65,7 +69,9 @@ impl Op {
         use Op::*;
         match self {
             Const(_) | SmallInt(_) | Nil | True | False | GetLocal(_) | TakeLocal(_) | GetLocalCell(_)
-            | GetUpvalue(_) | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) | PushEscape(_) => 1,
+            | GetUpvalue(_) | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) | PushEscape(_)
+            | BinaryLocals(..) | BinaryLocalConst(..) => 1,
+            BinaryLocal(..) | BinaryConst(..) => 0,
             JumpUnless(..) => -2,
             Pop | JumpIfFalse(_) | JumpIfTrue(_) | JumpIfFalseOrPop(_) | JumpIfTrueOrPop(_) | Return
             | Rethrow | Binary(_) => -1,
@@ -75,6 +81,16 @@ impl Op {
             MakeVector(n) | MakeSet(n) => 1 - n as isize,
             MakeMap(n) => 1 - 2 * n as isize,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Op;
+
+    #[test]
+    fn instructions_stay_eight_bytes() {
+        assert_eq!(std::mem::size_of::<Op>(), 8);
     }
 }
 
