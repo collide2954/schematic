@@ -44,8 +44,66 @@ impl Value {
     }
 }
 
+fn float_as_int(x: f64) -> Option<i64> {
+    if x.fract() == 0.0 && x >= -9.223372036854776e18 && x < 9.223372036854776e18 {
+        Some(x as i64)
+    } else {
+        None
+    }
+}
+
 fn int_eq_float(i: i64, x: f64) -> bool {
-    x.fract() == 0.0 && x >= -9.223372036854776e18 && x < 9.223372036854776e18 && x as i64 == i
+    float_as_int(x) == Some(i)
+}
+
+fn mix(mut h: u64) -> u64 {
+    h ^= h >> 30;
+    h = h.wrapping_mul(0xbf58476d1ce4e5b9);
+    h ^= h >> 27;
+    h = h.wrapping_mul(0x94d049bb133111eb);
+    h ^ (h >> 31)
+}
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    mix(h)
+}
+
+fn hash_ordered<'a>(tag: u64, items: impl Iterator<Item = &'a Value>) -> u64 {
+    items.fold(mix(tag), |h, item| mix(h ^ item.hash_code()))
+}
+
+const TAG_NIL: u64 = 0x01;
+const TAG_BOOL: u64 = 0x02;
+const TAG_INT: u64 = 0x03 << 56;
+const TAG_FLOAT: u64 = 0x04 << 56;
+const TAG_SYMBOL: u64 = 0x05 << 56;
+const TAG_KEYWORD: u64 = 0x06 << 56;
+const TAG_LIST: u64 = 0x07;
+const TAG_VECTOR: u64 = 0x08;
+
+impl Value {
+    pub fn hash_code(&self) -> u64 {
+        match self {
+            Value::Nil => mix(TAG_NIL),
+            Value::Bool(b) => mix(TAG_BOOL + *b as u64),
+            Value::Int(i) => mix(*i as u64 ^ TAG_INT),
+            Value::Float(x) => match float_as_int(*x) {
+                Some(i) => mix(i as u64 ^ TAG_INT),
+                None if x.is_nan() => mix(TAG_FLOAT),
+                None => mix(x.to_bits() ^ TAG_FLOAT),
+            },
+            Value::Symbol(s) => mix(s.id() as u64 ^ TAG_SYMBOL),
+            Value::Keyword(s) => mix(s.id() as u64 ^ TAG_KEYWORD),
+            Value::Str(s) => hash_bytes(s.as_bytes()),
+            Value::List(l) => hash_ordered(TAG_LIST, l.iter()),
+            Value::Vector(v) => hash_ordered(TAG_VECTOR, v.iter()),
+        }
+    }
 }
 
 impl PartialEq for Value {
@@ -178,6 +236,38 @@ mod tests {
         assert_eq!(Value::Int(1), Value::Float(1.0));
         assert_ne!(Value::Int(1), Value::Float(1.5));
         assert_ne!(Value::Int(1), Value::string("1"));
+    }
+
+    #[test]
+    fn equal_values_hash_alike() {
+        assert_eq!(Value::Int(1).hash_code(), Value::Float(1.0).hash_code());
+        assert_eq!(Value::string("ab").hash_code(), Value::string("ab").hash_code());
+        assert_eq!(Value::keyword("k").hash_code(), Value::keyword("k").hash_code());
+        assert_eq!(
+            Value::list([Value::Int(1), Value::Int(2)]).hash_code(),
+            Value::list([Value::Int(1), Value::Int(2)]).hash_code()
+        );
+        assert_eq!(Value::Float(0.0).hash_code(), Value::Float(-0.0).hash_code());
+    }
+
+    #[test]
+    fn distinct_values_usually_hash_differently() {
+        let hashes = [
+            Value::Nil,
+            Value::Bool(false),
+            Value::Int(0),
+            Value::Int(1),
+            Value::Float(0.5),
+            Value::symbol("a"),
+            Value::keyword("a"),
+            Value::string("a"),
+            Value::list([Value::Int(1)]),
+            Value::vector([Value::Int(1)]),
+        ]
+        .iter()
+        .map(Value::hash_code)
+        .collect::<std::collections::HashSet<u64>>();
+        assert_eq!(hashes.len(), 10);
     }
 
     #[test]

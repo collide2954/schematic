@@ -31,6 +31,10 @@ impl Symbol {
         })
     }
 
+    pub fn id(self) -> u32 {
+        self.0
+    }
+
     pub fn name(self) -> Rc<str> {
         INTERNER.with(|cell| cell.borrow().names[self.0 as usize].clone())
     }
