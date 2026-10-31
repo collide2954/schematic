@@ -470,6 +470,32 @@ fn recur_errors() {
 }
 
 #[test]
+fn keywords_look_themselves_up_in_collections() {
+    assert_eq!(eval("(:a {:a 1})"), "1");
+    assert_eq!(eval("(:b {:a 1})"), "nil");
+    assert_eq!(eval("(:b {:a 1} 0)"), "0");
+    assert_eq!(eval("(:a nil)"), "nil");
+    assert_eq!(eval("(:a 5)"), "nil");
+    assert_eq!(eval("(:a #{:a :b})"), ":a");
+    assert_eq!(eval("(:c #{:a :b} 'none)"), "none");
+    assert_eq!(eval("(define (name-of p) (:name p)) (name-of {:name \"Ada\"})"), "\"Ada\"");
+    assert_eq!(eval("(:a)"), "error: :a expects 1 to 2 arguments, got 0");
+}
+
+#[test]
+fn collections_are_lookup_functions() {
+    assert_eq!(eval("({:a 1} :a)"), "1");
+    assert_eq!(eval("({:a 1} :b 'none)"), "none");
+    assert_eq!(eval("({\"k\" 2} \"k\")"), "2");
+    assert_eq!(eval("([10 20] 1)"), "20");
+    assert_eq!(eval("([10 20] 5 'd)"), "d");
+    assert_eq!(eval("([10 20] 5)"), "error: index 5 is out of bounds for a vector of length 2");
+    assert_eq!(eval("([10 20] :x)"), "error: vector index must be an integer, got :x");
+    assert_eq!(eval("(#{1 2} 1)"), "1");
+    assert_eq!(eval("(#{1 2} 3)"), "nil");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

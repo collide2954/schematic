@@ -99,6 +99,34 @@ impl Globals {
     }
 }
 
+fn lookup(callee: &Value, args: &[Value]) -> Result<Value, Error> {
+    if !(1..=2).contains(&args.len()) {
+        let message = format!("{callee} expects {}, got {}", Arity::Between(1, 2), args.len());
+        return Err(Error::new("arity-error", message));
+    }
+    let (collection, key) = match callee {
+        Value::Keyword(_) => (&args[0], callee),
+        _ => (callee, &args[0]),
+    };
+    let found = match (callee, collection) {
+        (_, Value::Map(m)) => m.get(key).cloned(),
+        (_, Value::Set(s)) => s.contains(key).then(|| key.clone()),
+        (Value::Vector(v), _) => {
+            let Value::Int(i) = key else {
+                return Err(Error::type_error(format!("vector index must be an integer, got {key}")));
+            };
+            let item = usize::try_from(*i).ok().and_then(|i| v.get(i)).cloned();
+            if item.is_none() && args.len() == 1 {
+                let message = format!("index {i} is out of bounds for a vector of length {}", v.len());
+                return Err(Error::new("index-error", message));
+            }
+            item
+        }
+        _ => None,
+    };
+    Ok(found.or_else(|| args.get(1).cloned()).unwrap_or(Value::Nil))
+}
+
 struct Frame {
     closure: Rc<Closure>,
     ip: usize,
@@ -394,6 +422,12 @@ impl Vm {
             }
             Value::Native(native) => {
                 let result = self.call_native(&native, callee_index + 1, argc)?;
+                self.stack.truncate(callee_index);
+                self.stack.push(result);
+                Ok(())
+            }
+            Value::Keyword(_) | Value::Map(_) | Value::Vector(_) | Value::Set(_) => {
+                let result = lookup(&callee, &self.stack[callee_index + 1..])?;
                 self.stack.truncate(callee_index);
                 self.stack.push(result);
                 Ok(())
