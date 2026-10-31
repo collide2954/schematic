@@ -52,6 +52,98 @@ fn syntax_error(form: &str, message: &str) -> Error {
     Error::syntax(format!("{form}: {message}"))
 }
 
+fn global_ref(name: &str) -> Value {
+    Value::Symbol(Symbol::fresh_alias(Symbol::intern(name)))
+}
+
+fn call(name: &str, args: impl IntoIterator<Item = Value>) -> Value {
+    Value::list(std::iter::once(global_ref(name)).chain(args))
+}
+
+fn quoted(value: &Value) -> Value {
+    call("quote", [value.clone()])
+}
+
+fn tagged<'a>(form: &'a Value, tag: &str) -> Option<&'a Value> {
+    let Value::List(l) = form else { return None };
+    match (l.first(), l.len()) {
+        (Some(Value::Symbol(s)), 2) if &*s.root().name() == tag => l.iter().nth(1),
+        _ => None,
+    }
+}
+
+fn quasi(form: &Value, depth: usize) -> Result<Value, Error> {
+    match form {
+        Value::List(l) if !l.is_empty() => {
+            if let Some(x) = tagged(form, "unquote") {
+                return Ok(if depth == 1 {
+                    x.clone()
+                } else {
+                    call("list", [quoted(&Value::symbol("unquote")), quasi(x, depth - 1)?])
+                });
+            }
+            if let Some(x) = tagged(form, "quasiquote") {
+                return Ok(call("list", [quoted(&Value::symbol("quasiquote")), quasi(x, depth + 1)?]));
+            }
+            if tagged(form, "unquote-splicing").is_some() && depth == 1 {
+                return Err(syntax_error("unquote-splicing", "only allowed inside a list or vector"));
+            }
+            quasi_seq(l.iter(), depth)
+        }
+        Value::Vector(v) => Ok(call("vec", [quasi_seq(v.iter(), depth)?])),
+        Value::Map(m) => {
+            let mut args = Vec::new();
+            for (k, v) in m.iter() {
+                args.push(quasi(k, depth)?);
+                args.push(quasi(v, depth)?);
+            }
+            Ok(call("hash-map", args))
+        }
+        Value::Set(s) => {
+            let items = s.iter().map(|item| quasi(item, depth)).collect::<Result<Vec<_>, _>>()?;
+            Ok(call("hash-set", items))
+        }
+        Value::Symbol(_) | Value::List(_) => Ok(quoted(form)),
+        other => Ok(other.clone()),
+    }
+}
+
+fn quasi_seq<'a>(items: impl Iterator<Item = &'a Value>, depth: usize) -> Result<Value, Error> {
+    let mut segments: Vec<Value> = Vec::new();
+    let mut run: Vec<Value> = Vec::new();
+    let mut starts_with_splice = false;
+    for item in items {
+        if let Some(x) = tagged(item, "unquote-splicing") {
+            if depth == 1 {
+                if !run.is_empty() {
+                    segments.push(call("list", run.drain(..)));
+                }
+                if segments.is_empty() {
+                    starts_with_splice = true;
+                }
+                segments.push(x.clone());
+            } else {
+                run.push(call("list", [quoted(&Value::symbol("unquote-splicing")), quasi(x, depth - 1)?]));
+            }
+            continue;
+        }
+        run.push(quasi(item, depth)?);
+    }
+    if !run.is_empty() {
+        segments.push(call("list", run));
+    }
+    Ok(match segments.len() {
+        0 => quoted(&Value::list([])),
+        1 if !starts_with_splice => segments.pop().unwrap(),
+        _ => {
+            if starts_with_splice {
+                segments.insert(0, call("list", []));
+            }
+            call("concat", segments)
+        }
+    })
+}
+
 #[derive(Default)]
 struct Scan {
     set_targets: HashSet<Symbol>,
@@ -416,6 +508,16 @@ impl<'a> Compiler<'a> {
             }
             match &*sym.name() {
                 "quote" => return self.compile_quote(&args, tail),
+                "quasiquote" => {
+                    if args.len() != 1 {
+                        return Err(syntax_error("quasiquote", "expected exactly one form"));
+                    }
+                    let rewritten = quasi(args.first().unwrap(), 1)?;
+                    return self.compile(&rewritten, tail);
+                }
+                "unquote" | "unquote-splicing" => {
+                    return Err(syntax_error(&sym.name(), "not inside quasiquote"));
+                }
                 "define-syntax" => return self.compile_define_syntax(&args, tail),
                 "if" => return self.compile_if(&args, tail),
                 "define" => return self.compile_define(&args, tail),

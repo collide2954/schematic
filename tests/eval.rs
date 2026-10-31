@@ -883,6 +883,22 @@ fn prelude_function_combinators() {
 }
 
 #[test]
+fn quasiquote_builds_data_with_holes() {
+    assert_eq!(eval("`(1 ~(+ 1 1) 3)"), "(1 2 3)");
+    assert_eq!(eval("`(a ~@[1 2] b)"), "(a 1 2 b)");
+    assert_eq!(eval("`(~@[1 2] b)"), "(1 2 b)");
+    assert_eq!(eval("`[1 ~(+ 1 1) ~@'(3 4)]"), "[1 2 3 4]");
+    assert_eq!(eval("[`x `5 `\"s\" `:k `()]"), "[x 5 \"s\" :k ()]");
+    assert_eq!(eval("`(1 (2 ~(+ 1 2)))"), "(1 (2 3))");
+    assert_eq!(eval("`{:a ~(+ 1 1)}"), "{:a 2}");
+    assert_eq!(eval("(let ((x 5) (list 0)) `(x ~x))"), "(x 5)");
+    assert_eq!(eval("`(1 `(2 ~(3 ~(+ 1 3))))"), "(1 (quasiquote (2 (unquote (3 4)))))");
+    assert_eq!(eval("(define-syntax m (syntax-rules () ((_ a) `(a ~a)))) (m (+ 1 2))"), "((+ 1 2) 3)");
+    assert_eq!(eval("~x"), "error: unquote: not inside quasiquote");
+    assert_eq!(eval("`(1 ~@5)"), "error: concat expects a collection, got 5");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

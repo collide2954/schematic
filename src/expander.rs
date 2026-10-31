@@ -155,6 +155,10 @@ impl<'a> Expander<'a> {
         let items: Vec<Value> = list.iter().skip(1).cloned().collect();
         let expanded = match &*sym.name() {
             "quote" => return Ok(Value::List(list.clone())),
+            "quasiquote" => {
+                let Some(inner) = items.first() else { return Ok(Value::List(list.clone())) };
+                vec![self.expand_quasi(inner, 1)?]
+            }
             "define-syntax" => {
                 if let (Some(Value::Symbol(name)), Some(spec)) = (items.first(), items.get(1)) {
                     self.globals.define_macro(name.root(), Rc::new(Macro::parse(spec)?));
@@ -205,6 +209,55 @@ impl<'a> Expander<'a> {
             _ => self.expand_all(items.iter())?,
         };
         Ok(Self::rebuild(head, expanded))
+    }
+
+    fn expand_quasi(&mut self, form: &Value, depth: usize) -> Result<Value, Error> {
+        match form {
+            Value::List(l) if !l.is_empty() => {
+                let head = l.first().unwrap();
+                let tag = self.special(head).map(|s| s.name());
+                match tag.as_deref() {
+                    Some("unquote") | Some("unquote-splicing") if l.len() == 2 => {
+                        let arg = l.iter().nth(1).unwrap();
+                        let expanded = if depth == 1 { self.expand(arg)? } else { self.expand_quasi(arg, depth - 1)? };
+                        Ok(Value::list([head.clone(), expanded]))
+                    }
+                    Some("quasiquote") if l.len() == 2 => {
+                        let arg = l.iter().nth(1).unwrap();
+                        Ok(Value::list([head.clone(), self.expand_quasi(arg, depth + 1)?]))
+                    }
+                    _ => {
+                        let mut out = Vec::new();
+                        for item in l.iter() {
+                            out.push(self.expand_quasi(item, depth)?);
+                        }
+                        Ok(Value::list(out))
+                    }
+                }
+            }
+            Value::Vector(v) => {
+                let mut out = Vec::new();
+                for item in v.iter() {
+                    out.push(self.expand_quasi(item, depth)?);
+                }
+                Ok(Value::vector(out))
+            }
+            Value::Map(m) => {
+                let mut pairs = Vec::new();
+                for (k, v) in m.iter() {
+                    pairs.push((self.expand_quasi(k, depth)?, self.expand_quasi(v, depth)?));
+                }
+                Ok(Value::map(pairs))
+            }
+            Value::Set(s) => {
+                let mut out = Vec::new();
+                for item in s.iter() {
+                    out.push(self.expand_quasi(item, depth)?);
+                }
+                Ok(Value::set(out))
+            }
+            other => Ok(other.clone()),
+        }
     }
 
     fn expand_let(&mut self, form: &str, items: &[Value]) -> Result<Vec<Value>, Error> {
