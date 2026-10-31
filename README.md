@@ -23,14 +23,25 @@ never used one.
 
 ## Status
 
-Early development. The reader, persistent vectors, maps, and sets, and the
-core of the bytecode compiler and virtual machine are in place. The standard
-library, `syntax-rules` macros, error handling, and the REPL are in progress.
+Early development. Working today:
 
-## Building
+- Reader with Clojure-style literals, comments, and quasiquote
+- Persistent vectors, maps, and sets
+- Bytecode compiler and VM with proper tail calls, closures, `loop`/`recur`
+- `try`/`catch`/`finally`, `raise`, and `call/ec` escape continuations
+- Hygienic `syntax-rules` macros
+- A standard library of collection, string, numeric, and higher-order functions
+- A REPL and file runner
+
+Next up: VM performance work, then typed numeric arrays and tables.
+
+## Running
 
 ```
 cargo build --release
+./target/release/schematic            # REPL
+./target/release/schematic file.scm   # run a file
+./target/release/schematic -e "(+ 1 2)"
 cargo test
 ```
 
