@@ -133,13 +133,22 @@ fn lookup(callee: &Value, args: &[Value]) -> Result<Value, Error> {
     let found = match (callee, collection) {
         (_, Value::Map(m)) => m.get(key).cloned(),
         (_, Value::Set(s)) => s.contains(key).then(|| key.clone()),
-        (Value::Vector(v), _) => {
-            let Value::Int(i) = key else {
-                return Err(Error::type_error(format!("vector index must be an integer, got {key}")));
+        (Value::Vector(_) | Value::Array(_), _) => {
+            let (kind, len) = match callee {
+                Value::Vector(v) => ("vector", v.len()),
+                Value::Array(a) => ("array", a.len()),
+                _ => unreachable!(),
             };
-            let item = usize::try_from(*i).ok().and_then(|i| v.get(i)).cloned();
+            let Value::Int(i) = key else {
+                return Err(Error::type_error(format!("{kind} index must be an integer, got {key}")));
+            };
+            let item = usize::try_from(*i).ok().and_then(|i| match callee {
+                Value::Vector(v) => v.get(i).cloned(),
+                Value::Array(a) => a.get(i),
+                _ => unreachable!(),
+            });
             if item.is_none() && args.len() == 1 {
-                let message = format!("index {i} is out of bounds for a vector of length {}", v.len());
+                let message = format!("index {i} is out of bounds for a {kind} of length {len}");
                 return Err(Error::new("index-error", message));
             }
             item
@@ -630,7 +639,7 @@ impl Vm {
                 self.stack.push(result);
                 Ok(())
             }
-            Value::Keyword(_) | Value::Map(_) | Value::Vector(_) | Value::Set(_) => {
+            Value::Keyword(_) | Value::Map(_) | Value::Vector(_) | Value::Set(_) | Value::Array(_) => {
                 let result = lookup(&callee, &self.stack[callee_index + 1..])?;
                 self.stack.truncate(callee_index);
                 self.stack.push(result);

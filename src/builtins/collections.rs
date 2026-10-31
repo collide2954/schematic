@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use super::{native, native_owned};
+use crate::array::Array;
 use crate::error::Error;
 use crate::list::List;
 use crate::map::Map;
@@ -66,8 +67,22 @@ pub fn install(globals: &mut Globals) {
         Ok(Value::Bool(matches!(args[0], Value::Closure(_) | Value::Native(_) | Value::Escape(_))))
     });
     native(globals, "coll?", Arity::Exact(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::List(_) | Value::Vector(_) | Value::Map(_) | Value::Set(_))))
+        Ok(Value::Bool(matches!(
+            args[0],
+            Value::List(_) | Value::Vector(_) | Value::Map(_) | Value::Set(_) | Value::Array(_)
+        )))
     });
+    native(globals, "array", Arity::Exact(1), |args| Value::array(items("array", &args[0])?));
+    native(globals, "array?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Array(_)))));
+    native(globals, "array-type", Arity::Exact(1), |args| match &args[0] {
+        Value::Array(a) => Ok(Value::keyword(a.kind())),
+        other => Err(expects("array-type", "an array", other)),
+    });
+    native(globals, "count-missing", Arity::Exact(1), |args| match &args[0] {
+        Value::Array(a) => Ok(Value::Int(a.missing_count() as i64)),
+        other => Ok(Value::Int(items("count-missing", other)?.filter(|v| matches!(v, Value::Nil)).count() as i64)),
+    });
+    native(globals, "equal?", Arity::Exact(2), |args| Ok(Value::Bool(args[0] == args[1])));
 }
 
 pub fn expects(name: &str, what: &str, got: &Value) -> Error {
@@ -81,6 +96,7 @@ pub fn seq_items(value: &Value) -> Option<Box<dyn Iterator<Item = Value> + '_>> 
         Value::Vector(v) => Box::new(v.iter().cloned()),
         Value::Map(m) => Box::new(m.iter().map(|(k, v)| Value::vector([k.clone(), v.clone()]))),
         Value::Set(s) => Box::new(s.iter().cloned()),
+        Value::Array(a) => Box::new(a.iter()),
         Value::Str(s) => Box::new(s.chars().map(|c| Value::string(c.encode_utf8(&mut [0; 4])))),
         _ => return None,
     })
@@ -120,6 +136,7 @@ fn is_empty(args: &[Value]) -> Result<Value, Error> {
         Value::Vector(v) => v.is_empty(),
         Value::Map(m) => m.is_empty(),
         Value::Set(s) => s.is_empty(),
+        Value::Array(a) => a.is_empty(),
         Value::Str(s) => s.is_empty(),
         other => return Err(expects("empty?", "a collection", other)),
     };
@@ -133,6 +150,7 @@ fn count(args: &[Value]) -> Result<Value, Error> {
         Value::Vector(v) => v.len(),
         Value::Map(m) => m.len(),
         Value::Set(s) => s.len(),
+        Value::Array(a) => a.len(),
         Value::Str(s) => s.chars().count(),
         other => return Err(expects("count", "a collection", other)),
     };
@@ -153,13 +171,14 @@ fn nth(args: &[Value]) -> Result<Value, Error> {
     let position = usize::try_from(*index).ok();
     let (found, kind, len) = match &args[0] {
         Value::Vector(v) => (position.and_then(|i| v.get(i)).cloned(), "vector", v.len()),
+        Value::Array(a) => (position.and_then(|i| a.get(i)), "array", a.len()),
         Value::List(l) => (position.and_then(|i| l.iter().nth(i)).cloned(), "list", l.len()),
         Value::Str(s) => (
             position.and_then(|i| s.chars().nth(i)).map(|c| Value::string(c.encode_utf8(&mut [0; 4]))),
             "string",
             s.chars().count(),
         ),
-        other => return Err(expects("nth", "a list, vector, or string", other)),
+        other => return Err(expects("nth", "a list, vector, array, or string", other)),
     };
     match (found, args.get(2)) {
         (Some(v), _) => Ok(v),
@@ -195,6 +214,13 @@ fn conj_owned(args: &mut [Value]) -> Result<Value, Error> {
             let mut out = owned(s);
             args.for_each(|x| out.insert_mut(x));
             Ok(Value::Set(Rc::new(out)))
+        }
+        Value::Array(a) => {
+            let mut out: Array = owned(a);
+            for x in args {
+                out.push_mut(x)?;
+            }
+            Ok(Value::Array(Rc::new(out)))
         }
         Value::Map(m) => {
             let mut out = owned(m);
@@ -387,6 +413,7 @@ pub fn get(args: &[Value]) -> Result<Value, Error> {
         (Value::Map(m), key) => m.get(key).cloned(),
         (Value::Set(s), key) => s.contains(key).then(|| key.clone()),
         (Value::Vector(v), Value::Int(i)) => index(i).and_then(|i| v.get(i)).cloned(),
+        (Value::Array(a), Value::Int(i)) => index(i).and_then(|i| a.get(i)),
         (Value::Str(s), Value::Int(i)) => index(i).and_then(|i| char_at(s, i)),
         _ => None,
     };

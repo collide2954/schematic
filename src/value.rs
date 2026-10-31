@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
+use crate::array::Array;
 use crate::error::Error;
 use crate::list::List;
 use crate::map::Map;
@@ -23,6 +24,7 @@ pub enum Value {
     Vector(Rc<Vector>),
     Map(Rc<Map>),
     Set(Rc<Set>),
+    Array(Rc<Array>),
     Closure(Rc<Closure>),
     Native(Rc<Native>),
     Cell(Rc<RefCell<Value>>),
@@ -51,6 +53,10 @@ impl Value {
 
     pub fn set(items: impl IntoIterator<Item = Value>) -> Value {
         Value::Set(Rc::new(items.into_iter().collect()))
+    }
+
+    pub fn array(items: impl IntoIterator<Item = Value>) -> Result<Value, Error> {
+        Ok(Value::Array(Rc::new(Array::from_values(items)?)))
     }
 
     pub fn symbol(name: &str) -> Value {
@@ -82,6 +88,7 @@ impl Value {
             Value::Vector(_) => "vector",
             Value::Map(_) => "map",
             Value::Set(_) => "set",
+            Value::Array(_) => "array",
             Value::Closure(_) | Value::Native(_) | Value::Escape(_) => "function",
             Value::Cell(_) => "cell",
             Value::Signal(_) => "signal",
@@ -133,6 +140,7 @@ const TAG_VECTOR: u64 = 0x08;
 const TAG_MAP: u64 = 0x09;
 const TAG_SET: u64 = 0x0a;
 const TAG_POINTER: u64 = 0x0b << 56;
+const TAG_ARRAY: u64 = 0x0c;
 
 impl Value {
     pub fn hash_code(&self) -> u64 {
@@ -160,6 +168,7 @@ impl Value {
                 let sum = s.iter().fold(0u64, |acc, item| acc.wrapping_add(mix(item.hash_code())));
                 mix(TAG_SET ^ sum)
             }
+            Value::Array(a) => a.iter().fold(mix(TAG_ARRAY), |h, item| mix(h ^ item.hash_code())),
             Value::Closure(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
             Value::Native(n) => mix(Rc::as_ptr(n) as usize as u64 ^ TAG_POINTER),
             Value::Cell(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
@@ -185,6 +194,7 @@ impl PartialEq for Value {
             (Vector(a), Vector(b)) => Rc::ptr_eq(a, b) || a == b,
             (Map(a), Map(b)) => Rc::ptr_eq(a, b) || a == b,
             (Set(a), Set(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Array(a), Array(b)) => Rc::ptr_eq(a, b) || a == b,
             (Closure(a), Closure(b)) => Rc::ptr_eq(a, b),
             (Native(a), Native(b)) => Rc::ptr_eq(a, b),
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
@@ -237,7 +247,7 @@ impl fmt::Display for Value {
 }
 
 impl Value {
-    fn format(&self, f: &mut fmt::Formatter<'_>, readable: bool) -> fmt::Result {
+    pub(crate) fn format(&self, f: &mut fmt::Formatter<'_>, readable: bool) -> fmt::Result {
         match self {
             Value::Nil => f.write_str("nil"),
             Value::Bool(b) => write!(f, "{b}"),
@@ -262,6 +272,7 @@ impl Value {
                 f.write_str("}")
             }
             Value::Set(s) => write_seq(f, "#{", s.iter(), "}", readable),
+            Value::Array(a) => a.format(f, readable),
             Value::Closure(c) => match c.proto.name {
                 Some(name) => write!(f, "#<procedure {name}>"),
                 None => f.write_str("#<procedure>"),

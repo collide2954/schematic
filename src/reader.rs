@@ -1,6 +1,7 @@
 use std::fmt;
 use std::rc::Rc;
 
+use crate::array::Array;
 use crate::map::Map;
 use crate::set::Set;
 use crate::value::Value;
@@ -175,6 +176,17 @@ impl<'a> Reader<'a> {
             Some('{') => {
                 self.bump();
                 self.read_set()
+            }
+            Some('[') => {
+                self.bump();
+                let items = self.read_items(']')?;
+                let literal = |v: &Value| matches!(v, Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_));
+                if items.iter().all(literal) {
+                    return Array::from_values(items)
+                        .map(|a| Value::Array(Rc::new(a)))
+                        .map_err(|e| self.error(e.message()));
+                }
+                Ok(Value::list([Value::symbol("array"), Value::vector(items)]))
             }
             Some(c) => Err(self.error(format!("unknown dispatch `#{c}`"))),
             None => Err(self.incomplete("unexpected end of input after `#`")),

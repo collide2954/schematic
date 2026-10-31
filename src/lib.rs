@@ -1,3 +1,4 @@
+pub mod array;
 pub mod builtins;
 pub mod bytecode;
 pub mod compiler;
