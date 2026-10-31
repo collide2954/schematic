@@ -7,5 +7,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-schematic = { path = "../schematic", version = "0.4.0" }
+schematic = { path = "../schematic" }
 iced = { version = "0.14", features = ["advanced"] }
