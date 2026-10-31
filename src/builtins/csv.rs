@@ -85,7 +85,7 @@ fn records(text: &str, sep: char) -> Vec<Vec<String>> {
     records
 }
 
-fn infer(values: &[Option<&str>]) -> Vec<Value> {
+pub fn infer(values: &[Option<&str>]) -> Vec<Value> {
     let present = || values.iter().flatten();
     if present().all(|v| v.parse::<i64>().is_ok()) {
         return values.iter().map(|v| v.map_or(Value::Nil, |s| Value::Int(s.parse().unwrap()))).collect();

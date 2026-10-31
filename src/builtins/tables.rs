@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 use super::collections::{expects, items, out_of_bounds, select_mask, seq_items};
+use super::csv::infer;
 use super::functional::compare_values;
 use super::{native, native_vm};
 use crate::array::Array;
@@ -9,7 +10,7 @@ use crate::error::Error;
 use crate::map::Map;
 use crate::symbol::Symbol;
 use crate::table::Table;
-use crate::value::Value;
+use crate::value::{Shown, Value};
 use crate::vm::{Arity, Globals, Vm};
 
 pub fn install(globals: &mut Globals) {
@@ -22,6 +23,8 @@ pub fn install(globals: &mut Globals) {
     native(globals, "tail", Arity::Between(1, 2), |args| slice("tail", args, false));
     native_vm(globals, "aggregate", Arity::Between(2, 3), aggregate);
     native(globals, "join", Arity::Between(3, 4), join);
+    native_vm(globals, "pivot", Arity::Between(4, 5), pivot);
+    native(globals, "unpivot", Arity::Exact(4), unpivot);
     native(globals, "describe", Arity::Exact(1), describe);
     native(globals, "table?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Table(_)))));
     native(globals, "columns", Arity::Exact(1), |args| {
@@ -242,6 +245,14 @@ fn key_columns(name: &str, table: &Table, spec: &Value) -> Result<Vec<Symbol>, E
     Ok(names)
 }
 
+fn key_parts(count: usize, key: &Value) -> Vec<Value> {
+    match count {
+        0 => Vec::new(),
+        1 => vec![key.clone()],
+        _ => seq_items(key).unwrap().collect(),
+    }
+}
+
 fn group_rows(table: &Table, names: &[Symbol]) -> Vec<(Value, Vec<usize>)> {
     let columns: Vec<&Rc<Array>> = names.iter().map(|n| table.column(*n).unwrap()).collect();
     let mut groups: Vec<(Value, Vec<usize>)> = Vec::new();
@@ -327,14 +338,8 @@ fn aggregate(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
     let mut out_values: Vec<Vec<Value>> = vec![Vec::with_capacity(groups.len()); out_names.len()];
     for (key, rows) in &groups {
         let group = table.take_rows(rows);
-        match names.len() {
-            0 => {}
-            1 => out_values[0].push(key.clone()),
-            _ => {
-                for (c, part) in seq_items(key).unwrap().enumerate() {
-                    out_values[c].push(part);
-                }
-            }
+        for (c, part) in key_parts(names.len(), key).into_iter().enumerate() {
+            out_values[c].push(part);
         }
         for (j, (_, how)) in specs.iter().enumerate() {
             let value = apply_aggregate(vm, how, &group)?;
@@ -394,6 +399,80 @@ fn join(args: &[Value]) -> Result<Value, Error> {
         out.push((name, Rc::new(Array::from_values(values)?)));
     }
     Ok(Value::Table(Rc::new(Table::new(out)?)))
+}
+
+fn pivot(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
+    let table = as_table("pivot", &args[0])?;
+    let row_keys = key_columns("pivot", table, &args[1])?;
+    let col_key = column_name("pivot", &args[2])?;
+    let value_key = column_name("pivot", &args[3])?;
+    let col_column = table.column(col_key).ok_or_else(|| Table::missing(col_key))?;
+    let value_column = table.column(value_key).ok_or_else(|| Table::missing(value_key))?;
+    let mut col_values: Vec<Value> = Vec::new();
+    let mut col_index = Map::new();
+    for value in col_column.iter() {
+        if col_index.get(&value).is_none() {
+            col_index.insert_mut(value.clone(), Value::Int(col_values.len() as i64));
+            col_values.push(value);
+        }
+    }
+    let groups = group_rows(table, &row_keys);
+    let mut out_names = row_keys.clone();
+    out_names.extend(col_values.iter().map(|v| Symbol::intern(&Shown(v).to_string())));
+    let mut out_values: Vec<Vec<Value>> = vec![Vec::with_capacity(groups.len()); out_names.len()];
+    for (key, rows) in &groups {
+        for (c, part) in key_parts(row_keys.len(), key).into_iter().enumerate() {
+            out_values[c].push(part);
+        }
+        let mut cells: Vec<Vec<Value>> = vec![Vec::new(); col_values.len()];
+        for &i in rows {
+            let Some(Value::Int(c)) = col_index.get(&col_column.get(i).unwrap()) else { unreachable!() };
+            cells[*c as usize].push(value_column.get(i).unwrap());
+        }
+        for (c, mut values) in cells.into_iter().enumerate() {
+            let cell = match (args.get(4), values.len()) {
+                (_, 0) => Value::Nil,
+                (None, 1) => values.pop().unwrap(),
+                (None, n) => {
+                    let found: Vec<String> =
+                        row_keys.iter().zip(key_parts(row_keys.len(), key)).map(|(k, v)| format!("{k} {v}")).collect();
+                    let message = format!(
+                        "pivot found {n} values for {} and {col_key} {}; pass a function to combine them",
+                        found.join(", "),
+                        col_values[c]
+                    );
+                    return Err(Error::new("value-error", message));
+                }
+                (Some(f), _) => vm.call_value(f, &[Value::array(values)?])?,
+            };
+            out_values[row_keys.len() + c].push(cell);
+        }
+    }
+    let mut pairs = Vec::with_capacity(out_names.len());
+    for (name, values) in out_names.into_iter().zip(out_values) {
+        pairs.push((name, Rc::new(Array::from_values(values)?)));
+    }
+    Ok(Value::Table(Rc::new(Table::new(pairs)?)))
+}
+
+fn unpivot(args: &[Value]) -> Result<Value, Error> {
+    let table = as_table("unpivot", &args[0])?;
+    let melted = key_columns("unpivot", table, &args[1])?;
+    let key_name = column_name("unpivot", &args[2])?;
+    let value_name = column_name("unpivot", &args[3])?;
+    let nrows = table.nrows();
+    let names: Vec<Rc<str>> = melted.iter().map(|n| n.name()).collect();
+    let labels = infer(&names.iter().map(|n| Some(&**n)).collect::<Vec<_>>());
+    let mut pairs = Vec::new();
+    for (name, column) in table.columns().filter(|(n, _)| !melted.contains(n)) {
+        let values = (0..nrows).flat_map(|i| std::iter::repeat_n(column.get(i).unwrap(), melted.len()));
+        pairs.push((name, Rc::new(Array::from_values(values)?)));
+    }
+    let keys = (0..nrows).flat_map(|_| labels.iter().cloned());
+    pairs.push((key_name, Rc::new(Array::from_values(keys)?)));
+    let values = (0..nrows).flat_map(|i| melted.iter().map(move |m| table.column(*m).unwrap().get(i).unwrap()));
+    pairs.push((value_name, Rc::new(Array::from_values(values)?)));
+    Ok(Value::Table(Rc::new(Table::new(pairs)?)))
 }
 
 fn describe(args: &[Value]) -> Result<Value, Error> {

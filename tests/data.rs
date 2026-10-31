@@ -176,6 +176,27 @@ fn rows_append_to_tables_with_conj_into_and_concat() {
 }
 
 #[test]
+fn tables_pivot_between_long_and_wide() {
+    let long = "(define long (table {:city [\"Oslo\" \"Rome\" \"Oslo\"] :year [2020 2020 2021] :amount [10 20 30]}))";
+    assert_eq!(eval(&format!("{long} (pivot long :city :year :amount)")), "city  2020  2021\nOslo    10    30\nRome    20   nil\n(2 rows, 3 columns)");
+    assert_eq!(eval(&format!("{long} [(columns (pivot long :city :year :amount)) (:2021 (pivot long :city :year :amount))]")), "[[:city :2020 :2021] #[30 nil]]");
+    assert_eq!(eval(&format!("{long} (rows (pivot long :year :city :amount))")), "[{:year 2020, :Oslo 10, :Rome 20} {:year 2021, :Oslo 30, :Rome nil}]");
+    assert_eq!(eval(&format!("{long} (columns (pivot long [:city :year] :year :amount))")), "[:city :year :2020 :2021]");
+    assert_eq!(with_sales("(pivot s :city :year :amount)"), "error: pivot found 2 values for city \"Oslo\" and year 2021; pass a function to combine them");
+    assert_eq!(with_sales("[(rows (pivot s :city :year :amount sum)) (:2021 (pivot s :city :year :amount count))]"), "[[{:city \"Oslo\", :2020 10, :2021 30} {:city \"Rome\", :2020 20, :2021 40}] #[2 1]]");
+    assert_eq!(eval(&format!("{long} (pivot long :city :nope :amount)")), "error: table has no column :nope");
+    assert_eq!(eval(&format!("{long} (pivot long :city :year 5)")), "error: pivot expects a keyword column name, got 5");
+    let wide = format!("{long} (define wide (pivot long :city :year :amount))");
+    assert_eq!(
+        eval(&format!("{wide} (rows (unpivot wide [:2020 :2021] :year :amount))")),
+        "[{:city \"Oslo\", :year 2020, :amount 10} {:city \"Oslo\", :year 2021, :amount 30} {:city \"Rome\", :year 2020, :amount 20} {:city \"Rome\", :year 2021, :amount nil}]"
+    );
+    assert_eq!(eval(&format!("{wide} (equal? (rows (where (unpivot wide [:2020 :2021] :year :amount) (lambda (r) (:amount r)))) (rows (order-by long :city)))")), "true");
+    assert_eq!(eval("(rows (unpivot (table {:id [1 2] :a [1 3] :b [2 4]}) [:a :b] :key :value))"), "[{:id 1, :key \"a\", :value 1} {:id 1, :key \"b\", :value 2} {:id 2, :key \"a\", :value 3} {:id 2, :key \"b\", :value 4}]");
+    assert_eq!(eval(&format!("{wide} (unpivot wide [:nope] :year :amount)")), "error: table has no column :nope");
+}
+
+#[test]
 fn tables_join_on_a_shared_key() {
     let setup = "(define p (table {:id [1 2 3] :name [\"Ada\" \"Bob\" \"Cy\"]})) (define o (table {:id [2 1 2 9] :total [5 7 1 0]}))";
     assert_eq!(eval(&format!("{setup} (rows (join p o :id))")), "[{:id 1, :name \"Ada\", :total 7} {:id 2, :name \"Bob\", :total 5} {:id 2, :name \"Bob\", :total 1}]");
