@@ -1,0 +1,54 @@
+use std::fmt;
+
+use crate::reader::ReadError;
+use crate::value::Value;
+
+#[derive(Debug, Clone)]
+pub struct Error {
+    pub payload: Value,
+}
+
+impl Error {
+    pub fn new(kind: &str, message: impl Into<String>) -> Error {
+        let payload = Value::map([
+            (Value::keyword("kind"), Value::keyword(kind)),
+            (Value::keyword("message"), Value::string(&message.into())),
+        ]);
+        Error { payload }
+    }
+
+    pub fn raise(payload: Value) -> Error {
+        Error { payload }
+    }
+
+    pub fn syntax(message: impl Into<String>) -> Error {
+        Error::new("syntax-error", message)
+    }
+
+    pub fn type_error(message: impl Into<String>) -> Error {
+        Error::new("type-error", message)
+    }
+
+    pub fn message(&self) -> String {
+        if let Value::Map(m) = &self.payload {
+            if let Some(Value::Str(s)) = m.get(&Value::keyword("message")) {
+                return s.to_string();
+            }
+        }
+        self.payload.to_string()
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<ReadError> for Error {
+    fn from(e: ReadError) -> Error {
+        Error::new("read-error", e.to_string())
+    }
+}

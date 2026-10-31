@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
@@ -6,6 +7,7 @@ use crate::map::Map;
 use crate::set::Set;
 use crate::symbol::Symbol;
 use crate::vector::Vector;
+use crate::vm::{Closure, Native};
 
 #[derive(Clone, Debug)]
 pub enum Value {
@@ -20,6 +22,9 @@ pub enum Value {
     Vector(Rc<Vector>),
     Map(Rc<Map>),
     Set(Rc<Set>),
+    Closure(Rc<Closure>),
+    Native(Rc<Native>),
+    Cell(Rc<RefCell<Value>>),
 }
 
 impl Value {
@@ -53,6 +58,24 @@ impl Value {
 
     pub fn is_truthy(&self) -> bool {
         !matches!(self, Value::Nil | Value::Bool(false))
+    }
+
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Nil => "nil",
+            Value::Bool(_) => "boolean",
+            Value::Int(_) => "integer",
+            Value::Float(_) => "float",
+            Value::Symbol(_) => "symbol",
+            Value::Keyword(_) => "keyword",
+            Value::Str(_) => "string",
+            Value::List(_) => "list",
+            Value::Vector(_) => "vector",
+            Value::Map(_) => "map",
+            Value::Set(_) => "set",
+            Value::Closure(_) | Value::Native(_) => "function",
+            Value::Cell(_) => "cell",
+        }
     }
 }
 
@@ -99,6 +122,7 @@ const TAG_LIST: u64 = 0x07;
 const TAG_VECTOR: u64 = 0x08;
 const TAG_MAP: u64 = 0x09;
 const TAG_SET: u64 = 0x0a;
+const TAG_POINTER: u64 = 0x0b << 56;
 
 impl Value {
     pub fn hash_code(&self) -> u64 {
@@ -126,6 +150,9 @@ impl Value {
                 let sum = s.iter().fold(0u64, |acc, item| acc.wrapping_add(mix(item.hash_code())));
                 mix(TAG_SET ^ sum)
             }
+            Value::Closure(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
+            Value::Native(n) => mix(Rc::as_ptr(n) as usize as u64 ^ TAG_POINTER),
+            Value::Cell(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
         }
     }
 }
@@ -146,6 +173,9 @@ impl PartialEq for Value {
             (Vector(a), Vector(b)) => Rc::ptr_eq(a, b) || a == b,
             (Map(a), Map(b)) => Rc::ptr_eq(a, b) || a == b,
             (Set(a), Set(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Closure(a), Closure(b)) => Rc::ptr_eq(a, b),
+            (Native(a), Native(b)) => Rc::ptr_eq(a, b),
+            (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -201,6 +231,12 @@ impl fmt::Display for Value {
                 f.write_str("}")
             }
             Value::Set(s) => write_seq(f, "#{", s.iter(), "}"),
+            Value::Closure(c) => match c.proto.name {
+                Some(name) => write!(f, "#<procedure {name}>"),
+                None => f.write_str("#<procedure>"),
+            },
+            Value::Native(n) => write!(f, "#<builtin {}>", n.name),
+            Value::Cell(_) => f.write_str("#<cell>"),
         }
     }
 }
