@@ -278,6 +278,18 @@ impl Vm {
                         }
                     }
                 }
+                Op::Recur(n) => {
+                    let n = n as usize;
+                    let start = self.stack.len() - n;
+                    for i in 0..n {
+                        let v = std::mem::replace(&mut self.stack[start + i], Value::Nil);
+                        self.stack[base + i] = v;
+                    }
+                    self.stack.truncate(base + n);
+                    let proto = self.frames.last().unwrap().closure.proto.clone();
+                    self.box_params(&proto, base);
+                    self.frames.last_mut().unwrap().ip = 0;
+                }
                 Op::Return => {
                     if let Some(result) = self.do_return(stop_depth) {
                         return Ok(result);
@@ -350,12 +362,16 @@ impl Vm {
         } else if argc != proto.params {
             return Err(self.arity_error(proto, argc));
         }
+        self.box_params(proto, base);
+        Ok(())
+    }
+
+    fn box_params(&mut self, proto: &Proto, base: usize) {
         for &i in &proto.boxed_params {
             let slot = &mut self.stack[base + i as usize];
             let v = std::mem::replace(slot, Value::Nil);
             *slot = Value::Cell(Rc::new(RefCell::new(v)));
         }
-        Ok(())
     }
 
     fn arity_error(&self, proto: &Proto, argc: usize) -> Error {

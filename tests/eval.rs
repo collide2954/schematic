@@ -447,6 +447,29 @@ fn when_and_unless_run_a_body_conditionally() {
 }
 
 #[test]
+fn loop_and_recur_iterate_in_place() {
+    assert_eq!(eval("(loop ((i 0) (acc 0)) (if (= i 5) acc (recur (+ i 1) (+ acc i))))"), "10");
+    assert_eq!(eval_with_frame_limit("(loop ((i 0)) (if (= i 100000) 'done (recur (+ i 1))))", 10), "done");
+    assert_eq!(eval("(+ 1 (loop ((i 0)) (if (< i 3) (recur (+ i 1)) i)))"), "4");
+    assert_eq!(eval("(loop ((i 0)) (let ((j (* i 2))) (if (< j 10) (recur (+ i 1)) j)))"), "10");
+    assert_eq!(eval("(define (f n) (loop ((i n)) (when (> i 0) (recur (- i 1))))) (f 3)"), "nil");
+}
+
+#[test]
+fn recur_restarts_the_enclosing_function() {
+    assert_eq!(eval("(define (count-down n) (if (= n 0) 'done (recur (- n 1)))) (count-down 1000)"), "done");
+    assert_eq!(eval("(define (gcd a b) (if (= b 0) a (recur b (rem a b)))) (gcd 48 18)"), "6");
+    assert_eq!(eval("((lambda (n acc) (if (= n 0) acc (recur (- n 1) (* acc n)))) 5 1)"), "120");
+}
+
+#[test]
+fn recur_errors() {
+    assert_eq!(eval("(loop ((i 0)) (+ 1 (recur i)))"), "error: recur: must be in tail position");
+    assert_eq!(eval("(loop ((i 0)) (recur 1 2))"), "error: recur: expected 1 argument, got 2");
+    assert_eq!(eval("(recur)"), "error: recur: not inside a function or loop");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

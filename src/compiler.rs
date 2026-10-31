@@ -6,7 +6,7 @@ use crate::error::Error;
 use crate::list::List;
 use crate::symbol::Symbol;
 use crate::value::Value;
-use crate::vm::Globals;
+use crate::vm::{Arity, Globals};
 
 pub struct Compiler<'a> {
     globals: &'a mut Globals,
@@ -109,6 +109,9 @@ impl Scan {
         let Some(head) = list.first() else { return };
         let rest = list.rest();
         if let Value::Symbol(s) = head {
+            if depth > 0 {
+                self.nested_refs.insert(*s);
+            }
             match &*s.name() {
                 "quote" => return,
                 "set!" => {
@@ -136,6 +139,13 @@ impl Scan {
                         }
                         _ => {}
                     }
+                    return;
+                }
+                "loop" => {
+                    if let Some(bindings) = rest.first() {
+                        self.walk_bindings(bindings, depth);
+                    }
+                    self.walk_all(&rest.rest(), depth + 1);
                     return;
                 }
                 "let" | "let*" => {
@@ -381,6 +391,8 @@ impl<'a> Compiler<'a> {
                 "cond" => return self.compile_cond(&args, tail),
                 "when" => return self.compile_when(&args, tail, true),
                 "unless" => return self.compile_when(&args, tail, false),
+                "loop" => return self.compile_loop(&args, tail),
+                "recur" => return self.compile_recur(&args, tail),
                 "lambda" => {
                     let Some(params) = args.first() else {
                         return Err(syntax_error("lambda", "expected a parameter list"));
@@ -498,6 +510,45 @@ impl<'a> Compiler<'a> {
             self.emit(Op::PopUnder(1));
         }
         self.current().locals.pop();
+        Ok(())
+    }
+
+    fn compile_loop(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        let Some(bindings) = args.first() else {
+            return Err(syntax_error("loop", "expected bindings and a body"));
+        };
+        let body = args.rest();
+        if body.is_empty() {
+            return Err(syntax_error("loop", "expected a body"));
+        }
+        let bindings = parse_bindings("loop", bindings)?;
+        let params = Value::list(bindings.iter().map(|(n, _)| Value::Symbol(*n)));
+        self.compile_lambda(&params, &body, Some(Symbol::intern("loop")))?;
+        for (_, init) in &bindings {
+            self.compile(init, false)?;
+        }
+        let argc = bindings.len() as u32;
+        self.emit(if tail { Op::TailCall(argc) } else { Op::Call(argc) });
+        Ok(())
+    }
+
+    fn compile_recur(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        if self.functions.len() < 2 {
+            return Err(syntax_error("recur", "not inside a function or loop"));
+        }
+        if !tail {
+            return Err(syntax_error("recur", "must be in tail position"));
+        }
+        let proto = &self.current().proto;
+        let expected = proto.params + proto.rest as usize;
+        if args.len() != expected {
+            let message = format!("expected {}, got {}", Arity::Exact(expected), args.len());
+            return Err(syntax_error("recur", &message));
+        }
+        for arg in args.iter() {
+            self.compile(arg, false)?;
+        }
+        self.emit(Op::Recur(expected as u32));
         Ok(())
     }
 
