@@ -50,6 +50,34 @@ fn unbound_symbols_are_errors() {
 }
 
 #[test]
+fn if_picks_a_branch_by_truthiness() {
+    assert_eq!(eval("(if true 1 2)"), "1");
+    assert_eq!(eval("(if false 1 2)"), "2");
+    assert_eq!(eval("(if nil 1 2)"), "2");
+    assert_eq!(eval("(if 0 1 2)"), "1");
+    assert_eq!(eval("(if '() 1 2)"), "1");
+    assert_eq!(eval("(if \"\" 1 2)"), "1");
+}
+
+#[test]
+fn if_without_else_gives_nil() {
+    assert_eq!(eval("(if false 1)"), "nil");
+    assert_eq!(eval("(if true 1)"), "1");
+}
+
+#[test]
+fn if_nests_in_any_position() {
+    assert_eq!(eval("(if (if true false true) 'a (if nil 'b 'c))"), "c");
+    assert_eq!(eval("[(if true 1 2) (if false 1 2)]"), "[1 2]");
+}
+
+#[test]
+fn if_arity_errors() {
+    assert!(eval("(if true)").starts_with("error:"));
+    assert!(eval("(if 1 2 3 4)").starts_with("error:"));
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

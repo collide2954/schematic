@@ -94,6 +94,29 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    fn emit_jump(&mut self, op: Op) -> usize {
+        self.emit(op);
+        self.current().proto.code.len() - 1
+    }
+
+    fn patch_jump(&mut self, at: usize) {
+        let target = self.current().proto.code.len() as u32;
+        let code = &mut self.current().proto.code;
+        code[at] = match code[at] {
+            Op::Jump(_) => Op::Jump(target),
+            Op::JumpIfFalse(_) => Op::JumpIfFalse(target),
+            other => unreachable!("patching a non-jump {other:?}"),
+        };
+    }
+
+    fn depth(&mut self) -> usize {
+        self.current().depth
+    }
+
+    fn set_depth(&mut self, depth: usize) {
+        self.current().depth = depth;
+    }
+
     fn compile(&mut self, form: &Value, tail: bool) -> Result<(), Error> {
         match form {
             Value::Symbol(s) => self.compile_symbol(*s),
@@ -178,10 +201,40 @@ impl<'a> Compiler<'a> {
         if let Some(sym) = self.is_special(head) {
             match &*sym.name() {
                 "quote" => return self.compile_quote(&args, tail),
+                "if" => return self.compile_if(&args, tail),
                 _ => {}
             }
         }
         self.compile_call(list, tail)
+    }
+
+    fn compile_if(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        let count = args.len();
+        if !(2..=3).contains(&count) {
+            return Err(syntax_error("if", "expected a condition, a then-branch, and an optional else-branch"));
+        }
+        let mut parts = args.iter();
+        let condition = parts.next().unwrap();
+        let then_branch = parts.next().unwrap();
+        let else_branch = parts.next();
+        self.compile(condition, false)?;
+        let to_else = self.emit_jump(Op::JumpIfFalse(0));
+        let depth = self.depth();
+        self.compile(then_branch, tail)?;
+        let to_end = if tail { None } else { Some(self.emit_jump(Op::Jump(0))) };
+        self.patch_jump(to_else);
+        self.set_depth(depth);
+        match else_branch {
+            Some(form) => self.compile(form, tail)?,
+            None => {
+                self.emit(Op::Nil);
+                self.finish_tail(tail);
+            }
+        }
+        if let Some(to_end) = to_end {
+            self.patch_jump(to_end);
+        }
+        Ok(())
     }
 
     fn compile_quote(&mut self, args: &List, tail: bool) -> Result<(), Error> {
