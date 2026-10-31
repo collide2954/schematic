@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::rc::Rc;
 
-use super::collections::{assoc, expects, get, items, seq_items};
+use super::collections::{assoc, expects, get, items, like, seq_items};
 use super::{native, native_vm};
 use crate::error::Error;
 use crate::map::Map;
@@ -207,13 +207,6 @@ fn update_in(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
     call_args.extend(args[3..].iter().cloned());
     let updated = vm.call_value(&args[2], &call_args)?;
     assoc_path(args[0].clone(), &keys, updated)
-}
-
-pub fn like(template: &Value, out: Vec<Value>) -> Value {
-    match template {
-        Value::List(_) => Value::list(out),
-        _ => Value::vector(out),
-    }
 }
 
 fn apply(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {

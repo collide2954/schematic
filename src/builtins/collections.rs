@@ -83,6 +83,10 @@ pub fn install(globals: &mut Globals) {
         other => Ok(Value::Int(items("count-missing", other)?.filter(|v| matches!(v, Value::Nil)).count() as i64)),
     });
     native(globals, "equal?", Arity::Exact(2), |args| Ok(Value::Bool(args[0] == args[1])));
+    native(globals, "where", Arity::Exact(2), |args| select_mask(&args[0], &args[1]));
+    native(globals, "drop-missing", Arity::Exact(1), drop_missing);
+    native(globals, "fill-missing", Arity::Exact(2), fill_missing);
+    native(globals, "missing?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Nil))));
 }
 
 pub fn expects(name: &str, what: &str, got: &Value) -> Error {
@@ -107,7 +111,8 @@ pub fn items<'a>(name: &str, value: &'a Value) -> Result<Box<dyn Iterator<Item =
 }
 
 fn out_of_bounds(index: i64, kind: &str, len: usize) -> Error {
-    Error::new("index-error", format!("index {index} is out of bounds for a {kind} of length {len}"))
+    let article = if kind.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+    Error::new("index-error", format!("index {index} is out of bounds for {article} {kind} of length {len}"))
 }
 
 fn first(args: &[Value]) -> Result<Value, Error> {
@@ -283,15 +288,84 @@ fn range(args: &[Value]) -> Result<Value, Error> {
 fn reverse(args: &[Value]) -> Result<Value, Error> {
     match &args[0] {
         Value::Vector(v) => Ok(Value::vector((0..v.len()).rev().map(|i| v.get(i).unwrap().clone()))),
+        Value::Array(a) => Ok(like(&args[0], a.iter().collect::<Vec<_>>().into_iter().rev().collect())),
         other => Ok(Value::List(items("reverse", other)?.fold(List::new(), List::cons))),
     }
 }
 
-fn like(template: &Value, out: Vec<Value>) -> Value {
+pub fn like(template: &Value, out: Vec<Value>) -> Value {
     match template {
         Value::List(_) => Value::list(out),
+        Value::Array(_) => match Array::from_values(out.iter().cloned()) {
+            Ok(a) => Value::Array(Rc::new(a)),
+            Err(_) => Value::vector(out),
+        },
         _ => Value::vector(out),
     }
+}
+
+fn indexed_len(name: &str, coll: &Value) -> Result<usize, Error> {
+    match coll {
+        Value::Array(a) => Ok(a.len()),
+        Value::Vector(v) => Ok(v.len()),
+        other => Err(expects(name, "an array or vector", other)),
+    }
+}
+
+fn element_at(coll: &Value, index: usize) -> Value {
+    match coll {
+        Value::Array(a) => a.get(index).unwrap_or(Value::Nil),
+        Value::Vector(v) => v.get(index).cloned().unwrap_or(Value::Nil),
+        _ => Value::Nil,
+    }
+}
+
+pub fn select_mask(coll: &Value, mask: &Value) -> Result<Value, Error> {
+    let flags: Vec<Value> = items("where", mask)?.collect();
+    let values: Vec<Value> = items("where", coll)?.collect();
+    if flags.len() != values.len() {
+        let message = format!("mask length {} does not match {} length {}", flags.len(), coll.type_name(), values.len());
+        return Err(Error::new("value-error", message));
+    }
+    let out = values.into_iter().zip(flags).filter(|(_, flag)| flag.is_truthy()).map(|(v, _)| v).collect();
+    Ok(like(coll, out))
+}
+
+pub fn gather(coll: &Value, key: &Value) -> Result<Option<Value>, Error> {
+    if !matches!(coll, Value::Array(_) | Value::Vector(_)) {
+        return Ok(None);
+    }
+    let indices: Vec<Value> = match key {
+        Value::Array(a) if a.kind() == "bool" => return select_mask(coll, key).map(Some),
+        Value::Array(a) => a.iter().collect(),
+        Value::Vector(v) => v.iter().cloned().collect(),
+        _ => return Ok(None),
+    };
+    let len = indexed_len("index", coll)?;
+    let mut out = Vec::with_capacity(indices.len());
+    for index in indices {
+        match index {
+            Value::Nil => out.push(Value::Nil),
+            Value::Int(i) => match usize::try_from(i).ok().filter(|&i| i < len) {
+                Some(i) => out.push(element_at(coll, i)),
+                None => return Err(out_of_bounds(i, coll.type_name(), len)),
+            },
+            other => return Err(expects("index", "integers", &other)),
+        }
+    }
+    Ok(Some(like(coll, out)))
+}
+
+fn drop_missing(args: &[Value]) -> Result<Value, Error> {
+    let kept = items("drop-missing", &args[0])?.filter(|v| !matches!(v, Value::Nil)).collect();
+    Ok(like(&args[0], kept))
+}
+
+fn fill_missing(args: &[Value]) -> Result<Value, Error> {
+    let filled = items("fill-missing", &args[0])?
+        .map(|v| if matches!(v, Value::Nil) { args[1].clone() } else { v })
+        .collect();
+    Ok(like(&args[0], filled))
 }
 
 fn count_arg(name: &str, value: &Value) -> Result<usize, Error> {
@@ -404,6 +478,9 @@ fn char_at(s: &str, index: usize) -> Option<Value> {
 }
 
 pub fn get(args: &[Value]) -> Result<Value, Error> {
+    if let Some(found) = gather(&args[0], &args[1])? {
+        return Ok(found);
+    }
     let index = |i: &i64| usize::try_from(*i).ok();
     let found = match (&args[0], &args[1]) {
         (Value::Map(m), key) => m.get(key).cloned(),

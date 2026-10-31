@@ -59,9 +59,30 @@ fn comparisons_broadcast_into_masks() {
 #[test]
 fn arrays_act_as_sequences() {
     assert_eq!(eval("[(count #[1 2 3]) (nth #[1 2 3] 1) (#[1 2 3] 0) (get #[1 2] 5) (first #[7 8]) (last #[1 2])]"), "[3 2 1 nil 7 2]");
-    assert_eq!(eval("[(rest #[7 8 9]) (vec #[1 nil]) (map inc #[1 2]) (reduce + #[1 2 3]) (empty? #[]) (nth #[1 nil] 1)]"), "[(8 9) [1 nil] [2 3] 6 true nil]");
+    assert_eq!(eval("[(rest #[7 8 9]) (vec #[1 nil]) (map inc #[1 2]) (reduce + #[1 2 3]) (empty? #[]) (nth #[1 nil] 1)]"), "[(8 9) [1 nil] #[2 3] 6 true nil]");
     assert_eq!(eval("[(conj #[1 2] 3) (conj #[1] 2.5) (conj #[1] nil)]"), "[#[1 2 3] #[1.0 2.5] #[1 nil]]");
     assert_eq!(eval("(conj #[1] \"a\")"), "error: array elements must all be numbers, all booleans, or all strings, got 1 and \"a\"");
     assert_eq!(eval("[(count-missing #[1 nil nil]) (count-missing #[])]"), "[2 0]");
-    assert_eq!(eval("(sort #[3 1 2])"), "[1 2 3]");
+    assert_eq!(eval("(sort #[3 1 2])"), "#[1 2 3]");
+    assert_eq!(eval("[(take 2 #[1 2 3]) (filter even? #[1 2 3 4]) (map str #[1 2]) (map (lambda (x) [x]) #[1]) (reverse #[1 2])]"), "[#[1 2] #[2 4] #[\"1\" \"2\"] [[1]] #[2 1]]");
+}
+
+#[test]
+fn statistics_skip_missing_values() {
+    assert_eq!(eval("[(sum #[1 2 3]) (sum #[1.5 nil 2]) (sum #[]) (sum [1 2])]"), "[6 3.5 0 3]");
+    assert_eq!(eval("[(mean #[1 2 3 nil]) (mean #[]) (median #[3 1 2]) (median #[4 1 3 2]) (median #[])]"), "[2.0 nil 2 2.5 nil]");
+    assert_eq!(eval("[(variance #[2 4 4 4 5 5 7 9]) (std #[2 4 4 4 5 5 7 9])]"), "[4.571428571428571 2.138089935299395]");
+    assert_eq!(eval("[(variance #[1]) (std #[])]"), "[nil nil]");
+    assert_eq!(eval("(cumsum #[1 2 nil 3])"), "#[1 3 nil 6]");
+    assert_eq!(eval("[(quantile #[1 2 3 4 5] 0.5) (quantile #[1 2 3 4] 0.5) (quantile #[1 2 3 4 5] 0.25) (quantile #[] 0.5)]"), "[3.0 2.5 2.0 nil]");
+    assert_eq!(eval("(sum #[\"a\"])"), "error: sum expects numbers, got \"a\"");
+}
+
+#[test]
+fn masking_and_gathering_arrays() {
+    assert_eq!(eval("[(#[10 20 30] #[true false true]) (#[10 20 30] [0 2]) (#[10 20 30] #[2 0]) (get #[10 20] #[false true])]"), "[#[10 30] #[10 30] #[30 10] #[20]]");
+    assert_eq!(eval("[(where #[1 2 3] (> #[1 2 3] 1)) (where [1 2 3] #[true false true]) ([10 20 30] [2 1])]"), "[#[2 3] [1 3] [30 20]]");
+    assert_eq!(eval("(#[10 20] #[true])"), "error: mask length 1 does not match array length 2");
+    assert_eq!(eval("(#[10 20] [5])"), "error: index 5 is out of bounds for an array of length 2");
+    assert_eq!(eval("[(drop-missing #[1 nil 2]) (fill-missing #[1 nil 2] 0) (missing? nil) (missing? 1)]"), "[#[1 2] #[1 0 2] true false]");
 }

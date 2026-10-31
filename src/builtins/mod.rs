@@ -4,11 +4,12 @@ use crate::bytecode::Intrinsic;
 use crate::value::Value;
 use crate::vm::{Arity, Globals, Native, NativeFn, OwnedFn, PureFn, VmFn};
 
-mod collections;
+pub mod collections;
 mod core;
 mod functional;
 mod io;
 pub mod math;
+mod stats;
 mod strings;
 
 pub fn install(globals: &mut Globals) {
@@ -18,6 +19,7 @@ pub fn install(globals: &mut Globals) {
     functional::install(globals);
     strings::install(globals);
     io::install(globals);
+    stats::install(globals);
 }
 
 fn native(globals: &mut Globals, name: &'static str, arity: Arity, func: PureFn) {
