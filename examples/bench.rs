@@ -56,7 +56,7 @@ fn main() {
         interp.eval_str(setup).expect("setup");
         interp.eval_str(body).expect("warmup");
         let mut best = f64::MAX;
-        for _ in 0..5 {
+        for _ in 0..12 {
             let start = Instant::now();
             interp.eval_str(body).expect("run");
             best = best.min(start.elapsed().as_secs_f64());

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::native;
+use super::{native, native_owned};
 use crate::error::Error;
 use crate::list::List;
 use crate::map::Map;
@@ -17,7 +17,7 @@ pub fn install(globals: &mut Globals) {
     native(globals, "count", Arity::Exact(1), count);
     native(globals, "last", Arity::Exact(1), last);
     native(globals, "nth", Arity::Between(2, 3), nth);
-    native(globals, "conj", Arity::AtLeast(1), conj);
+    native_owned(globals, "conj", Arity::AtLeast(1), conj_owned);
     native(globals, "list", Arity::AtLeast(0), |args| Ok(Value::list(args.iter().cloned())));
     native(globals, "vector", Arity::AtLeast(0), |args| Ok(Value::vector(args.iter().cloned())));
     native(globals, "vec", Arity::Exact(1), |args| Ok(Value::vector(items("vec", &args[0])?)));
@@ -28,20 +28,20 @@ pub fn install(globals: &mut Globals) {
     native(globals, "reverse", Arity::Exact(1), reverse);
     native(globals, "get", Arity::Between(2, 3), get);
     native(globals, "find", Arity::Exact(2), find);
-    native(globals, "assoc", Arity::AtLeast(1), assoc);
-    native(globals, "dissoc", Arity::AtLeast(1), dissoc);
+    native_owned(globals, "assoc", Arity::AtLeast(1), assoc_owned);
+    native_owned(globals, "dissoc", Arity::AtLeast(1), dissoc);
     native(globals, "keys", Arity::Exact(1), |args| map_part("keys", &args[0], |m| m.keys().cloned().collect()));
     native(globals, "vals", Arity::Exact(1), |args| map_part("vals", &args[0], |m| m.values().cloned().collect()));
     native(globals, "contains?", Arity::Exact(2), contains);
     native(globals, "merge", Arity::AtLeast(0), merge);
-    native(globals, "disj", Arity::AtLeast(1), disj);
+    native_owned(globals, "disj", Arity::AtLeast(1), disj);
     native(globals, "select-keys", Arity::Exact(2), select_keys);
     native(globals, "zipmap", Arity::Exact(2), zipmap);
     native(globals, "subvec", Arity::Between(2, 3), subvec);
     native(globals, "take", Arity::Exact(2), |args| take_drop("take", args, true));
     native(globals, "drop", Arity::Exact(2), |args| take_drop("drop", args, false));
     native(globals, "concat", Arity::AtLeast(0), concat);
-    native(globals, "into", Arity::Exact(2), into);
+    native_owned(globals, "into", Arity::Exact(2), into);
     native(globals, "distinct", Arity::Exact(1), distinct);
     native(globals, "frequencies", Arity::Exact(1), frequencies);
     native(globals, "partition", Arity::Between(2, 3), partition);
@@ -168,35 +168,48 @@ fn nth(args: &[Value]) -> Result<Value, Error> {
     }
 }
 
+pub fn owned<T: Clone>(shared: Rc<T>) -> T {
+    Rc::try_unwrap(shared).unwrap_or_else(|rc| (*rc).clone())
+}
+
+pub fn take(args: &mut [Value], index: usize) -> Value {
+    std::mem::take(&mut args[index])
+}
+
 fn conj(args: &[Value]) -> Result<Value, Error> {
-    let (target, additions) = args.split_first().unwrap();
+    conj_owned(&mut args.to_vec())
+}
+
+fn conj_owned(args: &mut [Value]) -> Result<Value, Error> {
+    let target = take(args, 0);
+    let mut args = args[1..].iter_mut().map(std::mem::take);
     match target {
-        Value::Nil => Ok(Value::List(additions.iter().cloned().fold(List::new(), List::cons))),
-        Value::List(l) => Ok(Value::List(additions.iter().cloned().fold(l.clone(), List::cons))),
+        Value::Nil => Ok(Value::List(args.fold(List::new(), List::cons))),
+        Value::List(l) => Ok(Value::List(args.fold(l, List::cons))),
         Value::Vector(v) => {
-            let mut out: Vector = (**v).clone();
-            additions.iter().cloned().for_each(|x| out.push_mut(x));
+            let mut out = owned(v);
+            args.for_each(|x| out.push_mut(x));
             Ok(Value::Vector(Rc::new(out)))
         }
         Value::Set(s) => {
-            let mut out: Set = (**s).clone();
-            additions.iter().cloned().for_each(|x| out.insert_mut(x));
+            let mut out = owned(s);
+            args.for_each(|x| out.insert_mut(x));
             Ok(Value::Set(Rc::new(out)))
         }
         Value::Map(m) => {
-            let mut out: Map = (**m).clone();
-            for addition in additions {
+            let mut out = owned(m);
+            for addition in args {
                 match addition {
                     Value::Vector(pair) if pair.len() == 2 => {
                         out.insert_mut(pair.get(0).unwrap().clone(), pair.get(1).unwrap().clone());
                     }
                     Value::Map(other) => other.iter().for_each(|(k, v)| out.insert_mut(k.clone(), v.clone())),
-                    other => return Err(expects("conj onto a map", "a [key value] pair or a map", other)),
+                    other => return Err(expects("conj onto a map", "a [key value] pair or a map", &other)),
                 }
             }
             Ok(Value::Map(Rc::new(out)))
         }
-        other => Err(expects("conj", "a collection", other)),
+        other => Err(expects("conj", "a collection", &other)),
     }
 }
 
@@ -281,10 +294,11 @@ fn concat(args: &[Value]) -> Result<Value, Error> {
     Ok(like(args.first().unwrap_or(&Value::Nil), out))
 }
 
-fn into(args: &[Value]) -> Result<Value, Error> {
-    let mut conj_args = vec![args[0].clone()];
-    conj_args.extend(items("into", &args[1])?);
-    conj(&conj_args)
+fn into(args: &mut [Value]) -> Result<Value, Error> {
+    let source = take(args, 1);
+    let mut conj_args = vec![take(args, 0)];
+    conj_args.extend(items("into", &source)?);
+    conj_owned(&mut conj_args)
 }
 
 fn distinct(args: &[Value]) -> Result<Value, Error> {
@@ -391,49 +405,57 @@ fn find(args: &[Value]) -> Result<Value, Error> {
 }
 
 pub fn assoc(args: &[Value]) -> Result<Value, Error> {
-    let (target, pairs) = args.split_first().unwrap();
-    if pairs.len() % 2 != 0 {
-        let message = format!("assoc expects an even number of key and value arguments, got {}", pairs.len());
+    assoc_owned(&mut args.to_vec())
+}
+
+fn assoc_owned(args: &mut [Value]) -> Result<Value, Error> {
+    if (args.len() - 1) % 2 != 0 {
+        let message = format!("assoc expects an even number of key and value arguments, got {}", args.len() - 1);
         return Err(Error::new("arity-error", message));
     }
-    let pairs = pairs.chunks(2).map(|pair| (&pair[0], &pair[1]));
+    let target = take(args, 0);
+    let mut pairs = args[1..].iter_mut().map(std::mem::take);
     match target {
         Value::Nil | Value::Map(_) => {
             let mut out = match target {
-                Value::Map(m) => (**m).clone(),
+                Value::Map(m) => owned(m),
                 _ => Map::new(),
             };
-            pairs.for_each(|(k, v)| out.insert_mut(k.clone(), v.clone()));
+            while let (Some(k), Some(v)) = (pairs.next(), pairs.next()) {
+                out.insert_mut(k, v);
+            }
             Ok(Value::Map(Rc::new(out)))
         }
         Value::Vector(v) => {
-            let mut out = (**v).clone();
-            for (k, v) in pairs {
+            let mut out = owned(v);
+            while let (Some(k), Some(v)) = (pairs.next(), pairs.next()) {
                 let Value::Int(i) = k else {
-                    return Err(expects("assoc on a vector", "an integer index", k));
+                    return Err(expects("assoc on a vector", "an integer index", &k));
                 };
-                out = usize::try_from(*i)
-                    .ok()
-                    .and_then(|i| out.assoc(i, v.clone()))
-                    .ok_or_else(|| out_of_bounds(*i, "vector", out.len()))?;
+                let len = out.len();
+                match usize::try_from(i).ok().filter(|&i| i <= len) {
+                    Some(i) if i == len => out.push_mut(v),
+                    Some(i) => out.set_mut(i, v),
+                    None => return Err(out_of_bounds(i, "vector", len)),
+                }
             }
             Ok(Value::Vector(Rc::new(out)))
         }
-        other => Err(expects("assoc", "a map or vector", other)),
+        other => Err(expects("assoc", "a map or vector", &other)),
     }
 }
 
-fn dissoc(args: &[Value]) -> Result<Value, Error> {
-    match &args[0] {
+fn dissoc(args: &mut [Value]) -> Result<Value, Error> {
+    match take(args, 0) {
         Value::Nil => Ok(Value::Nil),
         Value::Map(m) => {
-            let mut out = (**m).clone();
+            let mut out = owned(m);
             args[1..].iter().for_each(|k| {
                 out.remove_mut(k);
             });
             Ok(Value::Map(Rc::new(out)))
         }
-        other => Err(expects("dissoc", "a map", other)),
+        other => Err(expects("dissoc", "a map", &other)),
     }
 }
 
@@ -471,17 +493,17 @@ fn merge(args: &[Value]) -> Result<Value, Error> {
     Ok(Value::Map(Rc::new(out)))
 }
 
-fn disj(args: &[Value]) -> Result<Value, Error> {
-    match &args[0] {
+fn disj(args: &mut [Value]) -> Result<Value, Error> {
+    match take(args, 0) {
         Value::Nil => Ok(Value::Nil),
         Value::Set(s) => {
-            let mut out = (**s).clone();
+            let mut out = owned(s);
             args[1..].iter().for_each(|x| {
                 out.remove_mut(x);
             });
             Ok(Value::Set(Rc::new(out)))
         }
-        other => Err(expects("disj", "a set", other)),
+        other => Err(expects("disj", "a set", &other)),
     }
 }
 

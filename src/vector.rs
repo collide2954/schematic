@@ -111,13 +111,17 @@ impl Vector {
             return None;
         }
         let mut out = self.clone();
-        let tail_offset = out.tail_offset();
-        if index >= tail_offset {
-            out.tail[index - tail_offset] = value;
-        } else {
-            set_in(Rc::make_mut(&mut out.root), out.shift, index, value);
-        }
+        out.set_mut(index, value);
         Some(out)
+    }
+
+    pub fn set_mut(&mut self, index: usize, value: Value) {
+        let tail_offset = self.tail_offset();
+        if index >= tail_offset {
+            self.tail[index - tail_offset] = value;
+        } else {
+            set_in(Rc::make_mut(&mut self.root), self.shift, index, value);
+        }
     }
 
     pub fn iter(&self) -> Iter<'_> {

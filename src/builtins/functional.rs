@@ -264,7 +264,7 @@ fn reduce(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
         None => return vm.call_value(f, &[]),
     };
     for x in iter {
-        acc = vm.call_value(f, &[acc, x])?;
+        acc = vm.call_values(f, vec![acc, x])?;
     }
     Ok(acc)
 }

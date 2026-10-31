@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use crate::bytecode::Intrinsic;
 use crate::value::Value;
-use crate::vm::{Arity, Globals, Native, NativeFn, PureFn, VmFn};
+use crate::vm::{Arity, Globals, Native, NativeFn, OwnedFn, PureFn, VmFn};
 
 mod collections;
 mod core;
@@ -29,6 +29,11 @@ fn native_intrinsic(globals: &mut Globals, name: &'static str, arity: Arity, fun
     let func = NativeFn::Pure(func);
     let intrinsic = Some(intrinsic);
     globals.define(name, Value::Native(Rc::new(Native { name, arity, func, intrinsic })));
+}
+
+fn native_owned(globals: &mut Globals, name: &'static str, arity: Arity, func: OwnedFn) {
+    let func = NativeFn::Owned(func);
+    globals.define(name, Value::Native(Rc::new(Native { name, arity, func, intrinsic: None })));
 }
 
 fn native_vm(globals: &mut Globals, name: &'static str, arity: Arity, func: VmFn) {

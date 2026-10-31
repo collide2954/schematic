@@ -21,6 +21,7 @@ struct FunctionState {
     captures: Vec<(Symbol, bool)>,
     depth: usize,
     boxed_names: HashSet<Symbol>,
+    movable: HashSet<Symbol>,
 }
 
 struct Local {
@@ -44,7 +45,27 @@ impl FunctionState {
             captures: Vec::new(),
             depth: 0,
             boxed_names: HashSet::new(),
+            movable: HashSet::new(),
         }
+    }
+}
+
+fn count_symbols(form: &Value, counts: &mut std::collections::HashMap<Symbol, usize>) {
+    match form {
+        Value::Symbol(s) => *counts.entry(*s).or_insert(0) += 1,
+        Value::List(l) => {
+            if matches!(l.first(), Some(Value::Symbol(s)) if &*s.root().name() == "quote") {
+                return;
+            }
+            l.iter().for_each(|item| count_symbols(item, counts));
+        }
+        Value::Vector(v) => v.iter().for_each(|item| count_symbols(item, counts)),
+        Value::Map(m) => m.iter().for_each(|(k, v)| {
+            count_symbols(k, counts);
+            count_symbols(v, counts);
+        }),
+        Value::Set(s) => s.iter().for_each(|item| count_symbols(item, counts)),
+        _ => {}
     }
 }
 
@@ -394,9 +415,30 @@ impl<'a> Compiler<'a> {
         self.current().depth = depth;
     }
 
+    fn compile_moving_args(&mut self, args: &List) -> Result<(), Error> {
+        let args: Vec<&Value> = args.iter().collect();
+        let mut later: Vec<std::collections::HashMap<Symbol, usize>> = Vec::with_capacity(args.len());
+        for arg in &args {
+            let mut counts = std::collections::HashMap::new();
+            count_symbols(arg, &mut counts);
+            later.push(counts);
+        }
+        for (i, arg) in args.iter().enumerate() {
+            let movable: HashSet<Symbol> = later[i]
+                .iter()
+                .filter(|(symbol, count)| **count == 1 && later[i + 1..].iter().all(|c| !c.contains_key(*symbol)))
+                .map(|(symbol, _)| *symbol)
+                .collect();
+            self.current().movable = movable;
+            self.compile(arg, false)?;
+        }
+        self.current().movable.clear();
+        Ok(())
+    }
+
     fn compile(&mut self, form: &Value, tail: bool) -> Result<(), Error> {
         match form {
-            Value::Symbol(s) => self.compile_symbol(*s),
+            Value::Symbol(s) => self.compile_symbol(*s, tail),
             Value::List(l) if !l.is_empty() => return self.compile_list(l, tail),
             Value::Vector(v) => {
                 for item in v.iter() {
@@ -423,8 +465,10 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn compile_symbol(&mut self, name: Symbol) {
+    fn compile_symbol(&mut self, name: Symbol, take: bool) {
+        let take = take || self.current().movable.contains(&name);
         match self.resolve(name) {
+            Resolved::Local(slot, false) if take => self.emit(Op::TakeLocal(slot as u32)),
             Resolved::Local(slot, false) => self.emit(Op::GetLocal(slot as u32)),
             Resolved::Local(slot, true) => self.emit(Op::GetLocalCell(slot as u32)),
             Resolved::Upvalue(i, false) => self.emit(Op::GetUpvalue(i as u32)),
@@ -798,9 +842,7 @@ impl<'a> Compiler<'a> {
             let message = format!("expected {}, got {}", Arity::Exact(expected), args.len());
             return Err(syntax_error("recur", &message));
         }
-        for arg in args.iter() {
-            self.compile(arg, false)?;
-        }
+        self.compile_moving_args(args)?;
         self.emit(Op::Recur(expected as u32));
         Ok(())
     }
@@ -1112,8 +1154,13 @@ impl<'a> Compiler<'a> {
             self.finish_tail(tail);
             return Ok(());
         }
-        for item in list.iter() {
-            self.compile(item, false)?;
+        self.compile(list.first().unwrap(), false)?;
+        if tail {
+            self.compile_moving_args(&list.rest())?;
+        } else {
+            for item in list.rest().iter() {
+                self.compile(item, false)?;
+            }
         }
         let argc = argc as u32;
         self.emit(if tail { Op::TailCall(argc) } else { Op::Call(argc) });

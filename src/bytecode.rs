@@ -27,6 +27,7 @@ pub enum Op {
     Pop,
     PopUnder(u32),
     GetLocal(u32),
+    TakeLocal(u32),
     SetLocal(u32),
     GetLocalCell(u32),
     SetLocalCell(u32),
@@ -61,7 +62,7 @@ impl Op {
     pub fn stack_effect(self) -> isize {
         use Op::*;
         match self {
-            Const(_) | Nil | True | False | GetLocal(_) | GetLocalCell(_) | GetUpvalue(_)
+            Const(_) | Nil | True | False | GetLocal(_) | TakeLocal(_) | GetLocalCell(_) | GetUpvalue(_)
             | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) | PushEscape(_) => 1,
             Pop | JumpIfFalse(_) | JumpIfTrue(_) | JumpIfFalseOrPop(_) | JumpIfTrueOrPop(_) | Return
             | Rethrow | Binary(_) => -1,

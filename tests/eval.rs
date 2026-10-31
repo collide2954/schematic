@@ -910,6 +910,21 @@ fn quasiquote_builds_data_with_holes() {
 }
 
 #[test]
+fn moved_locals_keep_value_semantics() {
+    assert_eq!(eval("(define a [1]) (loop ((v a) (i 0)) (if (= i 2) [a v] (recur (conj v i) (+ i 1))))"), "[[1] [1 0 1]]");
+    let captured_before_move = "(loop ((fs []) (v [1]) (i 0)) (if (= i 2) [(map (lambda (f) (f)) fs) v] (recur (conj fs (lambda () v)) (conj v i) (+ i 1))))";
+    assert_eq!(eval(captured_before_move), "[[[1] [1 0]] [1 0 1]]");
+    let captured_after_move = "(loop ((v [1]) (fs []) (i 0)) (if (= i 2) [(map (lambda (f) (f)) fs) v] (recur (conj v i) (conj fs (lambda () v)) (+ i 1))))";
+    assert_eq!(eval(captured_after_move), "[[[1] [1 0]] [1 0 1]]");
+    assert_eq!(eval("(define (g v) v) (define x [1]) [(g x) x (conj x 2) x]"), "[[1] [1] [1 2] [1]]");
+    assert_eq!(eval("(define base [0]) [(reduce conj base [1 2]) base]"), "[[0 1 2] [0]]");
+    assert_eq!(eval("(define m {:a 1}) (define (add m k) (assoc m k true)) [(add m :b) m]"), "[{:a 1, :b true} {:a 1}]");
+    assert_eq!(eval("(define (f v n) (if (= n 0) v (f (conj v n) (- n 1)))) (define s #{}) [(f s 2) s]"), "[#{2 1} #{}]");
+    assert_eq!(eval("(define (f v w) (recur-free v w)) (define (recur-free a b) [a b]) (define q [1]) (f q q)"), "[[1] [1]]");
+    assert_eq!(eval("(define (f v) (let ((w v)) (conj w 1))) (define q [0]) [(f q) q]"), "[[0 1] [0]]");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

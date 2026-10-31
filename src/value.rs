@@ -30,6 +30,12 @@ pub enum Value {
     Escape(u64),
 }
 
+impl Default for Value {
+    fn default() -> Value {
+        Value::Nil
+    }
+}
+
 impl Value {
     pub fn list(items: impl IntoIterator<Item = Value>) -> Value {
         Value::List(items.into_iter().collect())

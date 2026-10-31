@@ -19,11 +19,13 @@ pub struct Closure {
 }
 
 pub type PureFn = fn(&[Value]) -> Result<Value, Error>;
+pub type OwnedFn = fn(&mut [Value]) -> Result<Value, Error>;
 pub type VmFn = fn(&mut Vm, Vec<Value>) -> Result<Value, Error>;
 
 #[derive(Clone, Copy)]
 pub enum NativeFn {
     Pure(PureFn),
+    Owned(OwnedFn),
     Vm(VmFn),
 }
 
@@ -379,6 +381,10 @@ impl Vm {
                     let v = self.stack[base + i as usize].clone();
                     self.stack.push(v);
                 }
+                Op::TakeLocal(i) => {
+                    let v = std::mem::replace(&mut self.stack[base + i as usize], Value::Nil);
+                    self.stack.push(v);
+                }
                 Op::SetLocal(i) => {
                     let v = self.top().clone();
                     self.stack[base + i as usize] = v;
@@ -626,6 +632,7 @@ impl Vm {
         }
         match native.func {
             NativeFn::Pure(f) => f(&self.stack[start..start + argc]),
+            NativeFn::Owned(f) => f(&mut self.stack[start..start + argc]),
             NativeFn::Vm(f) => {
                 let args: Vec<Value> = self.stack.drain(start..start + argc).collect();
                 f(self, args)
@@ -634,11 +641,16 @@ impl Vm {
     }
 
     pub fn call_value(&mut self, f: &Value, args: &[Value]) -> Result<Value, Error> {
+        self.call_values(f, args.to_vec())
+    }
+
+    pub fn call_values(&mut self, f: &Value, args: Vec<Value>) -> Result<Value, Error> {
         let depth = self.frames.len();
         let base = self.stack.len();
+        let argc = args.len();
         self.stack.push(f.clone());
-        self.stack.extend_from_slice(args);
-        let result = match self.call(args.len()) {
+        self.stack.extend(args);
+        let result = match self.call(argc) {
             Ok(()) if self.frames.len() > depth => self.run(depth),
             Ok(()) => Ok(self.pop()),
             Err(e) => Err(e),
