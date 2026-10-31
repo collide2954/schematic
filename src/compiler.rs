@@ -50,6 +50,118 @@ fn syntax_error(form: &str, message: &str) -> Error {
     Error::syntax(format!("{form}: {message}"))
 }
 
+#[derive(Default)]
+struct Scan {
+    set_targets: HashSet<Symbol>,
+    defined: HashSet<Symbol>,
+    nested_refs: HashSet<Symbol>,
+}
+
+fn scan_boxed<'a>(forms: impl Iterator<Item = &'a Value>) -> HashSet<Symbol> {
+    let mut scan = Scan::default();
+    for form in forms {
+        scan.walk(form, 0);
+    }
+    let Scan { mut set_targets, defined, nested_refs } = scan;
+    set_targets.extend(defined.intersection(&nested_refs));
+    set_targets
+}
+
+impl Scan {
+    fn walk(&mut self, form: &Value, depth: usize) {
+        match form {
+            Value::Symbol(s) => {
+                if depth > 0 {
+                    self.nested_refs.insert(*s);
+                }
+            }
+            Value::List(l) => self.walk_list(l, depth),
+            Value::Vector(v) => v.iter().for_each(|item| self.walk(item, depth)),
+            Value::Set(s) => s.iter().for_each(|item| self.walk(item, depth)),
+            Value::Map(m) => m.iter().for_each(|(k, v)| {
+                self.walk(k, depth);
+                self.walk(v, depth);
+            }),
+            _ => {}
+        }
+    }
+
+    fn walk_all(&mut self, forms: &List, depth: usize) {
+        forms.iter().for_each(|form| self.walk(form, depth));
+    }
+
+    fn walk_bindings(&mut self, bindings: &Value, depth: usize) {
+        let Value::List(items) = bindings else { return };
+        for binding in items.iter() {
+            if let Value::List(pair) = binding {
+                self.walk_all(&pair.rest(), depth);
+            }
+        }
+    }
+
+    fn define_name(&mut self, name: Symbol, depth: usize) {
+        if depth == 0 {
+            self.defined.insert(name);
+        }
+    }
+
+    fn walk_list(&mut self, list: &List, depth: usize) {
+        let Some(head) = list.first() else { return };
+        let rest = list.rest();
+        if let Value::Symbol(s) = head {
+            match &*s.name() {
+                "quote" => return,
+                "set!" => {
+                    if let Some(Value::Symbol(target)) = rest.first() {
+                        self.set_targets.insert(*target);
+                    }
+                    self.walk_all(&rest.rest(), depth);
+                    return;
+                }
+                "lambda" => {
+                    self.walk_all(&rest.rest(), depth + 1);
+                    return;
+                }
+                "define" => {
+                    match rest.first() {
+                        Some(Value::Symbol(name)) => {
+                            self.define_name(*name, depth);
+                            self.walk_all(&rest.rest(), depth);
+                        }
+                        Some(Value::List(signature)) => {
+                            if let Some(Value::Symbol(name)) = signature.first() {
+                                self.define_name(*name, depth);
+                            }
+                            self.walk_all(&rest.rest(), depth + 1);
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+                "let" | "let*" => {
+                    if let Some(Value::Symbol(name)) = rest.first() {
+                        self.define_name(*name, depth);
+                        let after = rest.rest();
+                        if let Some(bindings) = after.first() {
+                            self.walk_bindings(bindings, depth);
+                        }
+                        self.walk_all(&after.rest(), depth + 1);
+                        return;
+                    }
+                    if let Some(bindings) = rest.first() {
+                        self.walk_bindings(bindings, depth);
+                    }
+                    self.walk_all(&rest.rest(), depth);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        self.walk(head, depth);
+        self.walk_all(&rest, depth);
+    }
+}
+
 fn parse_bindings(form: &str, bindings: &Value) -> Result<Vec<(Symbol, Value)>, Error> {
     let Value::List(items) = bindings else {
         return Err(syntax_error(form, "expected a list of bindings"));
@@ -107,7 +219,9 @@ impl<'a> Compiler<'a> {
     }
 
     pub fn compile_toplevel(mut self, form: &Value) -> Result<Proto, Error> {
-        self.functions.push(FunctionState::new(None));
+        let mut f = FunctionState::new(None);
+        f.boxed_names = scan_boxed(std::iter::once(form));
+        self.functions.push(f);
         self.compile(form, true)?;
         Ok(self.functions.pop().unwrap().proto)
     }
@@ -281,6 +395,7 @@ impl<'a> Compiler<'a> {
         let mut f = FunctionState::new(name);
         f.proto.params = names.len() - rest as usize;
         f.proto.rest = rest;
+        f.boxed_names = scan_boxed(body.iter());
         for (i, &name) in names.iter().enumerate() {
             let boxed = f.boxed_names.contains(&name);
             if boxed {
@@ -300,11 +415,89 @@ impl<'a> Compiler<'a> {
     }
 
     fn compile_body(&mut self, body: &List, tail: bool) -> Result<(), Error> {
-        self.compile_sequence(body, tail)
+        let mut defined: Vec<Symbol> = Vec::new();
+        for form in body.iter() {
+            if let Some(name) = self.internal_define_name(form) {
+                if !defined.contains(&name) {
+                    defined.push(name);
+                }
+            }
+        }
+        if defined.is_empty() {
+            return self.compile_sequence(body, tail);
+        }
+        let locals_before = self.current().locals.len();
+        for &name in &defined {
+            let slot = self.depth();
+            self.emit(Op::Nil);
+            let boxed = self.current().boxed_names.contains(&name);
+            if boxed {
+                self.emit(Op::MakeCell);
+            }
+            self.current().locals.push(Local { name, slot, boxed });
+        }
+        self.compile_sequence(body, tail)?;
+        if !tail {
+            self.emit(Op::PopUnder(defined.len() as u32));
+        }
+        self.current().locals.truncate(locals_before);
+        Ok(())
+    }
+
+    fn internal_define_name(&mut self, form: &Value) -> Option<Symbol> {
+        let Value::List(l) = form else { return None };
+        if &*self.is_special(l.first()?)?.name() != "define" {
+            return None;
+        }
+        let rest = l.rest();
+        match rest.first()? {
+            Value::Symbol(name) => Some(*name),
+            Value::List(signature) => match signature.first()? {
+                Value::Symbol(name) => Some(*name),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn compile_named_let(&mut self, name: Symbol, args: &List, tail: bool) -> Result<(), Error> {
+        let Some(bindings) = args.first() else {
+            return Err(syntax_error("let", "expected bindings and a body"));
+        };
+        let body = args.rest();
+        if body.is_empty() {
+            return Err(syntax_error("let", "expected a body"));
+        }
+        let bindings = parse_bindings("let", bindings)?;
+        let slot = self.depth();
+        self.emit(Op::Nil);
+        let boxed = self.current().boxed_names.contains(&name);
+        if boxed {
+            self.emit(Op::MakeCell);
+        }
+        self.current().locals.push(Local { name, slot, boxed });
+        let params = Value::list(bindings.iter().map(|(n, _)| Value::Symbol(*n)));
+        self.compile_lambda(&params, &body, Some(name))?;
+        self.emit(if boxed { Op::SetLocalCell(slot as u32) } else { Op::SetLocal(slot as u32) });
+        let local = self.current().locals.pop().unwrap();
+        for (_, init) in &bindings {
+            self.compile(init, false)?;
+        }
+        self.current().locals.push(local);
+        let argc = bindings.len() as u32;
+        self.emit(if tail { Op::TailCall(argc) } else { Op::Call(argc) });
+        if !tail {
+            self.emit(Op::PopUnder(1));
+        }
+        self.current().locals.pop();
+        Ok(())
     }
 
     fn compile_let(&mut self, args: &List, tail: bool, sequential: bool) -> Result<(), Error> {
         let form = if sequential { "let*" } else { "let" };
+        if let (Some(Value::Symbol(name)), false) = (args.first(), sequential) {
+            return self.compile_named_let(*name, &args.rest(), tail);
+        }
         let Some(bindings) = args.first() else {
             return Err(syntax_error(form, "expected bindings and a body"));
         };
@@ -369,9 +562,6 @@ impl<'a> Compiler<'a> {
             return Err(syntax_error("define", "expected a name"));
         };
         let body = args.rest();
-        if self.functions.len() > 1 {
-            return Err(syntax_error("define", "internal define is not supported here"));
-        }
         let name = match target {
             Value::Symbol(name) => {
                 if body.len() > 1 {
@@ -397,8 +587,23 @@ impl<'a> Compiler<'a> {
             }
             other => return Err(syntax_error("define", &format!("cannot define {other}"))),
         };
-        let slot = self.globals.slot(name) as u32;
-        self.emit(Op::DefineGlobal(slot));
+        let top = self.functions.len() - 1;
+        let local = self.functions[top].locals.iter().rev().find(|l| l.name == name);
+        match local.map(|l| (l.slot as u32, l.boxed)) {
+            Some((slot, false)) => self.emit(Op::SetLocal(slot)),
+            Some((slot, true)) => self.emit(Op::SetLocalCell(slot)),
+            None if top == 0 => {
+                let slot = self.globals.slot(name) as u32;
+                self.emit(Op::DefineGlobal(slot));
+                self.finish_tail(tail);
+                return Ok(());
+            }
+            None => {
+                return Err(syntax_error("define", "only allowed at the top level or at the start of a body"));
+            }
+        }
+        self.emit(Op::Pop);
+        self.emit_constant(&Value::Symbol(name));
         self.finish_tail(tail);
         Ok(())
     }

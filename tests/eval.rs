@@ -346,6 +346,48 @@ fn let_syntax_errors() {
 }
 
 #[test]
+fn internal_defines_are_local_to_the_body() {
+    assert_eq!(eval("(define (f) (define x 2) (* x 3)) (f)"), "6");
+    assert_eq!(eval("(define (f) (define x 2) x) (f) x"), "error: x is not defined");
+    assert_eq!(eval("(define (f) (define (sq x) (* x x)) (sq 5)) (f)"), "25");
+    assert_eq!(eval("(let ((a 1)) (define b (+ a 1)) (* a b))"), "2");
+    assert_eq!(eval("(define (f) (define x 1) (define y (+ x 1)) [x y]) (f)"), "[1 2]");
+}
+
+#[test]
+fn internal_defines_can_refer_to_each_other() {
+    let src = "(define (f n) (define (ev? n) (if (= n 0) true (od? (- n 1)))) (define (od? n) (if (= n 0) false (ev? (- n 1)))) (ev? n)) (f 10)";
+    assert_eq!(eval(src), "true");
+    assert_eq!(eval("(define (f) (define (g) (h)) (define (h) 42) (g)) (f)"), "42");
+    assert_eq!(eval("(define (f) (define (loop i) (if (= i 3) 'done (loop (+ i 1)))) (loop 0)) (f)"), "done");
+}
+
+#[test]
+fn set_mutates_locals_and_captured_variables() {
+    assert_eq!(eval("(define (f) (define x 1) (set! x (+ x 1)) x) (f)"), "2");
+    assert_eq!(eval("(let ((x 1)) (set! x 5) x)"), "5");
+    let counter = "(define (counter) (let ((n 0)) (lambda () (set! n (+ n 1)) n)))";
+    assert_eq!(eval(&format!("{counter} (define c (counter)) (c) (c) (c)")), "3");
+    assert_eq!(eval(&format!("{counter} (define a (counter)) (define b (counter)) (a) (a) (b)")), "1");
+    assert_eq!(eval("(define (f x) (lambda () (set! x (* x 2)) x)) (define g (f 3)) (g) (g)"), "12");
+    assert_eq!(eval("(define (make) (define v 0) (define (inc!) (set! v (+ v 1))) (inc!) (inc!) v) (make)"), "2");
+    assert_eq!(eval("(let ((n 0)) (define (bump!) (set! n (+ n 1))) (bump!) (bump!) n)"), "2");
+}
+
+#[test]
+fn named_let_loops() {
+    assert_eq!(eval("(let loop ((i 0) (acc 0)) (if (= i 5) acc (loop (+ i 1) (+ acc i))))"), "10");
+    assert_eq!(eval_with_frame_limit("(let loop ((i 0)) (if (= i 10000) 'done (loop (+ i 1))))", 100), "done");
+    assert_eq!(eval("(define (sum-to n) (let loop ((i n) (acc 0)) (if (= i 0) acc (loop (- i 1) (+ acc i))))) (sum-to 100)"), "5050");
+    assert_eq!(eval("(+ 1 (let loop ((i 0)) (if (< i 3) (loop (+ i 1)) i)))"), "4");
+}
+
+#[test]
+fn define_in_a_nested_expression_is_an_error() {
+    assert!(eval("(define (f) (if true (define x 1)) x) (f)").starts_with("error:"));
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));
