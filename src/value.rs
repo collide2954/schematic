@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use crate::list::List;
 use crate::map::Map;
+use crate::set::Set;
 use crate::symbol::Symbol;
 use crate::vector::Vector;
 
@@ -18,6 +19,7 @@ pub enum Value {
     List(List),
     Vector(Rc<Vector>),
     Map(Rc<Map>),
+    Set(Rc<Set>),
 }
 
 impl Value {
@@ -31,6 +33,10 @@ impl Value {
 
     pub fn map(pairs: impl IntoIterator<Item = (Value, Value)>) -> Value {
         Value::Map(Rc::new(pairs.into_iter().collect()))
+    }
+
+    pub fn set(items: impl IntoIterator<Item = Value>) -> Value {
+        Value::Set(Rc::new(items.into_iter().collect()))
     }
 
     pub fn symbol(name: &str) -> Value {
@@ -92,6 +98,7 @@ const TAG_KEYWORD: u64 = 0x06 << 56;
 const TAG_LIST: u64 = 0x07;
 const TAG_VECTOR: u64 = 0x08;
 const TAG_MAP: u64 = 0x09;
+const TAG_SET: u64 = 0x0a;
 
 impl Value {
     pub fn hash_code(&self) -> u64 {
@@ -115,6 +122,10 @@ impl Value {
                     .fold(0u64, |acc, (k, v)| acc.wrapping_add(mix(k.hash_code() ^ mix(v.hash_code()))));
                 mix(TAG_MAP ^ sum)
             }
+            Value::Set(s) => {
+                let sum = s.iter().fold(0u64, |acc, item| acc.wrapping_add(mix(item.hash_code())));
+                mix(TAG_SET ^ sum)
+            }
         }
     }
 }
@@ -134,6 +145,7 @@ impl PartialEq for Value {
             (List(a), List(b)) => a == b,
             (Vector(a), Vector(b)) => Rc::ptr_eq(a, b) || a == b,
             (Map(a), Map(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Set(a), Set(b)) => Rc::ptr_eq(a, b) || a == b,
             _ => false,
         }
     }
@@ -188,6 +200,7 @@ impl fmt::Display for Value {
                 }
                 f.write_str("}")
             }
+            Value::Set(s) => write_seq(f, "#{", s.iter(), "}"),
         }
     }
 }
