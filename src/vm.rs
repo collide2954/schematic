@@ -4,7 +4,8 @@ use std::fmt;
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::bytecode::{Op, Proto};
+use crate::builtins::math;
+use crate::bytecode::{Intrinsic, Op, Proto};
 use crate::error::Error;
 use crate::list::List;
 use crate::macros::Macro;
@@ -59,6 +60,7 @@ pub struct Native {
     pub name: &'static str,
     pub arity: Arity,
     pub func: NativeFn,
+    pub intrinsic: Option<Intrinsic>,
 }
 
 impl fmt::Debug for Native {
@@ -283,13 +285,29 @@ impl Vm {
     }
 
     fn run(&mut self, stop_depth: usize) -> Result<Value, Error> {
+        let mut frame = self.frames.len() - 1;
+        let mut closure = self.frames[frame].closure.clone();
+        let mut ip = self.frames[frame].ip;
+        let mut base = self.frames[frame].base;
+        macro_rules! reload {
+            () => {{
+                frame = self.frames.len() - 1;
+                closure = self.frames[frame].closure.clone();
+                ip = self.frames[frame].ip;
+                base = self.frames[frame].base;
+            }};
+        }
         macro_rules! throw {
-            ($err:expr) => {
+            ($err:expr) => {{
+                self.frames[frame].ip = ip;
                 match self.unwind($err, stop_depth) {
-                    Ok(()) => continue,
+                    Ok(()) => {
+                        reload!();
+                        continue;
+                    }
                     Err(e) => return Err(e),
                 }
-            };
+            }};
         }
         macro_rules! tri {
             ($expr:expr) => {
@@ -299,15 +317,49 @@ impl Vm {
                 }
             };
         }
+        macro_rules! finish_return {
+            () => {{
+                let result = self.pop();
+                let done = self.frames.pop().expect("no frame");
+                self.stack.truncate(done.base - 1);
+                if self.frames.len() == stop_depth {
+                    return Ok(result);
+                }
+                self.stack.push(result);
+                reload!();
+            }};
+        }
         loop {
-            let frame = self.frames.last_mut().expect("no frame");
-            let op = frame.closure.proto.code[frame.ip];
-            frame.ip += 1;
-            let base = frame.base;
+            let op = closure.proto.code[ip];
+            ip += 1;
             match op {
                 Op::Const(i) => {
-                    let v = self.frames.last().unwrap().closure.proto.consts[i as usize].clone();
+                    let v = closure.proto.consts[i as usize].clone();
                     self.stack.push(v);
+                }
+                Op::Binary(kind) => {
+                    let len = self.stack.len();
+                    let fast = match (kind, &self.stack[len - 2], &self.stack[len - 1]) {
+                        (Intrinsic::Add, Value::Int(a), Value::Int(b)) => a.checked_add(*b).map(Value::Int),
+                        (Intrinsic::Sub, Value::Int(a), Value::Int(b)) => a.checked_sub(*b).map(Value::Int),
+                        (Intrinsic::Mul, Value::Int(a), Value::Int(b)) => a.checked_mul(*b).map(Value::Int),
+                        (Intrinsic::Lt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a < b)),
+                        (Intrinsic::Le, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a <= b)),
+                        (Intrinsic::Gt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a > b)),
+                        (Intrinsic::Ge, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a >= b)),
+                        (Intrinsic::NumEq, a, b) => Some(Value::Bool(a == b)),
+                        _ => None,
+                    };
+                    let result = match fast {
+                        Some(v) => v,
+                        None => tri!(math::binary(kind, &self.stack[len - 2], &self.stack[len - 1])),
+                    };
+                    self.stack.truncate(len - 2);
+                    self.stack.push(result);
+                }
+                Op::Not => {
+                    let v = self.pop();
+                    self.stack.push(Value::Bool(!v.is_truthy()));
                 }
                 Op::Nil => self.stack.push(Value::Nil),
                 Op::True => self.stack.push(Value::Bool(true)),
@@ -338,19 +390,16 @@ impl Vm {
                     *Vm::cell(&self.stack[base + i as usize]).borrow_mut() = v;
                 }
                 Op::GetUpvalue(i) => {
-                    let v = self.frames.last().unwrap().closure.upvalues[i as usize].clone();
+                    let v = closure.upvalues[i as usize].clone();
                     self.stack.push(v);
                 }
                 Op::GetUpvalueCell(i) => {
-                    let v = Vm::cell(&self.frames.last().unwrap().closure.upvalues[i as usize])
-                        .borrow()
-                        .clone();
+                    let v = Vm::cell(&closure.upvalues[i as usize]).borrow().clone();
                     self.stack.push(v);
                 }
                 Op::SetUpvalueCell(i) => {
                     let v = self.top().clone();
-                    *Vm::cell(&self.frames.last().unwrap().closure.upvalues[i as usize])
-                        .borrow_mut() = v;
+                    *Vm::cell(&closure.upvalues[i as usize]).borrow_mut() = v;
                 }
                 Op::GetGlobal(i) => match self.globals.get(i as usize) {
                     Some(v) => {
@@ -375,37 +424,45 @@ impl Vm {
                     let v = self.pop();
                     self.stack.push(Value::Cell(Rc::new(RefCell::new(v))));
                 }
-                Op::Jump(target) => self.frames.last_mut().unwrap().ip = target as usize,
+                Op::Jump(target) => ip = target as usize,
                 Op::JumpIfFalse(target) => {
                     if !self.pop().is_truthy() {
-                        self.frames.last_mut().unwrap().ip = target as usize;
+                        ip = target as usize;
                     }
                 }
                 Op::JumpIfTrue(target) => {
                     if self.pop().is_truthy() {
-                        self.frames.last_mut().unwrap().ip = target as usize;
+                        ip = target as usize;
                     }
                 }
                 Op::JumpIfFalseOrPop(target) => {
                     if self.top().is_truthy() {
                         self.pop();
                     } else {
-                        self.frames.last_mut().unwrap().ip = target as usize;
+                        ip = target as usize;
                     }
                 }
                 Op::JumpIfTrueOrPop(target) => {
                     if self.top().is_truthy() {
-                        self.frames.last_mut().unwrap().ip = target as usize;
+                        ip = target as usize;
                     } else {
                         self.pop();
                     }
                 }
-                Op::Call(argc) => tri!(self.call(argc as usize)),
+                Op::Call(argc) => {
+                    self.frames[frame].ip = ip;
+                    let depth = self.frames.len();
+                    tri!(self.call(argc as usize));
+                    if self.frames.len() != depth {
+                        reload!();
+                    }
+                }
                 Op::TailCall(argc) => {
-                    if !tri!(self.tail_call(argc as usize)) {
-                        if let Some(result) = self.do_return(stop_depth) {
-                            return Ok(result);
-                        }
+                    self.frames[frame].ip = ip;
+                    if tri!(self.tail_call(argc as usize)) {
+                        reload!();
+                    } else {
+                        finish_return!();
                     }
                 }
                 Op::PushCatch(target) => {
@@ -440,18 +497,14 @@ impl Vm {
                         self.stack[base + i] = v;
                     }
                     self.stack.truncate(base + n);
-                    let proto = self.frames.last().unwrap().closure.proto.clone();
+                    let proto = closure.proto.clone();
                     self.box_params(&proto, base);
-                    self.frames.last_mut().unwrap().ip = 0;
+                    ip = 0;
                 }
-                Op::Return => {
-                    if let Some(result) = self.do_return(stop_depth) {
-                        return Ok(result);
-                    }
-                }
+                Op::Return => finish_return!(),
                 Op::Closure(i) => {
-                    let closure = self.make_closure(i as usize, base);
-                    self.stack.push(Value::Closure(Rc::new(closure)));
+                    let made = self.make_closure(&closure, i as usize, base);
+                    self.stack.push(Value::Closure(Rc::new(made)));
                 }
                 Op::MakeVector(n) => {
                     let v = Value::vector(self.drain_top(n as usize));
@@ -478,19 +531,7 @@ impl Vm {
         Error::new("unbound", format!("{} is not defined", self.globals.name(slot)))
     }
 
-    fn do_return(&mut self, stop_depth: usize) -> Option<Value> {
-        let result = self.pop();
-        let frame = self.frames.pop().expect("no frame");
-        self.stack.truncate(frame.base - 1);
-        if self.frames.len() == stop_depth {
-            return Some(result);
-        }
-        self.stack.push(result);
-        None
-    }
-
-    fn make_closure(&self, index: usize, base: usize) -> Closure {
-        let parent = &self.frames.last().unwrap().closure;
+    fn make_closure(&self, parent: &Closure, index: usize, base: usize) -> Closure {
         let proto = parent.proto.protos[index].clone();
         let upvalues = proto
             .captures

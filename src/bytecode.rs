@@ -4,8 +4,23 @@ use crate::symbol::Symbol;
 use crate::value::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Intrinsic {
+    Add,
+    Sub,
+    Mul,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    NumEq,
+    Not,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
     Const(u32),
+    Binary(Intrinsic),
+    Not,
     Nil,
     True,
     False,
@@ -49,10 +64,10 @@ impl Op {
             Const(_) | Nil | True | False | GetLocal(_) | GetLocalCell(_) | GetUpvalue(_)
             | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) | PushEscape(_) => 1,
             Pop | JumpIfFalse(_) | JumpIfTrue(_) | JumpIfFalseOrPop(_) | JumpIfTrueOrPop(_) | Return
-            | Rethrow => -1,
+            | Rethrow | Binary(_) => -1,
             PopUnder(n) | Call(n) | TailCall(n) | Recur(n) => -(n as isize),
             SetLocal(_) | SetLocalCell(_) | SetUpvalueCell(_) | SetGlobal(_) | DefineGlobal(_)
-            | MakeCell | Jump(_) | PushCatch(_) | PushFinally(_) | PopHandler => 0,
+            | MakeCell | Jump(_) | PushCatch(_) | PushFinally(_) | PopHandler | Not => 0,
             MakeVector(n) | MakeSet(n) => 1 - n as isize,
             MakeMap(n) => 1 - 2 * n as isize,
         }

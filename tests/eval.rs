@@ -221,6 +221,17 @@ fn arithmetic_type_errors_name_the_offender() {
 }
 
 #[test]
+fn arithmetic_respects_shadowing_and_redefinition() {
+    assert_eq!(eval("(let ((+ -)) (+ 5 3))"), "2");
+    assert_eq!(eval("(define (f + a b) (+ a b)) (f * 3 4)"), "12");
+    assert_eq!(eval("(define (f) (define < >) (< 1 2)) (f)"), "false");
+    assert_eq!(eval("(define + -) (+ 5 3)"), "2");
+    assert_eq!(eval("(define (plus a b) (+ a b)) (define + -) (plus 5 3)"), "8");
+    assert_eq!(eval("(map + [1 2] [3 4])"), "[4 6]");
+    assert_eq!(eval("[(not 1) (= 1 1 1) (< 1 2 3) (+ 1 2 3)]"), "[false true true 6]");
+}
+
+#[test]
 fn builtins_are_values() {
     assert_eq!(eval("+"), "#<builtin +>");
     assert_eq!(eval("(define plus +) (plus 1 2)"), "3");

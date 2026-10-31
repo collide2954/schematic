@@ -1,24 +1,60 @@
 use std::cmp::Ordering;
 
-use super::native;
+use super::{native, native_intrinsic};
+use crate::bytecode::Intrinsic;
 use crate::error::Error;
 use crate::value::Value;
 use crate::vm::{Arity, Globals};
 
+fn lt(args: &[Value]) -> Result<Value, Error> {
+    compare("<", args, |o| o == Ordering::Less)
+}
+
+fn gt(args: &[Value]) -> Result<Value, Error> {
+    compare(">", args, |o| o == Ordering::Greater)
+}
+
+fn le(args: &[Value]) -> Result<Value, Error> {
+    compare("<=", args, |o| o != Ordering::Greater)
+}
+
+fn ge(args: &[Value]) -> Result<Value, Error> {
+    compare(">=", args, |o| o != Ordering::Less)
+}
+
+fn not(args: &[Value]) -> Result<Value, Error> {
+    Ok(Value::Bool(!args[0].is_truthy()))
+}
+
+pub fn binary(kind: Intrinsic, a: &Value, b: &Value) -> Result<Value, Error> {
+    let args = [a.clone(), b.clone()];
+    match kind {
+        Intrinsic::Add => add(&args),
+        Intrinsic::Sub => sub(&args),
+        Intrinsic::Mul => mul(&args),
+        Intrinsic::Lt => lt(&args),
+        Intrinsic::Le => le(&args),
+        Intrinsic::Gt => gt(&args),
+        Intrinsic::Ge => ge(&args),
+        Intrinsic::NumEq => equal(&args),
+        Intrinsic::Not => not(&args[..1]),
+    }
+}
+
 pub fn install(globals: &mut Globals) {
-    native(globals, "+", Arity::AtLeast(0), add);
-    native(globals, "-", Arity::AtLeast(1), sub);
-    native(globals, "*", Arity::AtLeast(0), mul);
+    native_intrinsic(globals, "+", Arity::AtLeast(0), add, Intrinsic::Add);
+    native_intrinsic(globals, "-", Arity::AtLeast(1), sub, Intrinsic::Sub);
+    native_intrinsic(globals, "*", Arity::AtLeast(0), mul, Intrinsic::Mul);
     native(globals, "/", Arity::AtLeast(1), div);
     native(globals, "quot", Arity::Exact(2), quot);
     native(globals, "rem", Arity::Exact(2), rem);
     native(globals, "mod", Arity::Exact(2), modulo);
-    native(globals, "<", Arity::AtLeast(1), |args| compare("<", args, |o| o == Ordering::Less));
-    native(globals, ">", Arity::AtLeast(1), |args| compare(">", args, |o| o == Ordering::Greater));
-    native(globals, "<=", Arity::AtLeast(1), |args| compare("<=", args, |o| o != Ordering::Greater));
-    native(globals, ">=", Arity::AtLeast(1), |args| compare(">=", args, |o| o != Ordering::Less));
-    native(globals, "=", Arity::AtLeast(1), equal);
-    native(globals, "not", Arity::Exact(1), |args| Ok(Value::Bool(!args[0].is_truthy())));
+    native_intrinsic(globals, "<", Arity::AtLeast(1), lt, Intrinsic::Lt);
+    native_intrinsic(globals, ">", Arity::AtLeast(1), gt, Intrinsic::Gt);
+    native_intrinsic(globals, "<=", Arity::AtLeast(1), le, Intrinsic::Le);
+    native_intrinsic(globals, ">=", Arity::AtLeast(1), ge, Intrinsic::Ge);
+    native_intrinsic(globals, "=", Arity::AtLeast(1), equal, Intrinsic::NumEq);
+    native_intrinsic(globals, "not", Arity::Exact(1), not, Intrinsic::Not);
     native(globals, "max", Arity::AtLeast(1), |args| extremum("max", args, Ordering::Greater));
     native(globals, "min", Arity::AtLeast(1), |args| extremum("min", args, Ordering::Less));
     native(globals, "abs", Arity::Exact(1), abs);

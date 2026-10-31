@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use crate::bytecode::{Capture, Op, Proto};
+use crate::bytecode::{Capture, Intrinsic, Op, Proto};
 use crate::error::Error;
 use crate::expander::Expander;
 use crate::list::List;
@@ -1087,14 +1087,35 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn compile_call(&mut self, list: &List, tail: bool) -> Result<(), Error> {
-        let mut argc = 0u32;
-        for (i, item) in list.iter().enumerate() {
-            self.compile(item, false)?;
-            if i > 0 {
-                argc += 1;
-            }
+    fn intrinsic_op(&mut self, head: &Value, argc: usize) -> Option<Op> {
+        let Value::Symbol(s) = head else { return None };
+        let top = self.functions.len() - 1;
+        if self.resolve_in(top, *s).is_some() {
+            return None;
         }
+        let Some(Value::Native(native)) = self.globals.lookup(s.root()) else { return None };
+        match (native.intrinsic?, argc) {
+            (Intrinsic::Not, 1) => Some(Op::Not),
+            (Intrinsic::Not, _) => None,
+            (kind, 2) => Some(Op::Binary(kind)),
+            _ => None,
+        }
+    }
+
+    fn compile_call(&mut self, list: &List, tail: bool) -> Result<(), Error> {
+        let argc = list.len() - 1;
+        if let Some(op) = self.intrinsic_op(list.first().unwrap(), argc) {
+            for arg in list.rest().iter() {
+                self.compile(arg, false)?;
+            }
+            self.emit(op);
+            self.finish_tail(tail);
+            return Ok(());
+        }
+        for item in list.iter() {
+            self.compile(item, false)?;
+        }
+        let argc = argc as u32;
         self.emit(if tail { Op::TailCall(argc) } else { Op::Call(argc) });
         Ok(())
     }
