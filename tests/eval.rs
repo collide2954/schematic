@@ -694,6 +694,54 @@ fn map_queries_and_combinations() {
 }
 
 #[test]
+fn apply_spreads_a_collection_as_arguments() {
+    assert_eq!(eval("(apply + [1 2 3])"), "6");
+    assert_eq!(eval("(apply + 1 2 [3 4])"), "10");
+    assert_eq!(eval("(apply list '(1 2))"), "(1 2)");
+    assert_eq!(eval("(apply + nil)"), "0");
+    assert_eq!(eval("(apply (lambda (a b) (- a b)) [10 3])"), "7");
+    assert_eq!(eval("(apply + 1)"), "error: apply expects a collection as its last argument, got 1");
+}
+
+#[test]
+fn map_filter_and_reduce() {
+    assert_eq!(eval("(map (lambda (x) (* x 2)) [1 2 3])"), "[2 4 6]");
+    assert_eq!(eval("(map (lambda (x) (* x 2)) '(1 2 3))"), "(2 4 6)");
+    assert_eq!(eval("(map + [1 2] [10 20])"), "[11 22]");
+    assert_eq!(eval("(map + [1 2 3] [10 20])"), "[11 22]");
+    assert_eq!(eval("(map first {:a 1})"), "[:a]");
+    assert_eq!(eval("(map (lambda (x) x) nil)"), "[]");
+    assert_eq!(eval("(filter (lambda (x) (> x 1)) [1 2 3])"), "[2 3]");
+    assert_eq!(eval("(filter integer? '(1 \"a\" 2))"), "(1 2)");
+    assert_eq!(eval("(remove integer? [1 \"a\" 2])"), "[\"a\"]");
+    assert_eq!(eval("(reduce + 0 [1 2 3])"), "6");
+    assert_eq!(eval("(reduce + [1 2 3])"), "6");
+    assert_eq!(eval("(reduce + [])"), "0");
+    assert_eq!(eval("(reduce (lambda (acc x) (conj acc x)) [] '(1 2))"), "[1 2]");
+    assert_eq!(eval("(reduce + 5 nil)"), "5");
+    assert_eq!(eval("(define (inc x) (+ x 1)) (map inc (map inc [1]))"), "[3]");
+}
+
+#[test]
+fn for_each_some_and_every() {
+    assert_eq!(eval("(define total 0) (for-each (lambda (x) (set! total (+ total x))) [1 2 3]) total"), "6");
+    assert_eq!(eval("(for-each (lambda (x) x) [1])"), "nil");
+    assert_eq!(eval("(some (lambda (x) (and (> x 1) x)) [1 2 3])"), "2");
+    assert_eq!(eval("(some (lambda (x) (> x 5)) [1 2])"), "nil");
+    assert_eq!(eval("[(every? integer? [1 2]) (every? integer? [1 \"a\"]) (every? integer? [])]"), "[true false true]");
+}
+
+#[test]
+fn errors_and_escapes_cross_native_callbacks_cleanly() {
+    assert_eq!(eval("(try (map (lambda (x) (error \"bad\")) [1]) (catch e (:message e)))"), "\"bad\"");
+    assert_eq!(eval("(call/ec (lambda (k) (map (lambda (x) (k x)) [7 8])))"), "7");
+    assert_eq!(eval("(define (f) (map (lambda (x) (raise x)) [1])) (try (f) (catch e e))"), "1");
+    assert_eq!(eval("(map 5 [1])"), "error: 5 is not a function");
+    assert_eq!(eval("(try (map (lambda (x) (error \"x\")) [1]) (catch e nil)) (+ 1 2)"), "3");
+    assert_eq!(eval("(define (f) (try (raise 1) (catch e e))) (map (lambda (x) (f)) [1 2])"), "[1 1]");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

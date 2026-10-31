@@ -15,7 +15,14 @@ pub struct Closure {
     pub upvalues: Vec<Value>,
 }
 
-pub type NativeFn = fn(&[Value]) -> Result<Value, Error>;
+pub type PureFn = fn(&[Value]) -> Result<Value, Error>;
+pub type VmFn = fn(&mut Vm, Vec<Value>) -> Result<Value, Error>;
+
+#[derive(Clone, Copy)]
+pub enum NativeFn {
+    Pure(PureFn),
+    Vm(VmFn),
+}
 
 #[derive(Clone, Copy, Debug)]
 pub enum Arity {
@@ -552,7 +559,33 @@ impl Vm {
                 format!("{} expects {}, got {argc}", native.name, native.arity),
             ));
         }
-        (native.func)(&self.stack[start..start + argc])
+        match native.func {
+            NativeFn::Pure(f) => f(&self.stack[start..start + argc]),
+            NativeFn::Vm(f) => {
+                let args: Vec<Value> = self.stack.drain(start..start + argc).collect();
+                f(self, args)
+            }
+        }
+    }
+
+    pub fn call_value(&mut self, f: &Value, args: &[Value]) -> Result<Value, Error> {
+        let depth = self.frames.len();
+        let base = self.stack.len();
+        self.stack.push(f.clone());
+        self.stack.extend_from_slice(args);
+        let result = match self.call(args.len()) {
+            Ok(()) if self.frames.len() > depth => self.run(depth),
+            Ok(()) => Ok(self.pop()),
+            Err(e) => Err(e),
+        };
+        if result.is_err() {
+            self.frames.truncate(depth);
+            self.stack.truncate(base);
+            while self.handlers.last().is_some_and(|h| h.frame_depth > depth) {
+                self.handlers.pop();
+            }
+        }
+        result
     }
 
     fn tail_call(&mut self, argc: usize) -> Result<bool, Error> {
