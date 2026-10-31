@@ -19,7 +19,9 @@ pub enum Intrinsic {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
     Const(u32),
+    SmallInt(i32),
     Binary(Intrinsic),
+    JumpUnless(Intrinsic, u32),
     Not,
     Nil,
     True,
@@ -62,8 +64,9 @@ impl Op {
     pub fn stack_effect(self) -> isize {
         use Op::*;
         match self {
-            Const(_) | Nil | True | False | GetLocal(_) | TakeLocal(_) | GetLocalCell(_) | GetUpvalue(_)
-            | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) | PushEscape(_) => 1,
+            Const(_) | SmallInt(_) | Nil | True | False | GetLocal(_) | TakeLocal(_) | GetLocalCell(_)
+            | GetUpvalue(_) | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) | PushEscape(_) => 1,
+            JumpUnless(..) => -2,
             Pop | JumpIfFalse(_) | JumpIfTrue(_) | JumpIfFalseOrPop(_) | JumpIfTrueOrPop(_) | Return
             | Rethrow | Binary(_) => -1,
             PopUnder(n) | Call(n) | TailCall(n) | Recur(n) => -(n as isize),

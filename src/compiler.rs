@@ -373,6 +373,7 @@ impl<'a> Compiler<'a> {
             Value::Nil => self.emit(Op::Nil),
             Value::Bool(true) => self.emit(Op::True),
             Value::Bool(false) => self.emit(Op::False),
+            Value::Int(i) if i32::try_from(*i).is_ok() => self.emit(Op::SmallInt(*i as i32)),
             other => {
                 let index = self.constant(other.clone());
                 self.emit(Op::Const(index));
@@ -391,12 +392,29 @@ impl<'a> Compiler<'a> {
         self.current().proto.code.len() - 1
     }
 
+    fn emit_jump_if_false(&mut self) -> usize {
+        let fused = match self.current().proto.code.last() {
+            Some(Op::Binary(kind)) if !matches!(kind, Intrinsic::Add | Intrinsic::Sub | Intrinsic::Mul) => Some(*kind),
+            _ => None,
+        };
+        match fused {
+            Some(kind) => {
+                let f = self.current();
+                f.proto.code.pop();
+                f.depth += 1;
+                self.emit_jump(Op::JumpUnless(kind, 0))
+            }
+            None => self.emit_jump(Op::JumpIfFalse(0)),
+        }
+    }
+
     fn patch_jump(&mut self, at: usize) {
         let target = self.current().proto.code.len() as u32;
         let code = &mut self.current().proto.code;
         code[at] = match code[at] {
             Op::Jump(_) => Op::Jump(target),
             Op::JumpIfFalse(_) => Op::JumpIfFalse(target),
+            Op::JumpUnless(kind, _) => Op::JumpUnless(kind, target),
             Op::JumpIfTrue(_) => Op::JumpIfTrue(target),
             Op::JumpIfFalseOrPop(_) => Op::JumpIfFalseOrPop(target),
             Op::JumpIfTrueOrPop(_) => Op::JumpIfTrueOrPop(target),
@@ -953,7 +971,7 @@ impl<'a> Compiler<'a> {
                 keep_jumps.push(self.emit_jump(Op::JumpIfTrueOrPop(0)));
                 continue;
             }
-            let next = self.emit_jump(Op::JumpIfFalse(0));
+            let next = self.emit_jump_if_false();
             self.compile_sequence(&body, tail)?;
             if !tail {
                 end_jumps.push(self.emit_jump(Op::Jump(0)));
@@ -989,7 +1007,7 @@ impl<'a> Compiler<'a> {
         };
         let body = args.rest();
         self.compile(test, false)?;
-        let skip = self.emit_jump(if when { Op::JumpIfFalse(0) } else { Op::JumpIfTrue(0) });
+        let skip = if when { self.emit_jump_if_false() } else { self.emit_jump(Op::JumpIfTrue(0)) };
         let depth = self.depth();
         self.compile_sequence(&body, tail)?;
         let to_end = if tail { None } else { Some(self.emit_jump(Op::Jump(0))) };
@@ -1101,7 +1119,7 @@ impl<'a> Compiler<'a> {
         let then_branch = parts.next().unwrap();
         let else_branch = parts.next();
         self.compile(condition, false)?;
-        let to_else = self.emit_jump(Op::JumpIfFalse(0));
+        let to_else = self.emit_jump_if_false();
         let depth = self.depth();
         self.compile(then_branch, tail)?;
         let to_end = if tail { None } else { Some(self.emit_jump(Op::Jump(0))) };

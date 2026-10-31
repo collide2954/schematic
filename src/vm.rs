@@ -169,6 +169,12 @@ struct Handler {
     target: usize,
 }
 
+enum TailCalled {
+    Same,
+    Other,
+    Returned,
+}
+
 const DEFAULT_FRAME_LIMIT: usize = 1_000_000;
 
 pub struct Vm {
@@ -295,8 +301,10 @@ impl Vm {
         macro_rules! reload {
             () => {{
                 frame = self.frames.len() - 1;
-                closure = self.frames[frame].closure.clone();
-                proto = closure.proto.clone();
+                if !Rc::ptr_eq(&closure, &self.frames[frame].closure) {
+                    closure = self.frames[frame].closure.clone();
+                    proto = closure.proto.clone();
+                }
                 ip = self.frames[frame].ip;
                 base = self.frames[frame].base;
             }};
@@ -340,6 +348,26 @@ impl Vm {
                 Op::Const(i) => {
                     let v = proto.consts[i as usize].clone();
                     self.stack.push(v);
+                }
+                Op::SmallInt(i) => self.stack.push(Value::Int(i as i64)),
+                Op::JumpUnless(kind, target) => {
+                    let len = self.stack.len();
+                    let fast = match (kind, &self.stack[len - 2], &self.stack[len - 1]) {
+                        (Intrinsic::Lt, Value::Int(a), Value::Int(b)) => Some(a < b),
+                        (Intrinsic::Le, Value::Int(a), Value::Int(b)) => Some(a <= b),
+                        (Intrinsic::Gt, Value::Int(a), Value::Int(b)) => Some(a > b),
+                        (Intrinsic::Ge, Value::Int(a), Value::Int(b)) => Some(a >= b),
+                        (Intrinsic::NumEq, a, b) => Some(a == b),
+                        _ => None,
+                    };
+                    let holds = match fast {
+                        Some(b) => b,
+                        None => tri!(math::binary(kind, &self.stack[len - 2], &self.stack[len - 1])).is_truthy(),
+                    };
+                    self.stack.truncate(len - 2);
+                    if !holds {
+                        ip = target as usize;
+                    }
                 }
                 Op::Binary(kind) => {
                     let len = self.stack.len();
@@ -467,10 +495,10 @@ impl Vm {
                 }
                 Op::TailCall(argc) => {
                     self.frames[frame].ip = ip;
-                    if tri!(self.tail_call(argc as usize)) {
-                        reload!();
-                    } else {
-                        finish_return!();
+                    match tri!(self.tail_call(argc as usize)) {
+                        TailCalled::Same => ip = 0,
+                        TailCalled::Other => reload!(),
+                        TailCalled::Returned => finish_return!(),
                     }
                 }
                 Op::PushCatch(target) => {
@@ -665,11 +693,11 @@ impl Vm {
         result
     }
 
-    fn tail_call(&mut self, argc: usize) -> Result<bool, Error> {
+    fn tail_call(&mut self, argc: usize) -> Result<TailCalled, Error> {
         let callee_index = self.stack.len() - argc - 1;
         let Value::Closure(closure) = self.stack[callee_index].clone() else {
             self.call(argc)?;
-            return Ok(false);
+            return Ok(TailCalled::Returned);
         };
         let base = self.frames.last().unwrap().base;
         let dst = base - 1;
@@ -679,8 +707,11 @@ impl Vm {
         self.stack.truncate(dst + argc + 1);
         self.bind_args(&closure.proto, base, argc)?;
         let frame = self.frames.last_mut().unwrap();
-        frame.closure = closure;
         frame.ip = 0;
-        Ok(true)
+        if Rc::ptr_eq(&frame.closure, &closure) {
+            return Ok(TailCalled::Same);
+        }
+        frame.closure = closure;
+        Ok(TailCalled::Other)
     }
 }
