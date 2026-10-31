@@ -287,12 +287,14 @@ impl Vm {
     fn run(&mut self, stop_depth: usize) -> Result<Value, Error> {
         let mut frame = self.frames.len() - 1;
         let mut closure = self.frames[frame].closure.clone();
+        let mut proto = closure.proto.clone();
         let mut ip = self.frames[frame].ip;
         let mut base = self.frames[frame].base;
         macro_rules! reload {
             () => {{
                 frame = self.frames.len() - 1;
                 closure = self.frames[frame].closure.clone();
+                proto = closure.proto.clone();
                 ip = self.frames[frame].ip;
                 base = self.frames[frame].base;
             }};
@@ -330,11 +332,11 @@ impl Vm {
             }};
         }
         loop {
-            let op = closure.proto.code[ip];
+            let op = proto.code[ip];
             ip += 1;
             match op {
                 Op::Const(i) => {
-                    let v = closure.proto.consts[i as usize].clone();
+                    let v = proto.consts[i as usize].clone();
                     self.stack.push(v);
                 }
                 Op::Binary(kind) => {
@@ -497,8 +499,9 @@ impl Vm {
                         self.stack[base + i] = v;
                     }
                     self.stack.truncate(base + n);
-                    let proto = closure.proto.clone();
-                    self.box_params(&proto, base);
+                    if !proto.boxed_params.is_empty() {
+                        self.box_params(&proto, base);
+                    }
                     ip = 0;
                 }
                 Op::Return => finish_return!(),
