@@ -2,6 +2,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::map::Map;
+use crate::set::Set;
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +131,7 @@ impl<'a> Reader<'a> {
             '(' => Value::List(self.read_items(')')?.into_iter().collect()),
             '[' => Value::vector(self.read_items(']')?),
             '{' => self.read_map()?,
+            '#' => self.read_dispatch()?,
             ')' | ']' | '}' => return Err(self.error(format!("unexpected `{c}`"))),
             '\'' => self.read_prefixed("quote")?,
             '`' => self.read_prefixed("quasiquote")?,
@@ -161,6 +163,29 @@ impl<'a> Reader<'a> {
             map.insert_mut(k, v);
         }
         Ok(Value::Map(Rc::new(map)))
+    }
+
+    fn read_dispatch(&mut self) -> Result<Value, ReadError> {
+        match self.peek_second() {
+            Some('{') => {
+                self.bump();
+                self.read_set()
+            }
+            Some(c) => Err(self.error(format!("unknown dispatch `#{c}`"))),
+            None => Err(self.error("unexpected end of input after `#`")),
+        }
+    }
+
+    fn read_set(&mut self) -> Result<Value, ReadError> {
+        let items = self.read_items('}')?;
+        let mut set = Set::new();
+        for item in items {
+            if set.contains(&item) {
+                return Err(self.error(format!("duplicate item {item} in set literal")));
+            }
+            set.insert_mut(item);
+        }
+        Ok(Value::Set(Rc::new(set)))
     }
 
     fn read_prefixed(&mut self, name: &str) -> Result<Value, ReadError> {
@@ -471,6 +496,23 @@ mod tests {
                 Value::map([(Value::keyword("b"), Value::vector([Value::Int(1)]))])
             )])
         );
+    }
+
+    #[test]
+    fn reads_sets() {
+        assert_eq!(
+            read("#{1 :two \"three\"}"),
+            Value::set([Value::Int(1), Value::keyword("two"), Value::string("three")])
+        );
+        assert_eq!(read("#{}"), Value::set([]));
+        assert!(read_str("#{1 1}").is_err());
+        assert!(read_str("#{1").is_err());
+    }
+
+    #[test]
+    fn unknown_dispatch_is_an_error() {
+        assert!(read_str("#x").is_err());
+        assert!(read_str("#").is_err());
     }
 
     #[test]
