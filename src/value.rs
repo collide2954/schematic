@@ -2,6 +2,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::list::List;
+use crate::map::Map;
 use crate::symbol::Symbol;
 use crate::vector::Vector;
 
@@ -16,6 +17,7 @@ pub enum Value {
     Str(Rc<str>),
     List(List),
     Vector(Rc<Vector>),
+    Map(Rc<Map>),
 }
 
 impl Value {
@@ -25,6 +27,10 @@ impl Value {
 
     pub fn vector(items: impl IntoIterator<Item = Value>) -> Value {
         Value::Vector(Rc::new(items.into_iter().collect()))
+    }
+
+    pub fn map(pairs: impl IntoIterator<Item = (Value, Value)>) -> Value {
+        Value::Map(Rc::new(pairs.into_iter().collect()))
     }
 
     pub fn symbol(name: &str) -> Value {
@@ -85,6 +91,7 @@ const TAG_SYMBOL: u64 = 0x05 << 56;
 const TAG_KEYWORD: u64 = 0x06 << 56;
 const TAG_LIST: u64 = 0x07;
 const TAG_VECTOR: u64 = 0x08;
+const TAG_MAP: u64 = 0x09;
 
 impl Value {
     pub fn hash_code(&self) -> u64 {
@@ -102,6 +109,12 @@ impl Value {
             Value::Str(s) => hash_bytes(s.as_bytes()),
             Value::List(l) => hash_ordered(TAG_LIST, l.iter()),
             Value::Vector(v) => hash_ordered(TAG_VECTOR, v.iter()),
+            Value::Map(m) => {
+                let sum = m
+                    .iter()
+                    .fold(0u64, |acc, (k, v)| acc.wrapping_add(mix(k.hash_code() ^ mix(v.hash_code()))));
+                mix(TAG_MAP ^ sum)
+            }
         }
     }
 }
@@ -120,6 +133,7 @@ impl PartialEq for Value {
             (Str(a), Str(b)) => a == b,
             (List(a), List(b)) => a == b,
             (Vector(a), Vector(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Map(a), Map(b)) => Rc::ptr_eq(a, b) || a == b,
             _ => false,
         }
     }
@@ -164,6 +178,16 @@ impl fmt::Display for Value {
             Value::Str(s) => write_string(f, s),
             Value::List(l) => write_seq(f, "(", l.iter(), ")"),
             Value::Vector(v) => write_seq(f, "[", v.iter(), "]"),
+            Value::Map(m) => {
+                f.write_str("{")?;
+                for (i, (k, v)) in m.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{k} {v}")?;
+                }
+                f.write_str("}")
+            }
         }
     }
 }
