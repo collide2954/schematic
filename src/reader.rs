@@ -88,7 +88,7 @@ impl<'a> Reader<'a> {
     fn skip_trivia(&mut self) -> Result<(), ReadError> {
         loop {
             match self.peek() {
-                Some(c) if c.is_whitespace() || c == ',' => {
+                Some(c) if c.is_whitespace() || c == ',' || c == '\u{FEFF}' => {
                     self.bump();
                 }
                 Some(';') => while !matches!(self.bump(), None | Some('\n')) {},
@@ -388,6 +388,11 @@ mod tests {
     #[test]
     fn skips_whitespace_and_commas() {
         assert_eq!(read("  \n\t, 7 "), Value::Int(7));
+    }
+
+    #[test]
+    fn skips_a_byte_order_mark() {
+        assert_eq!(read_all("\u{FEFF}(+ 1 2) 3").unwrap().len(), 2);
     }
 
     #[test]

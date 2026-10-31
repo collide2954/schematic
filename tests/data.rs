@@ -167,6 +167,7 @@ fn csv_text_parses_into_typed_tables_and_back() {
     assert_eq!(eval("(rows (parse-csv \"a;b\\n1;x\" {:sep \";\"}))"), "[{:a 1, :b \"x\"}]");
     assert_eq!(eval("(rows (parse-csv \"a,b\\n\\\"he said \\\"\\\"hi\\\"\\\"\\\",2\"))"), "[{:a \"he said \\\"hi\\\"\", :b 2}]");
     assert_eq!(eval("(nrows (parse-csv \"a,b\"))"), "0");
+    assert_eq!(eval("(columns (parse-csv \"\u{FEFF}a,b\n1,2\"))"), "[:a :b]");
     assert_eq!(eval("(to-csv (table {:name [\"Ada\" \"Cy, Jr\"] :age [36 nil]}))"), "\"name,age\\nAda,36\\n\\\"Cy, Jr\\\",\\n\"");
     assert_eq!(eval("(to-csv (table {:q [\"say \\\"hi\\\"\"]}))"), "\"q\\n\\\"say \\\"\\\"hi\\\"\\\"\\\"\\n\"");
 }

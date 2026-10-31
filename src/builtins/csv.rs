@@ -100,6 +100,7 @@ fn infer(values: &[Option<&str>]) -> Vec<Value> {
 }
 
 fn parse(text: &str, sep: char) -> Result<Value, Error> {
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut records = records(text, sep).into_iter();
     let Some(header) = records.next() else {
         return Ok(Value::Table(Rc::new(Table::default())));
