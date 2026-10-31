@@ -582,6 +582,118 @@ fn escape_outside_its_extent_is_an_error() {
 }
 
 #[test]
+fn first_rest_and_cons_form_the_sequence_protocol() {
+    assert_eq!(eval("(first '(1 2 3))"), "1");
+    assert_eq!(eval("(first [1 2])"), "1");
+    assert_eq!(eval("(first [])"), "nil");
+    assert_eq!(eval("(first nil)"), "nil");
+    assert_eq!(eval("(first {:a 1})"), "[:a 1]");
+    assert_eq!(eval("(rest '(1 2 3))"), "(2 3)");
+    assert_eq!(eval("(rest [1 2 3])"), "(2 3)");
+    assert_eq!(eval("(rest [])"), "()");
+    assert_eq!(eval("(rest nil)"), "()");
+    assert_eq!(eval("(rest {:a 1, :b 2})"), "([:b 2])");
+    assert_eq!(eval("(cons 1 '(2))"), "(1 2)");
+    assert_eq!(eval("(cons 1 nil)"), "(1)");
+    assert_eq!(eval("(cons 1 [2 3])"), "(1 2 3)");
+    assert_eq!(eval("(cons 1 2)"), "error: cons expects a collection, got 2");
+    assert_eq!(eval("(define (sum xs) (if (empty? xs) 0 (+ (first xs) (sum (rest xs))))) (sum [1 2 3 4])"), "10");
+}
+
+#[test]
+fn empty_count_and_last_work_on_every_collection() {
+    assert_eq!(eval("[(empty? []) (empty? '()) (empty? nil) (empty? [1]) (empty? {}) (empty? \"\")]"), "[true true true false true true]");
+    assert_eq!(eval("(empty? 5)"), "error: empty? expects a collection, got 5");
+    assert_eq!(eval("[(count [1 2 3]) (count '(1 2)) (count {:a 1}) (count \"héllo\") (count nil) (count #{1 2})]"), "[3 2 1 5 0 2]");
+    assert_eq!(eval("[(last [1 2 3]) (last '(1 2 3)) (last []) (last nil)]"), "[3 3 nil nil]");
+}
+
+#[test]
+fn nth_indexes_lists_vectors_and_strings() {
+    assert_eq!(eval("(nth [10 20 30] 1)"), "20");
+    assert_eq!(eval("(nth '(10 20 30) 2)"), "30");
+    assert_eq!(eval("(nth \"abc\" 1)"), "\"b\"");
+    assert_eq!(eval("(nth [1] 5)"), "error: index 5 is out of bounds for a vector of length 1");
+    assert_eq!(eval("(nth [1] 5 'd)"), "d");
+    assert_eq!(eval("(nth '(1) -1)"), "error: index -1 is out of bounds for a list of length 1");
+}
+
+#[test]
+fn conj_adds_where_each_collection_grows() {
+    assert_eq!(eval("(conj [1 2] 3)"), "[1 2 3]");
+    assert_eq!(eval("(conj [1] 2 3)"), "[1 2 3]");
+    assert_eq!(eval("(conj '(2 3) 1)"), "(1 2 3)");
+    assert_eq!(eval("(conj #{1} 2)"), "#{1 2}");
+    assert_eq!(eval("(conj {:a 1} [:b 2])"), "{:a 1, :b 2}");
+    assert_eq!(eval("(conj {:a 1} {:b 2})"), "{:a 1, :b 2}");
+    assert_eq!(eval("(conj nil 1)"), "(1)");
+    assert_eq!(eval("(conj {} 1)"), "error: conj onto a map expects a [key value] pair or a map, got 1");
+    assert_eq!(eval("(conj 5 1)"), "error: conj expects a collection, got 5");
+}
+
+#[test]
+fn collection_constructors() {
+    assert_eq!(eval("(list 1 2 3)"), "(1 2 3)");
+    assert_eq!(eval("(list)"), "()");
+    assert_eq!(eval("(vector 1 2)"), "[1 2]");
+    assert_eq!(eval("[(vec '(1 2)) (vec #{1}) (vec nil) (vec {:a 1})]"), "[[1 2] [1] [] [[:a 1]]]");
+    assert_eq!(eval("(hash-map :a 1 :b 2)"), "{:a 1, :b 2}");
+    assert_eq!(eval("(hash-map :a)"), "error: hash-map expects an even number of arguments, got 1");
+    assert_eq!(eval("(hash-set 1 2 1)"), "#{1 2}");
+    assert_eq!(eval("(set [1 1 2])"), "#{1 2}");
+    assert_eq!(eval("[(range 4) (range 1 4) (range 0 10 3) (range 5 0 -2) (range 0)]"), "[[0 1 2 3] [1 2 3] [0 3 6 9] [5 3 1] []]");
+    assert_eq!(eval("(range 0 1 0.25)"), "[0.0 0.25 0.5 0.75]");
+    assert_eq!(eval("(range 0 1 0)"), "error: range step must not be zero");
+    assert_eq!(eval("[(reverse [1 2 3]) (reverse '(1 2)) (reverse nil)]"), "[[3 2 1] (2 1) ()]");
+}
+
+#[test]
+fn type_predicates() {
+    assert_eq!(eval("[(nil? nil) (nil? false)]"), "[true false]");
+    assert_eq!(eval("[(integer? 1) (integer? 1.0) (float? 1.0) (number? 1) (number? \"1\")]"), "[true false true true false]");
+    assert_eq!(eval("[(string? \"s\") (symbol? 'a) (keyword? :a) (boolean? false)]"), "[true true true true]");
+    assert_eq!(eval("[(list? '(1)) (list? [1]) (vector? [1]) (map? {}) (set? #{})]"), "[true false true true true]");
+    assert_eq!(eval("[(procedure? +) (procedure? (lambda () 1)) (procedure? 1)]"), "[true true false]");
+    assert_eq!(eval("[(coll? [1]) (coll? '()) (coll? {}) (coll? \"s\") (coll? 1)]"), "[true true true false false]");
+}
+
+#[test]
+fn get_reads_any_indexed_or_keyed_collection() {
+    assert_eq!(eval("[(get {:a 1} :a) (get {:a 1} :b) (get {:a 1} :b 0)]"), "[1 nil 0]");
+    assert_eq!(eval("[(get [1 2] 1) (get [1 2] 5) (get [1 2] -1 'd)]"), "[2 nil d]");
+    assert_eq!(eval("[(get nil :a) (get #{1} 1) (get \"abc\" 1) (get 5 1)]"), "[nil 1 \"b\" nil]");
+    assert_eq!(eval("[(find {:a 1} :a) (find {:a 1} :b)]"), "[[:a 1] nil]");
+}
+
+#[test]
+fn assoc_and_dissoc_update_maps_and_vectors() {
+    assert_eq!(eval("(assoc {:a 1} :b 2)"), "{:a 1, :b 2}");
+    assert_eq!(eval("(assoc {} :a 1 :b 2)"), "{:a 1, :b 2}");
+    assert_eq!(eval("(assoc nil :a 1)"), "{:a 1}");
+    assert_eq!(eval("[(assoc [1 2] 0 9) (assoc [1 2] 2 3)]"), "[[9 2] [1 2 3]]");
+    assert_eq!(eval("(assoc [1 2] 5 0)"), "error: index 5 is out of bounds for a vector of length 2");
+    assert_eq!(eval("(assoc {} :a)"), "error: assoc expects an even number of key and value arguments, got 1");
+    assert_eq!(eval("(assoc 5 :a 1)"), "error: assoc expects a map or vector, got 5");
+    assert_eq!(eval("[(dissoc {:a 1, :b 2} :a) (dissoc {:a 1} :zz) (dissoc {:a 1, :b 2, :c 3} :a :c) (dissoc nil :a)]"), "[{:b 2} {:a 1} {:b 2} nil]");
+}
+
+#[test]
+fn map_queries_and_combinations() {
+    assert_eq!(eval("[(keys {:a 1, :b 2}) (vals {:a 1, :b 2}) (keys {}) (keys nil)]"), "[[:a :b] [1 2] [] []]");
+    assert_eq!(
+        eval("[(contains? {:a 1} :a) (contains? {:a 1} :b) (contains? #{1} 1) (contains? [1 2] 1) (contains? [1 2] 2) (contains? nil :a)]"),
+        "[true false true true false false]"
+    );
+    assert_eq!(eval("(contains? 5 1)"), "error: contains? expects a collection, got 5");
+    assert_eq!(eval("[(merge {:a 1} {:b 2} {:a 3}) (merge) (merge {:a 1} nil)]"), "[{:a 3, :b 2} {} {:a 1}]");
+    assert_eq!(eval("[(disj #{1 2 3} 1 3) (disj #{1} 5)]"), "[#{2} #{1}]");
+    assert_eq!(eval("[(select-keys {:a 1, :b 2, :c 3} [:a :c]) (select-keys {:a 1} [:zz])]"), "[{:a 1, :c 3} {}]");
+    assert_eq!(eval("(zipmap [:a :b] [1 2])"), "{:a 1, :b 2}");
+    assert_eq!(eval("[(subvec [1 2 3 4] 1 3) (subvec [1 2 3] 1) (subvec [1 2] 2)]"), "[[2 3] [2 3] []]");
+    assert_eq!(eval("(subvec [1 2] 3)"), "error: subvec range 3 to 2 is out of bounds for a vector of length 2");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));
