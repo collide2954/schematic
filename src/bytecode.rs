@@ -24,6 +24,9 @@ pub enum Op {
     MakeCell,
     Jump(u32),
     JumpIfFalse(u32),
+    JumpIfTrue(u32),
+    JumpIfFalseOrPop(u32),
+    JumpIfTrueOrPop(u32),
     Call(u32),
     TailCall(u32),
     Return,
@@ -39,7 +42,7 @@ impl Op {
         match self {
             Const(_) | Nil | True | False | GetLocal(_) | GetLocalCell(_) | GetUpvalue(_)
             | GetUpvalueCell(_) | GetGlobal(_) | Closure(_) => 1,
-            Pop | JumpIfFalse(_) | Return => -1,
+            Pop | JumpIfFalse(_) | JumpIfTrue(_) | JumpIfFalseOrPop(_) | JumpIfTrueOrPop(_) | Return => -1,
             PopUnder(n) | Call(n) | TailCall(n) => -(n as isize),
             SetLocal(_) | SetLocalCell(_) | SetUpvalueCell(_) | SetGlobal(_) | DefineGlobal(_)
             | MakeCell | Jump(_) => 0,

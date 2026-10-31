@@ -271,6 +271,9 @@ impl<'a> Compiler<'a> {
         code[at] = match code[at] {
             Op::Jump(_) => Op::Jump(target),
             Op::JumpIfFalse(_) => Op::JumpIfFalse(target),
+            Op::JumpIfTrue(_) => Op::JumpIfTrue(target),
+            Op::JumpIfFalseOrPop(_) => Op::JumpIfFalseOrPop(target),
+            Op::JumpIfTrueOrPop(_) => Op::JumpIfTrueOrPop(target),
             other => unreachable!("patching a non-jump {other:?}"),
         };
     }
@@ -373,6 +376,11 @@ impl<'a> Compiler<'a> {
                 "begin" => return self.compile_sequence(&args, tail),
                 "let" => return self.compile_let(&args, tail, false),
                 "let*" => return self.compile_let(&args, tail, true),
+                "and" => return self.compile_and_or(&args, tail, true),
+                "or" => return self.compile_and_or(&args, tail, false),
+                "cond" => return self.compile_cond(&args, tail),
+                "when" => return self.compile_when(&args, tail, true),
+                "unless" => return self.compile_when(&args, tail, false),
                 "lambda" => {
                     let Some(params) = args.first() else {
                         return Err(syntax_error("lambda", "expected a parameter list"));
@@ -537,6 +545,116 @@ impl<'a> Compiler<'a> {
             Some(head) => self.is_special(head).is_some_and(|s| &*s.name() == "lambda"),
             None => false,
         }
+    }
+
+    fn compile_and_or(&mut self, args: &List, tail: bool, is_and: bool) -> Result<(), Error> {
+        if args.is_empty() {
+            self.emit(if is_and { Op::True } else { Op::False });
+            self.finish_tail(tail);
+            return Ok(());
+        }
+        let depth = self.depth();
+        let last = args.len() - 1;
+        let mut jumps = Vec::new();
+        for (i, form) in args.iter().enumerate() {
+            if i == last {
+                self.compile(form, tail)?;
+            } else {
+                self.compile(form, false)?;
+                let op = if is_and { Op::JumpIfFalseOrPop(0) } else { Op::JumpIfTrueOrPop(0) };
+                jumps.push(self.emit_jump(op));
+            }
+        }
+        if jumps.is_empty() {
+            return Ok(());
+        }
+        for jump in jumps {
+            self.patch_jump(jump);
+        }
+        self.set_depth(depth + 1);
+        self.finish_tail(tail);
+        Ok(())
+    }
+
+    fn compile_cond(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        let depth = self.depth();
+        let clauses: Vec<&Value> = args.iter().collect();
+        let mut end_jumps = Vec::new();
+        let mut keep_jumps = Vec::new();
+        let mut has_else = false;
+        for (i, clause) in clauses.iter().enumerate() {
+            let Value::List(parts) = clause else {
+                return Err(syntax_error("cond", &format!("bad clause {clause}")));
+            };
+            let Some(test) = parts.first() else {
+                return Err(syntax_error("cond", "empty clause"));
+            };
+            let body = parts.rest();
+            let is_else = matches!(test, Value::Symbol(s) if &*s.name() == "else") && self.is_special(test).is_some();
+            if is_else {
+                if i != clauses.len() - 1 {
+                    return Err(syntax_error("cond", "else must be the last clause"));
+                }
+                if body.is_empty() {
+                    return Err(syntax_error("cond", "else clause needs a body"));
+                }
+                self.compile_sequence(&body, tail)?;
+                has_else = true;
+                break;
+            }
+            self.compile(test, false)?;
+            if body.is_empty() {
+                keep_jumps.push(self.emit_jump(Op::JumpIfTrueOrPop(0)));
+                continue;
+            }
+            let next = self.emit_jump(Op::JumpIfFalse(0));
+            self.compile_sequence(&body, tail)?;
+            if !tail {
+                end_jumps.push(self.emit_jump(Op::Jump(0)));
+            }
+            self.patch_jump(next);
+            self.set_depth(depth);
+        }
+        if !has_else {
+            self.emit(Op::Nil);
+            self.finish_tail(tail);
+        }
+        if tail {
+            if !keep_jumps.is_empty() {
+                for jump in keep_jumps {
+                    self.patch_jump(jump);
+                }
+                self.set_depth(depth + 1);
+                self.emit(Op::Return);
+            }
+        } else {
+            for jump in end_jumps.into_iter().chain(keep_jumps) {
+                self.patch_jump(jump);
+            }
+            self.set_depth(depth + 1);
+        }
+        Ok(())
+    }
+
+    fn compile_when(&mut self, args: &List, tail: bool, when: bool) -> Result<(), Error> {
+        let form = if when { "when" } else { "unless" };
+        let Some(test) = args.first() else {
+            return Err(syntax_error(form, "expected a condition"));
+        };
+        let body = args.rest();
+        self.compile(test, false)?;
+        let skip = self.emit_jump(if when { Op::JumpIfFalse(0) } else { Op::JumpIfTrue(0) });
+        let depth = self.depth();
+        self.compile_sequence(&body, tail)?;
+        let to_end = if tail { None } else { Some(self.emit_jump(Op::Jump(0))) };
+        self.patch_jump(skip);
+        self.set_depth(depth);
+        self.emit(Op::Nil);
+        self.finish_tail(tail);
+        if let Some(jump) = to_end {
+            self.patch_jump(jump);
+        }
+        Ok(())
     }
 
     fn compile_sequence(&mut self, forms: &List, tail: bool) -> Result<(), Error> {

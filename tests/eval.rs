@@ -388,6 +388,65 @@ fn define_in_a_nested_expression_is_an_error() {
 }
 
 #[test]
+fn and_or_short_circuit_and_return_operands() {
+    assert_eq!(eval("(and)"), "true");
+    assert_eq!(eval("(and 1 2 3)"), "3");
+    assert_eq!(eval("(and 1 nil 3)"), "nil");
+    assert_eq!(eval("(and 1 false 3)"), "false");
+    assert_eq!(eval("(or)"), "false");
+    assert_eq!(eval("(or nil 2 3)"), "2");
+    assert_eq!(eval("(or nil false)"), "false");
+    assert_eq!(eval("(or 1 (undefined-thing))"), "1");
+    assert_eq!(eval("(and nil (undefined-thing))"), "nil");
+    assert_eq!(eval("(define x 0) (or false (begin (set! x 1) x) (set! x 2)) x"), "1");
+    assert_eq!(eval("[(and 1 2) (or nil 3)]"), "[2 3]");
+}
+
+#[test]
+fn and_or_keep_tail_calls() {
+    assert_eq!(eval_with_frame_limit("(define (f n) (or (= n 0) (f (- n 1)))) (f 10000)", 100), "true");
+    assert_eq!(
+        eval_with_frame_limit("(define (f n) (and (> n -1) (if (= n 0) 'done (f (- n 1))))) (f 10000)", 100),
+        "done"
+    );
+}
+
+#[test]
+fn cond_selects_the_first_true_clause() {
+    assert_eq!(eval("(cond (false 1) (true 2) (else 3))"), "2");
+    assert_eq!(eval("(cond (false 1) (else 3))"), "3");
+    assert_eq!(eval("(cond (false 1))"), "nil");
+    assert_eq!(eval("(cond ((+ 1 1)))"), "2");
+    assert_eq!(eval("(cond (true 1 2 3))"), "3");
+    let sign = "(define (sign n) (cond ((< n 0) 'neg) ((= n 0) 'zero) (else 'pos))) [(sign -5) (sign 0) (sign 3)]";
+    assert_eq!(eval(sign), "[neg zero pos]");
+    assert_eq!(eval("(+ 10 (cond (false 1) (else 5)))"), "15");
+}
+
+#[test]
+fn cond_keeps_tail_calls() {
+    let src = "(define (f n) (cond ((= n 0) 'done) ((= n -1) 'never) (else (f (- n 1))))) (f 10000)";
+    assert_eq!(eval_with_frame_limit(src, 100), "done");
+}
+
+#[test]
+fn cond_syntax_errors() {
+    assert!(eval("(cond 1)").starts_with("error:"));
+    assert!(eval("(cond (else 1) (true 2))").starts_with("error:"));
+    assert!(eval("(cond ())").starts_with("error:"));
+}
+
+#[test]
+fn when_and_unless_run_a_body_conditionally() {
+    assert_eq!(eval("(when true 1 2)"), "2");
+    assert_eq!(eval("(when false 1)"), "nil");
+    assert_eq!(eval("(unless false 1 2)"), "2");
+    assert_eq!(eval("(unless true 1)"), "nil");
+    assert_eq!(eval("(define x 0) (when (= x 0) (set! x 5)) x"), "5");
+    assert_eq!(eval_with_frame_limit("(define (f n) (when (> n -1) (if (= n 0) 'done (f (- n 1))))) (f 10000)", 100), "done");
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

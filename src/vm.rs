@@ -251,6 +251,25 @@ impl Vm {
                         self.frames.last_mut().unwrap().ip = target as usize;
                     }
                 }
+                Op::JumpIfTrue(target) => {
+                    if self.pop().is_truthy() {
+                        self.frames.last_mut().unwrap().ip = target as usize;
+                    }
+                }
+                Op::JumpIfFalseOrPop(target) => {
+                    if self.top().is_truthy() {
+                        self.pop();
+                    } else {
+                        self.frames.last_mut().unwrap().ip = target as usize;
+                    }
+                }
+                Op::JumpIfTrueOrPop(target) => {
+                    if self.top().is_truthy() {
+                        self.frames.last_mut().unwrap().ip = target as usize;
+                    } else {
+                        self.pop();
+                    }
+                }
                 Op::Call(argc) => self.call(argc as usize)?,
                 Op::TailCall(argc) => {
                     if !self.tail_call(argc as usize)? {
