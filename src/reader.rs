@@ -126,6 +126,7 @@ impl<'a> Reader<'a> {
         let value = match c {
             '"' => self.read_string()?,
             '(' => Value::List(self.read_items(')')?.into_iter().collect()),
+            '[' => Value::vector(self.read_items(']')?),
             ')' | ']' | '}' => return Err(self.error(format!("unexpected `{c}`"))),
             '\'' => self.read_prefixed("quote")?,
             '`' => self.read_prefixed("quasiquote")?,
@@ -417,6 +418,21 @@ mod tests {
         assert_eq!(read("#_ 1 2"), Value::Int(2));
         assert_eq!(read("(1 #_(2 3) 4)"), list(vec![Value::Int(1), Value::Int(4)]));
         assert_eq!(read_all("#_1").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn reads_vectors() {
+        assert_eq!(read("[1 2 3]"), Value::vector([Value::Int(1), Value::Int(2), Value::Int(3)]));
+        assert_eq!(read("[]"), Value::vector([]));
+        assert_eq!(
+            read("(f [x [y]])"),
+            list(vec![
+                Value::symbol("f"),
+                Value::vector([Value::symbol("x"), Value::vector([Value::symbol("y")])])
+            ])
+        );
+        assert!(read_str("[1 2").is_err());
+        assert!(read_str("[1 2)").is_err());
     }
 
     #[test]
