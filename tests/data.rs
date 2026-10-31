@@ -140,6 +140,25 @@ fn tables_group_and_aggregate() {
 }
 
 #[test]
+fn tables_join_on_a_shared_key() {
+    let setup = "(define p (table {:id [1 2 3] :name [\"Ada\" \"Bob\" \"Cy\"]})) (define o (table {:id [2 1 2 9] :total [5 7 1 0]}))";
+    assert_eq!(eval(&format!("{setup} (rows (join p o :id))")), "[{:id 1, :name \"Ada\", :total 7} {:id 2, :name \"Bob\", :total 5} {:id 2, :name \"Bob\", :total 1}]");
+    assert_eq!(eval(&format!("{setup} [(columns (join p o :id)) (nrows (join p o :id :left)) (:total (join p o :id :left))]")), "[[:id :name :total] 4 #[7 5 1 nil]]");
+    assert_eq!(eval(&format!("{setup} (join p o :nope)")), "error: table has no column :nope");
+    assert_eq!(eval(&format!("{setup} (join p o :id :outer)")), "error: join expects :inner or :left, got :outer");
+    assert_eq!(eval("(rows (join (table {:k [1] :v [1]}) (table {:k [1] :v [2]}) :k))"), "[{:k 1, :v 1, :v-right 2}]");
+}
+
+#[test]
+fn describe_summarizes_numeric_columns() {
+    assert_eq!(
+        with_sales("(rows (describe s))"),
+        "[{:column \"amount\", :count 4, :missing 1, :mean 25.0, :std 12.909944487358056, :min 10, :max 40} {:column \"year\", :count 5, :missing 0, :mean 2020.6, :std 0.5477225575051661, :min 2020, :max 2021}]"
+    );
+    assert_eq!(eval("(nrows (describe (table {:s [\"a\"]})))"), "0");
+}
+
+#[test]
 fn csv_text_parses_into_typed_tables_and_back() {
     let csv = "name,age,score,member\\nAda,36,1.5,true\\nBob,,2,false\\n\\\"Cy, Jr\\\",41,,\\n";
     assert_eq!(eval(&format!("(columns (parse-csv \"{csv}\"))")), "[:name :age :score :member]");

@@ -21,6 +21,8 @@ pub fn install(globals: &mut Globals) {
     native(globals, "head", Arity::Between(1, 2), |args| slice("head", args, true));
     native(globals, "tail", Arity::Between(1, 2), |args| slice("tail", args, false));
     native_vm(globals, "aggregate", Arity::Between(2, 3), aggregate);
+    native(globals, "join", Arity::Between(3, 4), join);
+    native(globals, "describe", Arity::Exact(1), describe);
     native(globals, "table?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Table(_)))));
     native(globals, "columns", Arity::Exact(1), |args| {
         Ok(Value::vector(as_table("columns", &args[0])?.names().iter().map(|n| Value::Keyword(*n))))
@@ -309,6 +311,95 @@ fn aggregate(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
         pairs.push((name, Rc::new(Array::from_values(values)?)));
     }
     Ok(Value::Table(Rc::new(Table::new(pairs)?)))
+}
+
+fn join(args: &[Value]) -> Result<Value, Error> {
+    let left = as_table("join", &args[0])?;
+    let right = as_table("join", &args[1])?;
+    let key = column_name("join", &args[2])?;
+    let keep_unmatched = match args.get(3) {
+        None => false,
+        Some(Value::Keyword(k)) if &*k.name() == "inner" => false,
+        Some(Value::Keyword(k)) if &*k.name() == "left" => true,
+        Some(other) => return Err(expects("join", ":inner or :left", other)),
+    };
+    let left_key = left.column(key).ok_or_else(|| Table::missing(key))?;
+    let right_key = right.column(key).ok_or_else(|| Table::missing(key))?;
+    let mut buckets: Vec<Vec<usize>> = Vec::new();
+    let mut positions = Map::new();
+    for j in 0..right.nrows() {
+        let k = right_key.get(j).unwrap();
+        match positions.get(&k) {
+            Some(Value::Int(p)) => buckets[*p as usize].push(j),
+            _ => {
+                positions.insert_mut(k, Value::Int(buckets.len() as i64));
+                buckets.push(vec![j]);
+            }
+        }
+    }
+    let mut pairs: Vec<(usize, Option<usize>)> = Vec::new();
+    for i in 0..left.nrows() {
+        match positions.get(&left_key.get(i).unwrap()) {
+            Some(Value::Int(p)) => pairs.extend(buckets[*p as usize].iter().map(|&j| (i, Some(j)))),
+            _ if keep_unmatched => pairs.push((i, None)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for (name, column) in left.columns() {
+        let values = pairs.iter().map(|(i, _)| column.get(*i).unwrap());
+        out.push((name, Rc::new(Array::from_values(values)?)));
+    }
+    for (name, column) in right.columns() {
+        if name == key {
+            continue;
+        }
+        let name = if left.column(name).is_some() { Symbol::intern(&format!("{name}-right")) } else { name };
+        let values = pairs.iter().map(|(_, j)| j.and_then(|j| column.get(j)).unwrap_or(Value::Nil));
+        out.push((name, Rc::new(Array::from_values(values)?)));
+    }
+    Ok(Value::Table(Rc::new(Table::new(out)?)))
+}
+
+fn describe(args: &[Value]) -> Result<Value, Error> {
+    let table = as_table("describe", &args[0])?;
+    let as_f64 = |v: &Value| match v {
+        Value::Int(i) => *i as f64,
+        Value::Float(x) => *x,
+        _ => f64::NAN,
+    };
+    let mut rows = Vec::new();
+    for (name, column) in table.columns() {
+        if !matches!(column.kind(), "int" | "float") {
+            continue;
+        }
+        let values: Vec<Value> = column.iter().filter(|v| !matches!(v, Value::Nil)).collect();
+        let count = values.len();
+        let mean = values.iter().map(as_f64).sum::<f64>() / count as f64;
+        let std = if count > 1 {
+            let squares: f64 = values.iter().map(|v| (as_f64(v) - mean) * (as_f64(v) - mean)).sum();
+            Value::Float((squares / (count - 1) as f64).sqrt())
+        } else {
+            Value::Nil
+        };
+        let extreme = |wanted: Ordering| {
+            values.iter().fold(Value::Nil, |best, v| match best {
+                Value::Nil => v.clone(),
+                _ if compare_values("describe", v, &best).unwrap_or(Ordering::Equal) == wanted => v.clone(),
+                _ => best,
+            })
+        };
+        rows.push(Value::map([
+            (Value::keyword("column"), Value::string(&name.name())),
+            (Value::keyword("count"), Value::Int(count as i64)),
+            (Value::keyword("missing"), Value::Int((column.len() - count) as i64)),
+            (Value::keyword("mean"), if count > 0 { Value::Float(mean) } else { Value::Nil }),
+            (Value::keyword("std"), std),
+            (Value::keyword("min"), extreme(Ordering::Less)),
+            (Value::keyword("max"), extreme(Ordering::Greater)),
+        ]));
+    }
+    Ok(Value::Table(Rc::new(from_rows(&Value::vector(rows))?)))
 }
 
 fn slice(name: &str, args: &[Value], from_start: bool) -> Result<Value, Error> {
