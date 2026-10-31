@@ -4,6 +4,7 @@ use super::collections::{expects, items, like};
 use super::functional::compare_values;
 use super::math::binary;
 use super::native;
+use crate::array::{Array, Data};
 use crate::bytecode::Intrinsic;
 use crate::error::Error;
 use crate::value::Value;
@@ -43,11 +44,50 @@ fn floats(name: &str, value: &Value) -> Result<Vec<f64>, Error> {
     Ok(numbers(name, value)?.iter().map(as_f64).collect())
 }
 
+fn typed_sum(array: &Array) -> Option<(Value, usize)> {
+    let present = |i: usize| !array.missing_mask().is_some_and(|m| m[i]);
+    match array.data() {
+        Data::Float(v) => {
+            let mut total = 0.0;
+            let mut count = 0;
+            for (i, x) in v.iter().enumerate() {
+                if present(i) {
+                    total += x;
+                    count += 1;
+                }
+            }
+            Some((if count == 0 { Value::Int(0) } else { Value::Float(total) }, count))
+        }
+        Data::Int(v) => {
+            let mut total: i64 = 0;
+            let mut count = 0;
+            for (i, x) in v.iter().enumerate() {
+                if present(i) {
+                    total = total.checked_add(*x)?;
+                    count += 1;
+                }
+            }
+            Some((Value::Int(total), count))
+        }
+        _ => None,
+    }
+}
+
 fn sum(args: &[Value]) -> Result<Value, Error> {
+    if let Value::Array(a) = &args[0] {
+        if let Some((total, _)) = typed_sum(a) {
+            return Ok(total);
+        }
+    }
     numbers("sum", &args[0])?.iter().try_fold(Value::Int(0), |acc, x| binary(Intrinsic::Add, &acc, x))
 }
 
 fn mean(args: &[Value]) -> Result<Value, Error> {
+    if let Value::Array(a) = &args[0] {
+        if let Some((total, count)) = typed_sum(a) {
+            return Ok(if count == 0 { Value::Nil } else { Value::Float(as_f64(&total) / count as f64) });
+        }
+    }
     let xs = floats("mean", &args[0])?;
     if xs.is_empty() {
         return Ok(Value::Nil);

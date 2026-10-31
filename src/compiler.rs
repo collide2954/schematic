@@ -477,7 +477,6 @@ impl<'a> Compiler<'a> {
             Op::JumpIfTrue(_) => Op::JumpIfTrue(target),
             Op::JumpIfFalseOrPop(_) => Op::JumpIfFalseOrPop(target),
             Op::JumpIfTrueOrPop(_) => Op::JumpIfTrueOrPop(target),
-            Op::JumpUnless(kind, _) => Op::JumpUnless(kind, target),
             Op::PushCatch(_) => Op::PushCatch(target),
             Op::PushFinally(_) => Op::PushFinally(target),
             Op::PushEscape(_) => Op::PushEscape(target),

@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use super::{native, native_intrinsic};
-use crate::array::{broadcast, is_array, unary};
+use crate::array::{broadcast, fast_binary_arrays, is_array, unary};
 use crate::bytecode::Intrinsic;
 use crate::error::Error;
 use crate::value::Value;
@@ -41,6 +41,7 @@ pub fn binary(kind: Intrinsic, a: &Value, b: &Value) -> Result<Value, Error> {
         Intrinsic::Add => add(&args),
         Intrinsic::Sub => sub(&args),
         Intrinsic::Mul => mul(&args),
+        Intrinsic::Div => div_pair(a, b),
         Intrinsic::Lt => lt(&args),
         Intrinsic::Le => le(&args),
         Intrinsic::Gt => gt(&args),
@@ -54,7 +55,7 @@ pub fn install(globals: &mut Globals) {
     native_intrinsic(globals, "+", Arity::AtLeast(0), add, Intrinsic::Add);
     native_intrinsic(globals, "-", Arity::AtLeast(1), sub, Intrinsic::Sub);
     native_intrinsic(globals, "*", Arity::AtLeast(0), mul, Intrinsic::Mul);
-    native(globals, "/", Arity::AtLeast(1), div);
+    native_intrinsic(globals, "/", Arity::AtLeast(1), div, Intrinsic::Div);
     native(globals, "quot", Arity::Exact(2), |args| quot(&args[0], &args[1]));
     native(globals, "rem", Arity::Exact(2), |args| rem(&args[0], &args[1]));
     native(globals, "mod", Arity::Exact(2), |args| modulo(&args[0], &args[1]));
@@ -199,6 +200,15 @@ fn arith(
     float_op: fn(f64, f64) -> f64,
 ) -> Result<Value, Error> {
     if is_array(a) || is_array(b) {
+        let kind = match name {
+            "+" | "inc" => Some(Intrinsic::Add),
+            "-" | "dec" => Some(Intrinsic::Sub),
+            "*" => Some(Intrinsic::Mul),
+            _ => None,
+        };
+        if let Some(result) = kind.and_then(|kind| fast_binary_arrays(kind, a, b)) {
+            return result;
+        }
         return broadcast(a, b, &|x, y| arith(name, x, y, int_op, float_op));
     }
     match (a, b) {
@@ -229,6 +239,9 @@ fn sub(args: &[Value]) -> Result<Value, Error> {
 
 fn div_pair(a: &Value, b: &Value) -> Result<Value, Error> {
     if is_array(a) || is_array(b) {
+        if let Some(result) = fast_binary_arrays(Intrinsic::Div, a, b) {
+            return result;
+        }
         return broadcast(a, b, &div_pair);
     }
     Ok(Value::Float(as_float("/", a)? / as_float("/", b)?))
@@ -276,10 +289,17 @@ fn modulo(a: &Value, b: &Value) -> Result<Value, Error> {
     )
 }
 
-fn chained_masks(args: &[Value], pair: &dyn Fn(&Value, &Value) -> Result<Value, Error>) -> Result<Value, Error> {
+fn chained_masks(
+    args: &[Value],
+    kind: Intrinsic,
+    pair: &dyn Fn(&Value, &Value) -> Result<Value, Error>,
+) -> Result<Value, Error> {
     let mut mask: Option<Value> = None;
     for window in args.windows(2) {
-        let next = broadcast(&window[0], &window[1], pair)?;
+        let next = match fast_binary_arrays(kind, &window[0], &window[1]) {
+            Some(result) => result?,
+            None => broadcast(&window[0], &window[1], pair)?,
+        };
         mask = Some(match mask {
             None => next,
             Some(previous) => mask_and(&previous, &next)?,
@@ -290,7 +310,13 @@ fn chained_masks(args: &[Value], pair: &dyn Fn(&Value, &Value) -> Result<Value, 
 
 fn compare(name: &str, args: &[Value], accept: fn(Ordering) -> bool) -> Result<Value, Error> {
     if args.iter().any(is_array) {
-        return chained_masks(args, &|x, y| compare(name, &[x.clone(), y.clone()], accept));
+        let kind = match name {
+            "<" => Intrinsic::Lt,
+            "<=" => Intrinsic::Le,
+            ">" => Intrinsic::Gt,
+            _ => Intrinsic::Ge,
+        };
+        return chained_masks(args, kind, &|x, y| compare(name, &[x.clone(), y.clone()], accept));
     }
     for pair in args.windows(2) {
         let ordering = match (&pair[0], &pair[1]) {
@@ -309,7 +335,7 @@ fn compare(name: &str, args: &[Value], accept: fn(Ordering) -> bool) -> Result<V
 
 fn equal(args: &[Value]) -> Result<Value, Error> {
     if args.iter().any(is_array) {
-        return chained_masks(args, &|x, y| Ok(Value::Bool(x == y)));
+        return chained_masks(args, Intrinsic::NumEq, &|x, y| Ok(Value::Bool(x == y)));
     }
     Ok(Value::Bool(args.windows(2).all(|pair| pair[0] == pair[1])))
 }

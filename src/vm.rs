@@ -124,16 +124,36 @@ impl Globals {
 }
 
 #[inline]
+fn fast_float(kind: Intrinsic, a: f64, b: f64) -> Option<Value> {
+    Some(match kind {
+        Intrinsic::Add => Value::Float(a + b),
+        Intrinsic::Sub => Value::Float(a - b),
+        Intrinsic::Mul => Value::Float(a * b),
+        Intrinsic::Div => Value::Float(a / b),
+        Intrinsic::Lt => Value::Bool(a < b),
+        Intrinsic::Le => Value::Bool(a <= b),
+        Intrinsic::Gt => Value::Bool(a > b),
+        Intrinsic::Ge => Value::Bool(a >= b),
+        Intrinsic::NumEq => Value::Bool(a == b),
+        Intrinsic::Not => return None,
+    })
+}
+
+#[inline]
 fn fast_binary(kind: Intrinsic, x: &Value, y: &Value) -> Option<Value> {
     match (kind, x, y) {
         (Intrinsic::Add, Value::Int(a), Value::Int(b)) => a.checked_add(*b).map(Value::Int),
         (Intrinsic::Sub, Value::Int(a), Value::Int(b)) => a.checked_sub(*b).map(Value::Int),
         (Intrinsic::Mul, Value::Int(a), Value::Int(b)) => a.checked_mul(*b).map(Value::Int),
+        (Intrinsic::Div, Value::Int(a), Value::Int(b)) => Some(Value::Float(*a as f64 / *b as f64)),
         (Intrinsic::Lt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a < b)),
         (Intrinsic::Le, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a <= b)),
         (Intrinsic::Gt, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a > b)),
         (Intrinsic::Ge, Value::Int(a), Value::Int(b)) => Some(Value::Bool(a >= b)),
         (Intrinsic::NumEq, a, b) if !is_array(a) && !is_array(b) => Some(Value::Bool(a == b)),
+        (_, Value::Float(a), Value::Float(b)) => fast_float(kind, *a, *b),
+        (_, Value::Int(a), Value::Float(b)) => fast_float(kind, *a as f64, *b),
+        (_, Value::Float(a), Value::Int(b)) => fast_float(kind, *a, *b as f64),
         _ => None,
     }
 }

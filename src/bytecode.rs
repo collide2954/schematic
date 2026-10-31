@@ -8,6 +8,7 @@ pub enum Intrinsic {
     Add,
     Sub,
     Mul,
+    Div,
     Lt,
     Le,
     Gt,

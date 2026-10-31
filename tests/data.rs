@@ -47,6 +47,16 @@ fn arithmetic_broadcasts_over_arrays() {
 }
 
 #[test]
+fn typed_array_arithmetic_matches_scalar_semantics() {
+    assert_eq!(eval("[(+ #[1.5 2.5] #[1 1]) (* #[1 2] 2.5) (- 1.0 #[1 2]) (/ #[1 2] #[2 0]) (/ #[1 2] 4)]"), "[#[2.5 3.5] #[2.5 5.0] #[0.0 -1.0] #[0.5 +inf.0] #[0.25 0.5]]");
+    assert_eq!(eval("[(+ #[1 nil 3] #[10 20 nil]) (< #[1.5 nil] 2) (= #[1 2] #[1.0 3.0])]"), "[#[11 nil nil] #[true nil] #[true false]]");
+    assert_eq!(eval("(* #[4611686018427387904 1] 2)"), "error: integer overflow");
+    assert_eq!(eval("[(sum #[1.5 nil 2.5]) (sum #[1 2 nil]) (mean #[2.0 nil 4.0]) (sum (* #[1 2 3] #[1 2 3]))]"), "[4.0 3 3.0 14]");
+    assert_eq!(eval("[(/ 7 2) (/ 1.0 4) (/ 3) (* 1.5 2) (< 1.5 2) (= 2.0 2)]"), "[3.5 0.25 0.3333333333333333 3.0 true true]");
+    assert_eq!(eval("(+ #[1 2] #[true false])"), "error: + expects numbers, got true");
+}
+
+#[test]
 fn comparisons_broadcast_into_masks() {
     assert_eq!(eval("[(< #[1 2 3] 2) (>= #[1 2] #[2 1]) (= #[1 2 nil] 2) (= #[\"a\" \"b\"] \"a\")]"), "[#[true false false] #[false true] #[false true nil] #[true false]]");
     assert_eq!(eval("[(not #[true false nil]) (not #[1 2])]"), "[#[false true nil] #[false false]]");
