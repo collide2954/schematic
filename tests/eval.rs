@@ -78,6 +78,36 @@ fn if_arity_errors() {
 }
 
 #[test]
+fn define_creates_globals() {
+    assert_eq!(eval("(define x 10) x"), "10");
+    assert_eq!(eval("(define x 10)"), "x");
+    assert_eq!(eval("(define x 1) (define y x) y"), "1");
+    assert_eq!(eval("(define x 1) (define x 2) x"), "2");
+}
+
+#[test]
+fn set_changes_an_existing_global() {
+    assert_eq!(eval("(define x 1) (set! x 2) x"), "2");
+    assert_eq!(eval("(define x 1) (set! x 5)"), "5");
+    assert_eq!(eval("(set! nope 1)"), "error: nope is not defined");
+}
+
+#[test]
+fn begin_runs_forms_in_order_and_returns_the_last() {
+    assert_eq!(eval("(begin 1 2 3)"), "3");
+    assert_eq!(eval("(begin)"), "nil");
+    assert_eq!(eval("(begin (define x 1) (set! x (if x 2 3)) x)"), "2");
+    assert_eq!(eval("[(begin 1 2) 3]"), "[2 3]");
+}
+
+#[test]
+fn define_and_set_syntax_errors() {
+    assert!(eval("(define)").starts_with("error:"));
+    assert!(eval("(define 1 2)").starts_with("error:"));
+    assert!(eval("(set! x)").starts_with("error:"));
+}
+
+#[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));

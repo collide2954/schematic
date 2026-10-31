@@ -202,10 +202,74 @@ impl<'a> Compiler<'a> {
             match &*sym.name() {
                 "quote" => return self.compile_quote(&args, tail),
                 "if" => return self.compile_if(&args, tail),
+                "define" => return self.compile_define(&args, tail),
+                "set!" => return self.compile_set(&args, tail),
+                "begin" => return self.compile_sequence(&args, tail),
                 _ => {}
             }
         }
         self.compile_call(list, tail)
+    }
+
+    fn compile_sequence(&mut self, forms: &List, tail: bool) -> Result<(), Error> {
+        if forms.is_empty() {
+            self.emit(Op::Nil);
+            self.finish_tail(tail);
+            return Ok(());
+        }
+        let last = forms.len() - 1;
+        for (i, form) in forms.iter().enumerate() {
+            if i == last {
+                self.compile(form, tail)?;
+            } else {
+                self.compile(form, false)?;
+                self.emit(Op::Pop);
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_define(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        let Some(target) = args.first() else {
+            return Err(syntax_error("define", "expected a name"));
+        };
+        let Value::Symbol(name) = target else {
+            return Err(syntax_error("define", &format!("cannot define {target}")));
+        };
+        let body = args.rest();
+        if body.len() > 1 {
+            return Err(syntax_error("define", "expected a single value"));
+        }
+        if self.functions.len() > 1 {
+            return Err(syntax_error("define", "internal define is not supported here"));
+        }
+        let slot = self.globals.slot(*name) as u32;
+        match body.first() {
+            Some(value) => self.compile(value, false)?,
+            None => self.emit(Op::Nil),
+        }
+        self.emit(Op::DefineGlobal(slot));
+        self.finish_tail(tail);
+        Ok(())
+    }
+
+    fn compile_set(&mut self, args: &List, tail: bool) -> Result<(), Error> {
+        let rest = args.rest();
+        let (Some(Value::Symbol(name)), Some(value), 2) = (args.first(), rest.first(), args.len()) else {
+            return Err(syntax_error("set!", "expected a variable name and a value"));
+        };
+        self.compile(value, false)?;
+        match self.resolve(*name) {
+            Resolved::Local(slot, false) => self.emit(Op::SetLocal(slot as u32)),
+            Resolved::Local(slot, true) => self.emit(Op::SetLocalCell(slot as u32)),
+            Resolved::Upvalue(i, true) => self.emit(Op::SetUpvalueCell(i as u32)),
+            Resolved::Upvalue(_, false) => {
+                return Err(syntax_error("set!", &format!("{name} cannot be assigned here")));
+            }
+            Resolved::Global(slot) => self.emit(Op::SetGlobal(slot as u32)),
+        }
+        self.finish_tail(tail);
+        Ok(())
     }
 
     fn compile_if(&mut self, args: &List, tail: bool) -> Result<(), Error> {
