@@ -84,6 +84,16 @@ fn with_people(src: &str) -> String {
 }
 
 #[test]
+fn text_functions_work_on_table_columns() {
+    assert_eq!(
+        with_people("(rows (assoc t :label (format \"{} ({})\" (:name t) (:age t))))"),
+        "[{:name \"Ada\", :age 36, :label \"Ada (36)\"} {:name \"Bob\", :age 41, :label \"Bob (41)\"}]"
+    );
+    assert_eq!(with_people("(rows (where t (string-starts-with? (:name t) \"A\")))"), "[{:name \"Ada\", :age 36}]");
+    assert_eq!(with_people("(:name (update t :name string-upcase))"), "#[\"ADA\" \"BOB\"]");
+}
+
+#[test]
 fn tables_are_built_from_columns_or_rows() {
     let grid = "name  age\nAda    36\nBob    41\n(2 rows, 2 columns)";
     assert_eq!(eval("(table {:name [\"Ada\" \"Bob\"] :age [36 41]})"), grid);

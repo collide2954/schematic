@@ -919,10 +919,73 @@ fn string_functions() {
 }
 
 #[test]
+fn format_fills_brace_placeholders() {
+    assert_eq!(eval("(format \"{} sold {} units\" \"Oslo\" 12)"), "\"Oslo sold 12 units\"");
+    assert_eq!(eval("(format \"{1} before {0}, then {}\" \"a\" \"b\")"), "\"b before a, then a\"");
+    assert_eq!(
+        eval("[(format \"{:.2}\" 3.14159) (format \"{:.2}\" 2) (format \"{:.0}\" 2.71) (format \"{:,}\" 1234567) (format \"{:,.2}\" -1234567.891)]"),
+        "[\"3.14\" \"2.00\" \"3\" \"1,234,567\" \"-1,234,567.89\"]"
+    );
+    assert_eq!(
+        eval("(format \"{:>6}|{:<6}|{:^6}|{:5}|{:5}\" \"ab\" \"cd\" \"ef\" 42 \"ab\")"),
+        "\"    ab|cd    |  ef  |   42|ab   \""
+    );
+    assert_eq!(
+        eval("[(format \"{:06.2}\" 3.14159) (format \"{:06.1}\" -3.14159) (format \"{:*^7}\" \"hi\") (format \"{:.2}\" \"text\")]"),
+        "[\"003.14\" \"-003.1\" \"**hi***\" \"te\"]"
+    );
+    assert_eq!(
+        eval("[(format \"{:.1%}\" 0.256) (format \"{:%}\" 0.256) (format \"{:e}\" 1234.5) (format \"{:.2e}\" 1234.5)]"),
+        "[\"25.6%\" \"26%\" \"1.2345e3\" \"1.23e3\"]"
+    );
+    assert_eq!(
+        eval("[(format \"{:?} and {}\" \"q\" \"q\") (format \"{:?}|{}\" nil nil) (format \"{{}} {}\" [1 \"a\"])]"),
+        "[\"\\\"q\\\" and q\" \"nil|\" \"{} [1 a]\"]"
+    );
+    assert_eq!(eval("(format \"{:>3}|\" nil)"), "\"   |\"");
+    assert_eq!(eval("(format \"{} {}\" 1)"), "error: format expects 2 values for \"{} {}\", got 1");
+    assert_eq!(eval("(format \"{:z}\" 1)"), "error: format does not understand \"{:z}\"");
+    assert_eq!(eval("(format \"a { b\" 1)"), "error: format found an unmatched { in \"a { b\"");
+    assert_eq!(eval("(format \"a } b\")"), "error: format found an unmatched } in \"a } b\"");
+    assert_eq!(eval("(format 5)"), "error: format expects a string template, got 5");
+}
+
+#[test]
+fn format_and_string_functions_broadcast_over_arrays() {
+    assert_eq!(eval("(format \"{}: {:.1}\" #[\"a\" \"b\"] #[1 2.26])"), "#[\"a: 1.0\" \"b: 2.3\"]");
+    assert_eq!(eval("(format \"{}-{}\" \"x\" #[1 nil])"), "#[\"x-1\" \"x-\"]");
+    assert_eq!(eval("(format \"{}\" #[1 2] #[1 2 3])"), "error: array lengths differ: 2 and 3");
+    assert_eq!(
+        eval("[(string-upcase #[\"a\" nil \"c\"]) (string-length #[\"ab\" \"c\"]) (string-length \"héllo\")]"),
+        "[#[\"A\" nil \"C\"] #[2 1] 5]"
+    );
+    assert_eq!(
+        eval("[(string-contains? #[\"apple\" \"pear\"] \"pp\") (string->number #[\"1\" \"x\" \"2.5\"]) (string-index-of #[\"hello\" \"x\"] \"l\")]"),
+        "[#[true false] #[1.0 nil 2.5] #[2 nil]]"
+    );
+    assert_eq!(
+        eval("[(substring #[\"hello\" \"hi\"] 0 2) (string-replace #[\"a-b\" \"c\"] \"-\" \"+\") (string-split #[\"a,b\" nil] \",\") (number->string #[1 2.5])]"),
+        "[#[\"he\" \"hi\"] #[\"a+b\" \"c\"] [[\"a\" \"b\"] nil] #[\"1.0\" \"2.5\"]]"
+    );
+    assert_eq!(eval("(string-upcase #[1 2])"), "error: string-upcase expects a string, got 1");
+}
+
+#[test]
+fn padding_helpers() {
+    assert_eq!(
+        eval("[(string-pad-left \"7\" 3) (string-pad-left \"7\" 3 \"0\") (string-pad-right \"ab\" 4 \".\") (string-pad-left \"long\" 2) (string-pad-left #[\"7\" \"42\"] 3 \"0\")]"),
+        "[\"  7\" \"007\" \"ab..\" \"long\" #[\"007\" \"042\"]]"
+    );
+    assert_eq!(eval("(string-pad-left \"x\" 3 \"ab\")"), "error: string-pad-left expects a single padding character, got \"ab\"");
+}
+
+#[test]
 fn printing_goes_to_the_interpreter_output() {
     assert_eq!(eval_with_output("(println \"hi\" 1 [\"a\"])"), ("nil".to_string(), "hi 1 [a]\n".to_string()));
     assert_eq!(eval_with_output("(print \"a\") (print \"b\" 1)").1, "ab 1");
     assert_eq!(eval_with_output("(prn \"hi\" [\"a\"])").1, "\"hi\" [\"a\"]\n");
+    assert_eq!(eval_with_output("(printf \"{} + {} = {:.1}\\n\" 1 2 3)"), ("nil".to_string(), "1 + 2 = 3.0\n".to_string()));
+    assert_eq!(eval_with_output("(printf \"{:>3}\\n\" #[1 22])").1, "  1\n 22\n");
     assert_eq!(eval_with_output("(newline)").1, "\n");
     assert_eq!(eval_with_output("(println)").1, "\n");
     assert_eq!(eval_with_output("(for-each println [1 2])").1, "1\n2\n");
