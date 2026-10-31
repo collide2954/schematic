@@ -65,6 +65,15 @@
 (check "str" "Total: 42" (str "Total: " 42))
 (check "split" ["a" "b" "c"] (string-split "a,b,c" ","))
 (check "upcase" "HI" (string-upcase "hi"))
+(check "format" "Oslo sold 12 units" (format "{} sold {} units" "Oslo" 12))
+(check "format precision" "3.14" (format "{:.2}" 3.14159))
+(check "format thousands" "1,234,567" (format "{:,}" 1234567))
+(check "format align" "    ab|cd    |" (format "{:>6}|{:<6}|" "ab" "cd"))
+(check "format percent" "25.6%" (format "{:.1%}" 0.256))
+(check "pad" "007" (string-pad-left "7" 3 "0"))
+(check "upcase array" #["OSLO" "ROME"] (string-upcase #["oslo" "rome"]))
+(check "starts-with array" #[true false] (string-starts-with? #["Ada" "Bob"] "A"))
+(check "format array" #["Ada (36)" "Bob (41)"] (format "{} ({})" #["Ada" "Bob"] #[36 41]))
 
 ;; Arrays
 (define prices #[10 20 30 nil])

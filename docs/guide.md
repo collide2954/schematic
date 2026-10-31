@@ -197,12 +197,34 @@ Useful operations:
 ```
 
 Strings have their own family of functions, all starting with `string-`,
-plus `str`, which glues anything together:
+plus `str`, which glues anything together, and `format`, which fills `{}`
+placeholders in a template:
 
 ```scheme
-(str "Total: " 42)              ; "Total: 42"
-(string-split "a,b,c" ",")      ; ["a" "b" "c"]
-(string-upcase "hi")            ; "HI"
+(str "Total: " 42)                    ; "Total: 42"
+(string-split "a,b,c" ",")            ; ["a" "b" "c"]
+(string-upcase "hi")                  ; "HI"
+(format "{} sold {} units" "Oslo" 12) ; "Oslo sold 12 units"
+(format "{:.2}" 3.14159)              ; "3.14"
+(format "{:,}" 1234567)               ; "1,234,567"
+(format "{:>6}|{:<6}|" "ab" "cd")     ; "    ab|cd    |"
+(format "{:.1%}" 0.256)               ; "25.6%"
+```
+
+After the colon come, in order, a fill character with an alignment (`<`,
+`>`, or `^`), a width, `,` for thousands separators, `.` and a precision, and
+a type: `e` for scientific notation, `%` for a percentage, `?` for the
+readable form with strings quoted. `{0}` and `{1}` pick arguments by
+position, and `{{` writes a literal brace. `printf` prints a formatted string
+exactly as given, and `string-pad-left` and `string-pad-right` pad to a width.
+
+Every string function accepts an array of strings in place of a single
+string and returns an array, so a text column can be cleaned in one call:
+
+```scheme
+(string-upcase #["oslo" "rome"])            ; #["OSLO" "ROME"]
+(string-starts-with? #["Ada" "Bob"] "A")    ; #[true false]
+(format "{} ({})" #["Ada" "Bob"] #[36 41])  ; #["Ada (36)" "Bob (41)"]
 ```
 
 ## Arrays

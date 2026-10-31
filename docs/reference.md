@@ -131,16 +131,22 @@ when the elements allow it, and anything else gives a vector.
 | Function | Description |
 |---|---|
 | `(str x...)` | concatenate display forms; `nil` contributes nothing |
+| `(format template x...)` | fill `{}` placeholders; `{1}` picks by position, `{{` is a literal brace, and `{:spec}` takes, in order, a fill character with an alignment (`<`, `>`, `^`), `0` for zero padding, a width, `,` for thousands separators, `.` and a precision, and a type: `e` scientific, `%` percentage, `?` readable form |
+| `(string-length s)` | number of characters |
 | `(substring s start [end])` | by character position |
 | `(string-split s [sep])` | split on a separator, or on whitespace |
 | `(string-join [sep] coll)` | join display forms |
 | `(string-upcase s)`, `(string-downcase s)`, `(string-trim s)` | case and trimming |
 | `(string-contains? s part)`, `(string-starts-with? s part)`, `(string-ends-with? s part)` | tests |
 | `(string-replace s from to)`, `(string-index-of s part)`, `(string-repeat s n)` | editing and search |
+| `(string-pad-left s width [ch])`, `(string-pad-right s width [ch])` | pad to a width with spaces or one given character |
 | `(string->number s)`, `(number->string n)` | conversions; parsing failure gives `nil` |
 | `(name x)`, `(keyword x)`, `(symbol x)` | between strings, keywords, and symbols |
 
 `count`, `nth`, `first`, and `vec` also work on strings, by character.
+Every function above also accepts an array of strings as its first argument
+and returns an array, with missing elements staying missing; `format`
+returns an array when any argument is one, repeating the scalars.
 
 ## Arrays
 
@@ -190,6 +196,7 @@ when the elements allow it, and anything else gives a vector.
 | `(parse-csv text [opts])`, `(to-csv t [opts])` | the same for strings |
 | `(print x...)`, `(println x...)` | human-readable output, strings without quotes |
 | `(prn x...)` | output in readable form, strings quoted |
+| `(printf template x...)` | print `(format template x...)` as is, with no newline added |
 | `(newline)` | a line break |
 | `(exit [code])` | stop the program |
 

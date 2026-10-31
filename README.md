@@ -45,7 +45,9 @@ Early development. Working today:
 - Bytecode compiler and VM with proper tail calls, closures, `loop`/`recur`
 - `try`/`catch`/`finally`, `raise`, and `call/ec` escape continuations
 - Hygienic `syntax-rules` macros
-- A standard library of collection, string, numeric, and higher-order functions
+- A standard library of collection, string, numeric, and higher-order
+  functions, with `format` placeholders and text functions that work on whole
+  columns
 - Typed arrays with missing values, broadcasting arithmetic, statistics, and
   ordered helpers such as `lag`, `diff`, `rank`, `rolling`, and `running-sum`
 - Tables with `select`, `where`, `distinct`, `order-by`, `group-by`,
@@ -53,7 +55,7 @@ Early development. Working today:
   appending, and CSV reading and writing
 - A REPL and file runner
 
-Next up: string formatting, plotting-friendly output, and more performance work.
+Next up: dates and times, plotting-friendly output, and more performance work.
 
 ## Running
 
