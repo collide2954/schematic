@@ -8,6 +8,7 @@ use crate::list::List;
 use crate::map::Map;
 use crate::set::Set;
 use crate::symbol::Symbol;
+use crate::table::Table;
 use crate::vector::Vector;
 use crate::vm::{Closure, Native};
 
@@ -25,6 +26,7 @@ pub enum Value {
     Map(Rc<Map>),
     Set(Rc<Set>),
     Array(Rc<Array>),
+    Table(Rc<Table>),
     Closure(Rc<Closure>),
     Native(Rc<Native>),
     Cell(Rc<RefCell<Value>>),
@@ -89,6 +91,7 @@ impl Value {
             Value::Map(_) => "map",
             Value::Set(_) => "set",
             Value::Array(_) => "array",
+            Value::Table(_) => "table",
             Value::Closure(_) | Value::Native(_) | Value::Escape(_) => "function",
             Value::Cell(_) => "cell",
             Value::Signal(_) => "signal",
@@ -141,6 +144,7 @@ const TAG_MAP: u64 = 0x09;
 const TAG_SET: u64 = 0x0a;
 const TAG_POINTER: u64 = 0x0b << 56;
 const TAG_ARRAY: u64 = 0x0c;
+const TAG_TABLE: u64 = 0x0d;
 
 impl Value {
     pub fn hash_code(&self) -> u64 {
@@ -169,6 +173,9 @@ impl Value {
                 mix(TAG_SET ^ sum)
             }
             Value::Array(a) => a.iter().fold(mix(TAG_ARRAY), |h, item| mix(h ^ item.hash_code())),
+            Value::Table(t) => t.columns().fold(mix(TAG_TABLE), |h, (name, column)| {
+                mix(h ^ Value::Keyword(name).hash_code() ^ Value::Array(column.clone()).hash_code())
+            }),
             Value::Closure(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
             Value::Native(n) => mix(Rc::as_ptr(n) as usize as u64 ^ TAG_POINTER),
             Value::Cell(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
@@ -195,6 +202,7 @@ impl PartialEq for Value {
             (Map(a), Map(b)) => Rc::ptr_eq(a, b) || a == b,
             (Set(a), Set(b)) => Rc::ptr_eq(a, b) || a == b,
             (Array(a), Array(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Table(a), Table(b)) => Rc::ptr_eq(a, b) || a == b,
             (Closure(a), Closure(b)) => Rc::ptr_eq(a, b),
             (Native(a), Native(b)) => Rc::ptr_eq(a, b),
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
@@ -273,6 +281,7 @@ impl Value {
             }
             Value::Set(s) => write_seq(f, "#{", s.iter(), "}", readable),
             Value::Array(a) => a.format(f, readable),
+            Value::Table(t) => t.format(f),
             Value::Closure(c) => match c.proto.name {
                 Some(name) => write!(f, "#<procedure {name}>"),
                 None => f.write_str("#<procedure>"),

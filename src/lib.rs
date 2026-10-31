@@ -11,6 +11,7 @@ pub mod map;
 pub mod reader;
 pub mod set;
 pub mod symbol;
+pub mod table;
 pub mod value;
 pub mod vector;
 pub mod vm;

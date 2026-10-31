@@ -11,6 +11,7 @@ mod io;
 pub mod math;
 mod stats;
 mod strings;
+mod tables;
 
 pub fn install(globals: &mut Globals) {
     core::install(globals);
@@ -20,6 +21,7 @@ pub fn install(globals: &mut Globals) {
     strings::install(globals);
     io::install(globals);
     stats::install(globals);
+    tables::install(globals);
 }
 
 fn native(globals: &mut Globals, name: &'static str, arity: Arity, func: PureFn) {

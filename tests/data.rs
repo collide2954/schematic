@@ -67,6 +67,42 @@ fn arrays_act_as_sequences() {
     assert_eq!(eval("[(take 2 #[1 2 3]) (filter even? #[1 2 3 4]) (map str #[1 2]) (map (lambda (x) [x]) #[1]) (reverse #[1 2])]"), "[#[1 2] #[2 4] #[\"1\" \"2\"] [[1]] #[2 1]]");
 }
 
+const PEOPLE: &str = "(define t (table {:name [\"Ada\" \"Bob\"] :age [36 41]}))";
+
+fn with_people(src: &str) -> String {
+    eval(&format!("{PEOPLE} {src}"))
+}
+
+#[test]
+fn tables_are_built_from_columns_or_rows() {
+    let grid = "name  age\nAda    36\nBob    41\n(2 rows, 2 columns)";
+    assert_eq!(eval("(table {:name [\"Ada\" \"Bob\"] :age [36 41]})"), grid);
+    assert_eq!(eval("(table :name [\"Ada\" \"Bob\"] :age [36 41])"), grid);
+    assert_eq!(eval("(table [{:name \"Ada\" :age 36} {:name \"Bob\" :age 41}])"), grid);
+    assert_eq!(eval("(table {:name #[\"Ada\" \"Bob\"] :age #[36 41]})"), grid);
+    assert_eq!(eval("(table {:a [1 2] :b [1]})"), "error: table columns must have the same length: :a has 2 rows but :b has 1");
+    assert_eq!(eval("(table {})"), "(0 rows, 0 columns)");
+    assert_eq!(eval("(table {:x [1]})"), "x\n1\n(1 row, 1 column)");
+    assert_eq!(eval("(table 5)"), "error: table expects a map of columns, a vector of row maps, or keyword and column pairs, got 5");
+}
+
+#[test]
+fn table_columns_and_rows_are_accessible() {
+    assert_eq!(with_people("[(columns t) (nrows t) (count t) (:age t) (col t :name) (t :age)]"), "[[:name :age] 2 2 #[36 41] #[\"Ada\" \"Bob\"] #[36 41]]");
+    assert_eq!(with_people("[(row t 1) (rows t) (first t) (map :age t)]"), "[{:name \"Bob\", :age 41} [{:name \"Ada\", :age 36} {:name \"Bob\", :age 41}] {:name \"Ada\", :age 36} [36 41]]");
+    assert_eq!(with_people("[(:zzz t) (get t :zzz 0) (table? t) (table? {}) (empty? t) (empty? (table {}))]"), "[nil 0 true false false true]");
+    assert_eq!(with_people("(col t :zzz)"), "error: table has no column :zzz");
+    assert_eq!(with_people("(row t 5)"), "error: index 5 is out of bounds for a table of length 2");
+}
+
+#[test]
+fn tables_print_as_grids_with_missing_values_and_truncation() {
+    assert_eq!(eval("(table {:n [\"x\" nil] :v [1.5 nil]})"), "n    v\nx    1.5\nnil  nil\n(2 rows, 2 columns)");
+    let big = eval("(table {:x (range 25)})");
+    assert!(big.starts_with("x\n 0\n 1\n"), "{big}");
+    assert!(big.ends_with("19\n... 5 more rows\n(25 rows, 1 column)"), "{big}");
+}
+
 #[test]
 fn statistics_skip_missing_values() {
     assert_eq!(eval("[(sum #[1 2 3]) (sum #[1.5 nil 2]) (sum #[]) (sum [1 2])]"), "[6 3.5 0 3]");

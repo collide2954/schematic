@@ -1,0 +1,124 @@
+use std::fmt;
+use std::rc::Rc;
+
+use crate::array::Array;
+use crate::error::Error;
+use crate::symbol::Symbol;
+use crate::value::{Shown, Value};
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Table {
+    names: Vec<Symbol>,
+    columns: Vec<Rc<Array>>,
+}
+
+const PRINT_ROWS: usize = 20;
+
+fn plural(n: usize, word: &str) -> String {
+    if n == 1 { format!("{n} {word}") } else { format!("{n} {word}s") }
+}
+
+impl Table {
+    pub fn new(pairs: Vec<(Symbol, Rc<Array>)>) -> Result<Table, Error> {
+        let mut table = Table::default();
+        for (name, column) in pairs {
+            table.set_column(name, column)?;
+        }
+        Ok(table)
+    }
+
+    pub fn set_column(&mut self, name: Symbol, column: Rc<Array>) -> Result<(), Error> {
+        let existing = self.names.iter().position(|n| *n == name);
+        if let Some((i, other)) = self.columns.iter().enumerate().find(|(i, _)| Some(*i) != existing) {
+            if other.len() != column.len() {
+                let message = format!(
+                    "table columns must have the same length: :{} has {} rows but :{name} has {}",
+                    self.names[i],
+                    other.len(),
+                    column.len()
+                );
+                return Err(Error::new("value-error", message));
+            }
+        }
+        match existing {
+            Some(i) => self.columns[i] = column,
+            None => {
+                self.names.push(name);
+                self.columns.push(column);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn nrows(&self) -> usize {
+        self.columns.first().map_or(0, |c| c.len())
+    }
+
+    pub fn ncols(&self) -> usize {
+        self.names.len()
+    }
+
+    pub fn names(&self) -> &[Symbol] {
+        &self.names
+    }
+
+    pub fn columns(&self) -> impl Iterator<Item = (Symbol, &Rc<Array>)> {
+        self.names.iter().copied().zip(self.columns.iter())
+    }
+
+    pub fn column(&self, name: Symbol) -> Option<&Rc<Array>> {
+        self.names.iter().position(|n| *n == name).map(|i| &self.columns[i])
+    }
+
+    pub fn row(&self, index: usize) -> Option<Value> {
+        if index >= self.nrows() {
+            return None;
+        }
+        let pairs = self.columns().map(|(name, column)| (Value::Keyword(name), column.get(index).unwrap()));
+        Some(Value::map(pairs))
+    }
+
+    pub fn rows(&self) -> impl Iterator<Item = Value> + '_ {
+        (0..self.nrows()).map(move |i| self.row(i).unwrap())
+    }
+
+    pub fn format(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let nrows = self.nrows();
+        let shown = nrows.min(PRINT_ROWS);
+        let mut cells: Vec<Vec<String>> = Vec::with_capacity(self.ncols());
+        let mut numeric = Vec::with_capacity(self.ncols());
+        for (name, column) in self.columns() {
+            let mut texts = vec![name.to_string()];
+            texts.extend((0..shown).map(|i| Shown(&column.get(i).unwrap()).to_string()));
+            cells.push(texts);
+            numeric.push(matches!(column.kind(), "int" | "float"));
+        }
+        let widths: Vec<usize> =
+            cells.iter().map(|texts| texts.iter().map(|t| t.chars().count()).max().unwrap_or(0)).collect();
+        for line in 0..=shown {
+            let mut out = String::new();
+            for (c, texts) in cells.iter().enumerate() {
+                if c > 0 {
+                    out.push_str("  ");
+                }
+                let text = &texts[line];
+                let pad = widths[c] - text.chars().count();
+                if numeric[c] && line > 0 {
+                    out.push_str(&" ".repeat(pad));
+                    out.push_str(text);
+                } else {
+                    out.push_str(text);
+                    out.push_str(&" ".repeat(pad));
+                }
+            }
+            let trimmed = out.trim_end();
+            if !trimmed.is_empty() {
+                writeln!(f, "{trimmed}")?;
+            }
+        }
+        if nrows > shown {
+            writeln!(f, "... {} more rows", nrows - shown)?;
+        }
+        write!(f, "({}, {})", plural(nrows, "row"), plural(self.ncols(), "column"))
+    }
+}

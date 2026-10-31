@@ -135,6 +135,10 @@ fn lookup(callee: &Value, args: &[Value]) -> Result<Value, Error> {
     let found = match (callee, collection) {
         (_, Value::Map(m)) => m.get(key).cloned(),
         (_, Value::Set(s)) => s.contains(key).then(|| key.clone()),
+        (_, Value::Table(t)) => match key {
+            Value::Keyword(k) => t.column(k.root()).map(|c| Value::Array(c.clone())),
+            _ => None,
+        },
         (Value::Vector(_) | Value::Array(_), _) => {
             if let Some(found) = gather(callee, key)? {
                 return Ok(found);
@@ -648,7 +652,7 @@ impl Vm {
                 self.stack.push(result);
                 Ok(())
             }
-            Value::Keyword(_) | Value::Map(_) | Value::Vector(_) | Value::Set(_) | Value::Array(_) => {
+            Value::Keyword(_) | Value::Map(_) | Value::Vector(_) | Value::Set(_) | Value::Array(_) | Value::Table(_) => {
                 let result = lookup(&callee, &self.stack[callee_index + 1..])?;
                 self.stack.truncate(callee_index);
                 self.stack.push(result);
