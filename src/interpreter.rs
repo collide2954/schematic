@@ -24,6 +24,10 @@ impl Interpreter {
         Interpreter { vm }
     }
 
+    pub fn set_frame_limit(&mut self, limit: usize) {
+        self.vm.set_frame_limit(limit);
+    }
+
     pub fn eval_str(&mut self, src: &str) -> Result<Value, Error> {
         let mut result = Value::Nil;
         for form in read_all(src)? {

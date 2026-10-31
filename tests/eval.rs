@@ -271,6 +271,34 @@ fn lambda_syntax_errors() {
     assert!(eval("(lambda (x &) x)").starts_with("error:"));
 }
 
+fn eval_with_frame_limit(src: &str, limit: usize) -> String {
+    let mut interp = Interpreter::new();
+    interp.set_frame_limit(limit);
+    match interp.eval_str(src) {
+        Ok(v) => v.to_string(),
+        Err(e) => format!("error: {e}"),
+    }
+}
+
+#[test]
+fn tail_calls_do_not_grow_the_stack() {
+    let count = "(define (count n) (if (= n 0) 'done (count (- n 1)))) (count 10000)";
+    assert_eq!(eval_with_frame_limit(count, 100), "done");
+    let mutual = "(define (even? n) (if (= n 0) true (odd? (- n 1)))) (define (odd? n) (if (= n 0) false (even? (- n 1)))) (even? 10001)";
+    assert_eq!(eval_with_frame_limit(mutual, 100), "false");
+    let through_begin = "(define (count n) (begin 1 (if (= n 0) 'done (count (- n 1))))) (count 10000)";
+    assert_eq!(eval_with_frame_limit(through_begin, 100), "done");
+}
+
+#[test]
+fn deep_non_tail_recursion_works_until_the_limit() {
+    let sum = "(define (sum n) (if (= n 0) 0 (+ n (sum (- n 1))))) (sum 500)";
+    assert_eq!(eval_with_frame_limit(sum, 1000), "125250");
+    assert_eq!(eval("(define (sum n) (if (= n 0) 0 (+ n (sum (- n 1))))) (sum 20000)"), "200010000");
+    let runaway = "(define (f) (+ 1 (f))) (f)";
+    assert_eq!(eval_with_frame_limit(runaway, 1000), "error: stack overflow");
+}
+
 #[test]
 fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));

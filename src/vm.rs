@@ -105,16 +105,33 @@ struct Frame {
     base: usize,
 }
 
-#[derive(Default)]
+const DEFAULT_FRAME_LIMIT: usize = 1_000_000;
+
 pub struct Vm {
     pub globals: Globals,
     stack: Vec<Value>,
     frames: Vec<Frame>,
+    frame_limit: usize,
+}
+
+impl Default for Vm {
+    fn default() -> Vm {
+        Vm::new()
+    }
 }
 
 impl Vm {
     pub fn new() -> Vm {
-        Vm::default()
+        Vm {
+            globals: Globals::default(),
+            stack: Vec::new(),
+            frames: Vec::new(),
+            frame_limit: DEFAULT_FRAME_LIMIT,
+        }
+    }
+
+    pub fn set_frame_limit(&mut self, limit: usize) {
+        self.frame_limit = limit;
     }
 
     pub fn execute(&mut self, proto: Rc<Proto>) -> Result<Value, Error> {
@@ -333,6 +350,9 @@ impl Vm {
         let callee = self.stack[callee_index].clone();
         match callee {
             Value::Closure(closure) => {
+                if self.frames.len() >= self.frame_limit {
+                    return Err(Error::new("stack-overflow", "stack overflow"));
+                }
                 self.bind_args(&closure.proto, callee_index + 1, argc)?;
                 self.frames.push(Frame { closure, ip: 0, base: callee_index + 1 });
                 Ok(())
