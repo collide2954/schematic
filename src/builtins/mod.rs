@@ -6,6 +6,7 @@ use crate::vm::{Arity, Globals, Native, NativeFn, OwnedFn, PureFn, VmFn};
 
 pub mod collections;
 mod core;
+mod csv;
 mod functional;
 mod io;
 pub mod math;
@@ -22,6 +23,7 @@ pub fn install(globals: &mut Globals) {
     io::install(globals);
     stats::install(globals);
     tables::install(globals);
+    csv::install(globals);
 }
 
 fn native(globals: &mut Globals, name: &'static str, arity: Arity, func: PureFn) {

@@ -140,6 +140,31 @@ fn tables_group_and_aggregate() {
 }
 
 #[test]
+fn csv_text_parses_into_typed_tables_and_back() {
+    let csv = "name,age,score,member\\nAda,36,1.5,true\\nBob,,2,false\\n\\\"Cy, Jr\\\",41,,\\n";
+    assert_eq!(eval(&format!("(columns (parse-csv \"{csv}\"))")), "[:name :age :score :member]");
+    assert_eq!(eval(&format!("(rows (parse-csv \"{csv}\"))")), "[{:name \"Ada\", :age 36, :score 1.5, :member true} {:name \"Bob\", :age nil, :score 2.0, :member false} {:name \"Cy, Jr\", :age 41, :score nil, :member nil}]");
+    assert_eq!(eval(&format!("(map array-type (vals (into {{}} (map (lambda (c) [c (col (parse-csv \"{csv}\") c)]) (columns (parse-csv \"{csv}\"))))))")), "[:string :int :float :bool]");
+    assert_eq!(eval("(rows (parse-csv \"a;b\\n1;x\" {:sep \";\"}))"), "[{:a 1, :b \"x\"}]");
+    assert_eq!(eval("(rows (parse-csv \"a,b\\n\\\"he said \\\"\\\"hi\\\"\\\"\\\",2\"))"), "[{:a \"he said \\\"hi\\\"\", :b 2}]");
+    assert_eq!(eval("(nrows (parse-csv \"a,b\"))"), "0");
+    assert_eq!(eval("(to-csv (table {:name [\"Ada\" \"Cy, Jr\"] :age [36 nil]}))"), "\"name,age\\nAda,36\\n\\\"Cy, Jr\\\",\\n\"");
+    assert_eq!(eval("(to-csv (table {:q [\"say \\\"hi\\\"\"]}))"), "\"q\\n\\\"say \\\"\\\"hi\\\"\\\"\\\"\\n\"");
+}
+
+#[test]
+fn csv_files_round_trip() {
+    let path = std::env::temp_dir().join(format!("schematic-csv-{}.csv", std::process::id()));
+    let path_str = path.to_str().unwrap().replace('\\', "/");
+    let src = format!(
+        "(define t (table {{:city [\"Oslo\" \"Rome\"] :pop [700000 2800000]}})) (write-csv t \"{path_str}\") (define back (read-csv \"{path_str}\")) [(equal? (rows back) (rows t)) (array-type (:pop back))]"
+    );
+    assert_eq!(eval(&src), "[true :int]");
+    assert!(eval("(read-csv \"definitely/missing.csv\")").starts_with("error: cannot read definitely/missing.csv"));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn tables_print_as_grids_with_missing_values_and_truncation() {
     assert_eq!(eval("(table {:n [\"x\" nil] :v [1.5 nil]})"), "n    v\nx    1.5\nnil  nil\n(2 rows, 2 columns)");
     let big = eval("(table {:x (range 25)})");
