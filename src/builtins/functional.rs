@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::rc::Rc;
 
 use super::collections::{assoc, expects, get, items, like, seq_items};
+use super::tables::group_by_table;
 use super::{native, native_vm};
 use crate::error::Error;
 use crate::map::Map;
@@ -149,6 +150,9 @@ fn take_drop_while(vm: &mut Vm, args: Vec<Value>, take: bool) -> Result<Value, E
 }
 
 fn group_by(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
+    if let Value::Table(t) = &args[0] {
+        return group_by_table(t, &args[1]);
+    }
     let mut groups = Map::new();
     for x in items("group-by", &args[1])? {
         let key = vm.call_value(&args[0], std::slice::from_ref(&x))?;

@@ -117,6 +117,28 @@ fn tables_filter_sort_and_slice() {
     assert_eq!(with_people("(:name (where t (> (:age t) 40)))"), "#[\"Bob\"]");
 }
 
+const SALES: &str = "(define s (table {:city [\"Oslo\" \"Rome\" \"Oslo\" \"Rome\" \"Oslo\"] :amount [10 20 30 40 nil] :year [2020 2020 2021 2021 2021]}))";
+
+fn with_sales(src: &str) -> String {
+    eval(&format!("{SALES} {src}"))
+}
+
+#[test]
+fn tables_group_and_aggregate() {
+    assert_eq!(with_sales("[(keys (group-by s :city)) (nrows ((group-by s :city) \"Oslo\")) (:amount ((group-by s :city) \"Rome\"))]"), "[[\"Oslo\" \"Rome\"] 3 #[20 40]]");
+    assert_eq!(with_sales("(aggregate s :city {:total [sum :amount] :n [count]})"), "city  total  n\nOslo     40  3\nRome     60  2\n(2 rows, 3 columns)");
+    assert_eq!(with_sales("(rows (aggregate s {:total [sum :amount] :avg [mean :amount]}))"), "[{:total 100, :avg 25.0}]");
+    assert_eq!(
+        with_sales("(rows (aggregate s [:city :year] {:n [count]}))"),
+        "[{:city \"Oslo\", :year 2020, :n 1} {:city \"Rome\", :year 2020, :n 1} {:city \"Oslo\", :year 2021, :n 2} {:city \"Rome\", :year 2021, :n 1}]"
+    );
+    assert_eq!(with_sales("[(:biggest (aggregate s :city {:biggest [max :amount]})) (:first-year (aggregate s :city {:first-year [first :year]}))]"), "[#[30 40] #[2020 2020]]");
+    assert_eq!(with_sales("(rows (aggregate s :city {:n nrows}))"), "[{:city \"Oslo\", :n 3} {:city \"Rome\", :n 2}]");
+    assert_eq!(with_sales("(aggregate s :city {:x [sum :nope]})"), "error: table has no column :nope");
+    assert_eq!(with_sales("(aggregate s :city 5)"), "error: aggregate expects a map from new column names to [function column] pairs, got 5");
+    assert_eq!(with_sales("(keys (group-by s [:city :year]))"), "[[\"Oslo\" 2020] [\"Rome\" 2020] [\"Oslo\" 2021] [\"Rome\" 2021]]");
+}
+
 #[test]
 fn tables_print_as_grids_with_missing_values_and_truncation() {
     assert_eq!(eval("(table {:n [\"x\" nil] :v [1.5 nil]})"), "n    v\nx    1.5\nnil  nil\n(2 rows, 2 columns)");

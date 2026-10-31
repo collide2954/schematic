@@ -6,6 +6,7 @@ use super::functional::compare_values;
 use super::{native, native_vm};
 use crate::array::Array;
 use crate::error::Error;
+use crate::map::Map;
 use crate::symbol::Symbol;
 use crate::table::Table;
 use crate::value::Value;
@@ -19,6 +20,7 @@ pub fn install(globals: &mut Globals) {
     native(globals, "order-by", Arity::Between(2, 3), order_by);
     native(globals, "head", Arity::Between(1, 2), |args| slice("head", args, true));
     native(globals, "tail", Arity::Between(1, 2), |args| slice("tail", args, false));
+    native_vm(globals, "aggregate", Arity::Between(2, 3), aggregate);
     native(globals, "table?", Arity::Exact(1), |args| Ok(Value::Bool(matches!(args[0], Value::Table(_)))));
     native(globals, "columns", Arity::Exact(1), |args| {
         Ok(Value::vector(as_table("columns", &args[0])?.names().iter().map(|n| Value::Keyword(*n))))
@@ -197,6 +199,116 @@ fn order_by(args: &[Value]) -> Result<Value, Error> {
         Ordering::Equal
     });
     Ok(Value::Table(Rc::new(table.take_rows(&indices))))
+}
+
+fn key_columns(table: &Table, spec: &Value) -> Result<Vec<Symbol>, Error> {
+    let names: Vec<Symbol> = match spec {
+        Value::Vector(_) | Value::List(_) => {
+            items("group-by", spec)?.map(|v| column_name("group-by", &v)).collect::<Result<_, _>>()?
+        }
+        other => vec![column_name("group-by", other)?],
+    };
+    for name in &names {
+        table.column(*name).ok_or_else(|| Table::missing(*name))?;
+    }
+    Ok(names)
+}
+
+fn group_rows(table: &Table, names: &[Symbol]) -> Vec<(Value, Vec<usize>)> {
+    let columns: Vec<&Rc<Array>> = names.iter().map(|n| table.column(*n).unwrap()).collect();
+    let mut groups: Vec<(Value, Vec<usize>)> = Vec::new();
+    let mut positions = Map::new();
+    for i in 0..table.nrows() {
+        let key = if columns.len() == 1 {
+            columns[0].get(i).unwrap()
+        } else {
+            Value::vector(columns.iter().map(|c| c.get(i).unwrap()))
+        };
+        match positions.get(&key) {
+            Some(Value::Int(p)) => groups[*p as usize].1.push(i),
+            _ => {
+                positions.insert_mut(key.clone(), Value::Int(groups.len() as i64));
+                groups.push((key, vec![i]));
+            }
+        }
+    }
+    groups
+}
+
+pub fn group_by_table(table: &Table, spec: &Value) -> Result<Value, Error> {
+    let names = key_columns(table, spec)?;
+    let pairs = group_rows(table, &names)
+        .into_iter()
+        .map(|(key, rows)| (key, Value::Table(Rc::new(table.take_rows(&rows)))));
+    Ok(Value::map(pairs))
+}
+
+fn apply_aggregate(vm: &mut Vm, how: &Value, group: &Table) -> Result<Value, Error> {
+    let whole = || Value::Table(Rc::new(group.clone()));
+    match how {
+        Value::Vector(v) => {
+            let parts: Vec<Value> = v.iter().cloned().collect();
+            match parts.as_slice() {
+                [f] => vm.call_value(f, &[whole()]),
+                [f, col] => {
+                    let name = column_name("aggregate", col)?;
+                    let column = group.column(name).ok_or_else(|| Table::missing(name))?;
+                    vm.call_value(f, &[Value::Array(column.clone())])
+                }
+                _ => Err(expects("aggregate", "[function] or [function column]", how)),
+            }
+        }
+        f @ (Value::Closure(_) | Value::Native(_) | Value::Keyword(_)) => vm.call_value(f, &[whole()]),
+        other => Err(expects("aggregate", "[function column] pairs", other)),
+    }
+}
+
+fn aggregate(vm: &mut Vm, args: Vec<Value>) -> Result<Value, Error> {
+    let table = as_table("aggregate", &args[0])?;
+    let (by, spec) = match args.len() {
+        3 => (Some(&args[1]), &args[2]),
+        _ => (None, &args[1]),
+    };
+    let Value::Map(spec) = spec else {
+        return Err(expects("aggregate", "a map from new column names to [function column] pairs", spec));
+    };
+    let names = match by {
+        Some(spec) => key_columns(table, spec)?,
+        None => Vec::new(),
+    };
+    let groups = if names.is_empty() {
+        vec![(Value::Nil, (0..table.nrows()).collect())]
+    } else {
+        group_rows(table, &names)
+    };
+    let mut specs = Vec::with_capacity(spec.len());
+    for (k, how) in spec.iter() {
+        specs.push((column_name("aggregate", k)?, how.clone()));
+    }
+    let mut out_names: Vec<Symbol> = names.clone();
+    out_names.extend(specs.iter().map(|(name, _)| *name));
+    let mut out_values: Vec<Vec<Value>> = vec![Vec::with_capacity(groups.len()); out_names.len()];
+    for (key, rows) in &groups {
+        let group = table.take_rows(rows);
+        match names.len() {
+            0 => {}
+            1 => out_values[0].push(key.clone()),
+            _ => {
+                for (c, part) in seq_items(key).unwrap().enumerate() {
+                    out_values[c].push(part);
+                }
+            }
+        }
+        for (j, (_, how)) in specs.iter().enumerate() {
+            let value = apply_aggregate(vm, how, &group)?;
+            out_values[names.len() + j].push(value);
+        }
+    }
+    let mut pairs = Vec::with_capacity(out_names.len());
+    for (name, values) in out_names.into_iter().zip(out_values) {
+        pairs.push((name, Rc::new(Array::from_values(values)?)));
+    }
+    Ok(Value::Table(Rc::new(Table::new(pairs)?)))
 }
 
 fn slice(name: &str, args: &[Value], from_start: bool) -> Result<Value, Error> {
