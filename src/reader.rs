@@ -87,9 +87,57 @@ impl<'a> Reader<'a> {
         };
         let value = match c {
             '"' => self.read_string()?,
+            '(' => Value::List(self.read_items(')')?.into_iter().collect()),
+            ')' | ']' | '}' => return Err(self.error(format!("unexpected `{c}`"))),
+            '\'' => self.read_prefixed("quote")?,
+            '`' => self.read_prefixed("quasiquote")?,
+            '~' => {
+                self.bump();
+                if self.peek() == Some('@') {
+                    self.bump();
+                    self.read_wrapped("unquote-splicing", "~@")?
+                } else {
+                    self.read_wrapped("unquote", "~")?
+                }
+            }
             _ => self.read_atom()?,
         };
         Ok(Some(value))
+    }
+
+    fn read_prefixed(&mut self, name: &str) -> Result<Value, ReadError> {
+        let prefix = self.bump().unwrap().to_string();
+        self.read_wrapped(name, &prefix)
+    }
+
+    fn read_wrapped(&mut self, name: &str, prefix: &str) -> Result<Value, ReadError> {
+        match self.read()? {
+            Some(v) => Ok(Value::list([Value::symbol(name), v])),
+            None => Err(self.error(format!("expected a form after `{prefix}`"))),
+        }
+    }
+
+    fn read_items(&mut self, close: char) -> Result<Vec<Value>, ReadError> {
+        let open = self.bump().unwrap();
+        let unclosed = self.error(format!("unclosed `{open}`"));
+        let mut items = Vec::new();
+        loop {
+            self.skip_whitespace();
+            match self.peek() {
+                None => return Err(unclosed),
+                Some(c) if c == close => {
+                    self.bump();
+                    return Ok(items);
+                }
+                Some(c @ (')' | ']' | '}')) => {
+                    return Err(self.error(format!("expected `{close}` but found `{c}`")));
+                }
+                Some(_) => match self.read()? {
+                    Some(v) => items.push(v),
+                    None => return Err(unclosed),
+                },
+            }
+        }
     }
 
     fn read_string(&mut self) -> Result<Value, ReadError> {
@@ -255,5 +303,67 @@ mod tests {
     #[test]
     fn empty_input_is_an_error() {
         assert!(read_str("   ").is_err());
+    }
+
+    fn list(items: Vec<Value>) -> Value {
+        Value::list(items)
+    }
+
+    #[test]
+    fn reads_lists() {
+        assert_eq!(
+            read("(+ 1 2)"),
+            list(vec![Value::symbol("+"), Value::Int(1), Value::Int(2)])
+        );
+        assert_eq!(read("()"), list(vec![]));
+        assert_eq!(read("( a )"), list(vec![Value::symbol("a")]));
+    }
+
+    #[test]
+    fn reads_nested_lists() {
+        assert_eq!(
+            read("(a (b c))"),
+            list(vec![
+                Value::symbol("a"),
+                list(vec![Value::symbol("b"), Value::symbol("c")])
+            ])
+        );
+    }
+
+    #[test]
+    fn reads_quote_forms() {
+        assert_eq!(read("'x"), list(vec![Value::symbol("quote"), Value::symbol("x")]));
+        assert_eq!(read("`x"), list(vec![Value::symbol("quasiquote"), Value::symbol("x")]));
+        assert_eq!(read("~x"), list(vec![Value::symbol("unquote"), Value::symbol("x")]));
+        assert_eq!(
+            read("~@x"),
+            list(vec![Value::symbol("unquote-splicing"), Value::symbol("x")])
+        );
+        assert_eq!(
+            read("'(1 2)"),
+            list(vec![Value::symbol("quote"), list(vec![Value::Int(1), Value::Int(2)])])
+        );
+    }
+
+    #[test]
+    fn reads_several_forms() {
+        assert_eq!(
+            read_all("1 (2) x").unwrap(),
+            vec![Value::Int(1), list(vec![Value::Int(2)]), Value::symbol("x")]
+        );
+        assert_eq!(read_all("").unwrap(), vec![]);
+    }
+
+    #[test]
+    fn unbalanced_parens_are_errors() {
+        assert!(read_str("(1 2").is_err());
+        assert!(read_str(")").is_err());
+        assert!(read_str("(1 2]").is_err());
+    }
+
+    #[test]
+    fn errors_carry_position() {
+        let err = read_str("(1\n  \"oops").unwrap_err();
+        assert_eq!((err.line, err.col), (2, 3));
     }
 }
