@@ -144,6 +144,33 @@ pub struct Line {
     pub text: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditKind {
+    Typing,
+    Space,
+    Erase,
+    Other,
+}
+
+pub fn edit_kind(action: &Action) -> Option<EditKind> {
+    Some(match action {
+        Action::Edit(Edit::Insert(c)) if c.is_whitespace() => EditKind::Space,
+        Action::Edit(Edit::Insert(_)) => EditKind::Typing,
+        Action::Edit(Edit::Backspace | Edit::Delete) => EditKind::Erase,
+        Action::Edit(_) => EditKind::Other,
+        _ => return None,
+    })
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Snapshot {
+    pub text: String,
+    pub position: Position,
+    pub selection: Option<Position>,
+}
+
+const HISTORY: usize = 200;
+
 pub struct Document {
     pub id: u64,
     pub path: Option<PathBuf>,
@@ -153,6 +180,10 @@ pub struct Document {
     pub offset: f32,
     pub problems: Vec<Diagnostic>,
     pub checked: u64,
+    pub history: Vec<Snapshot>,
+    pub future: Vec<Snapshot>,
+    pub last_edit: Option<EditKind>,
+    pub found: Vec<(usize, usize)>,
 }
 
 static DOCUMENT_IDS: AtomicU64 = AtomicU64::new(1);
@@ -160,7 +191,71 @@ static DOCUMENT_IDS: AtomicU64 = AtomicU64::new(1);
 impl Document {
     pub fn new(path: Option<PathBuf>, content: text_editor::Content) -> Document {
         let id = DOCUMENT_IDS.fetch_add(1, Ordering::Relaxed);
-        Document { id, path, content, marks: Marks::default(), dirty: false, offset: 0.0, problems: Vec::new(), checked: 0 }
+        Document {
+            id,
+            path,
+            content,
+            marks: Marks::default(),
+            dirty: false,
+            offset: 0.0,
+            problems: Vec::new(),
+            checked: 0,
+            history: Vec::new(),
+            future: Vec::new(),
+            last_edit: None,
+            found: Vec::new(),
+        }
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        let cursor = self.content.cursor();
+        Snapshot { text: self.content.text(), position: cursor.position, selection: cursor.selection }
+    }
+
+    fn remember(&mut self) {
+        self.history.push(self.snapshot());
+        if self.history.len() > HISTORY {
+            self.history.remove(0);
+        }
+        self.future.clear();
+    }
+
+    pub fn record(&mut self, kind: EditKind) {
+        let fresh = match (kind, self.last_edit) {
+            (EditKind::Other, _) => true,
+            (EditKind::Space, Some(EditKind::Other)) => false,
+            (kind, last) => Some(kind) != last,
+        };
+        if fresh {
+            self.remember();
+        }
+        self.last_edit = Some(if kind == EditKind::Space && self.last_edit == Some(EditKind::Other) { EditKind::Other } else { kind });
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.content = text_editor::Content::with_text(&snapshot.text);
+        self.content.move_to(text_editor::Cursor { position: snapshot.position, selection: snapshot.selection });
+        self.dirty = true;
+        self.last_edit = None;
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.history.pop() else { return false };
+        self.future.push(self.snapshot());
+        self.restore(previous);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.future.pop() else { return false };
+        self.history.push(self.snapshot());
+        self.restore(next);
+        true
+    }
+
+    pub fn replace_text(&mut self, text: &str, position: Position, selection: Option<Position>) {
+        self.remember();
+        self.restore(Snapshot { text: text.to_string(), position, selection });
     }
 
     pub fn untitled() -> Document {
@@ -191,6 +286,7 @@ pub struct Studio {
     pub tab: Tab,
     pub help: Option<Help>,
     pub completion: Option<Completion>,
+    pub find: Option<Find>,
     pub editor_width: f32,
     pub editor_height: f32,
     pub side: Side,
@@ -281,6 +377,23 @@ pub enum Message {
     ToggleTheme,
     Checked(u64, u64, Vec<Diagnostic>),
     NextProblem,
+    Undo,
+    Redo,
+    ToggleComment,
+    Reindent,
+    Shortcut(Shortcut),
+    FindOpen(bool),
+    FindQuery(String),
+    FindReplacement(String),
+    FindCase,
+    FindStep(i32),
+    FindReplace,
+    FindReplaceAll,
+    FindClose,
+}
+
+pub fn find_id() -> Id {
+    Id::new("find")
 }
 
 pub fn run() -> iced::Result {
@@ -347,18 +460,17 @@ fn marks_of(content: &text_editor::Content) -> Marks {
     let offset = forms::offset_of(&text, cursor.line, cursor.column);
     let pair = forms::matching_bracket(&text, offset)
         .map(|(open, close)| [forms::line_offset(&text, open), forms::line_offset(&text, close)]);
-    Marks { pair, problems: Vec::new() }
+    Marks { pair, problems: Vec::new(), found: Vec::new() }
 }
 
-pub fn problem_marks(text: &str, problems: &[Diagnostic]) -> Vec<(usize, Range<usize>)> {
-    problems
-        .iter()
-        .map(|d| {
-            let start_offset = d.span.start.min(text.len());
+pub fn line_marks(text: &str, spans: impl Iterator<Item = (usize, usize)>) -> Vec<(usize, Range<usize>)> {
+    spans
+        .map(|(span_start, span_end)| {
+            let start_offset = span_start.min(text.len());
             let (line, column) = forms::line_offset(text, start_offset);
             let line_start = start_offset - column;
             let line_len = text[line_start..].find('\n').unwrap_or(text.len() - line_start);
-            let width = d.span.end.saturating_sub(d.span.start).max(1);
+            let width = span_end.saturating_sub(span_start).max(1);
             let start = column.min(line_len.saturating_sub(1));
             let end = (column + width).min(line_len).max(start + 1);
             (line, start..end)
@@ -366,10 +478,82 @@ pub fn problem_marks(text: &str, problems: &[Diagnostic]) -> Vec<(usize, Range<u
         .collect()
 }
 
+pub fn problem_marks(text: &str, problems: &[Diagnostic]) -> Vec<(usize, Range<usize>)> {
+    line_marks(text, problems.iter().map(|d| (d.span.start, d.span.end)))
+}
+
 fn marks_for(doc: &Document) -> Marks {
+    let text = doc.content.text();
     let mut marks = marks_of(&doc.content);
-    marks.problems = problem_marks(&doc.content.text(), &doc.problems);
+    marks.problems = problem_marks(&text, &doc.problems);
+    marks.found = line_marks(&text, doc.found.iter().copied());
     marks
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Find {
+    pub query: String,
+    pub replacement: String,
+    pub case: bool,
+    pub replacing: bool,
+    pub current: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shortcut {
+    Escape,
+    FindNext,
+    FindPrevious,
+    Find,
+    Replace,
+    Save,
+    SaveAs,
+    Open,
+    New,
+    Close,
+    Palette,
+    GoToLine,
+    Pane(u8),
+}
+
+pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifiers) -> Option<Shortcut> {
+    use iced::keyboard::Key;
+    use iced::keyboard::key::Named;
+    let command = modifiers.command();
+    let shift = modifiers.shift();
+    let letter = |wanted: &str| matches!(key, Key::Character(c) if c.eq_ignore_ascii_case(wanted));
+    Some(match key {
+        Key::Named(Named::Escape) => Shortcut::Escape,
+        Key::Named(Named::F3) => {
+            if shift {
+                Shortcut::FindPrevious
+            } else {
+                Shortcut::FindNext
+            }
+        }
+        _ if !command => return None,
+        _ if letter("f") && !shift => Shortcut::Find,
+        _ if letter("h") => Shortcut::Replace,
+        _ if letter("s") => {
+            if shift {
+                Shortcut::SaveAs
+            } else {
+                Shortcut::Save
+            }
+        }
+        _ if letter("o") && !shift => Shortcut::Open,
+        _ if letter("n") => Shortcut::New,
+        _ if letter("w") => Shortcut::Close,
+        _ if letter("p") && shift => Shortcut::Palette,
+        _ if letter("g") => Shortcut::GoToLine,
+        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=5).contains(n))?),
+        _ => return None,
+    })
+}
+
+fn shortcuts(event: iced::Event, _status: iced::event::Status, _window: window::Id) -> Option<Message> {
+    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event else { return None };
+    shortcut_of(&key, modifiers).map(Message::Shortcut)
 }
 
 fn scripts() -> rfd::AsyncFileDialog {
@@ -452,6 +636,7 @@ impl Studio {
             tab: Tab::Doc(0),
             help: None,
             completion: None,
+            find: None,
             editor_width: 0.0,
             editor_height: 0.0,
             side: Side::Environment,
@@ -625,7 +810,7 @@ impl Studio {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(worker::subscription).map(Message::Worker)
+        Subscription::batch([Subscription::run(worker::subscription).map(Message::Worker), iced::event::listen_with(shortcuts)])
     }
 
     pub fn groups(&self) -> Vec<(Group, Vec<&Binding>)> {
@@ -654,6 +839,10 @@ impl Studio {
                 let follow = follow_completion(&action);
                 let edited = action.is_edit();
                 let doc = self.doc_mut();
+                match edit_kind(&action) {
+                    Some(kind) => doc.record(kind),
+                    None => doc.last_edit = None,
+                }
                 if edited {
                     doc.dirty = true;
                 }
@@ -672,6 +861,72 @@ impl Studio {
                 Task::none()
             }
             Message::NextProblem => self.next_problem(),
+            Message::Undo => self.step_history(true),
+            Message::Redo => self.step_history(false),
+            Message::Shortcut(shortcut) => self.shortcut(shortcut),
+            Message::FindOpen(replacing) => {
+                let selection = self.doc().content.selection().filter(|s| !s.contains('\n') && !s.is_empty());
+                let find = self.find.get_or_insert_with(Find::default);
+                find.replacing |= replacing;
+                if let Some(selection) = selection {
+                    find.query = selection;
+                }
+                let refreshed = self.refresh_find(true);
+                Task::batch([refreshed, operation::focus(find_id())])
+            }
+            Message::FindQuery(query) => {
+                if let Some(find) = &mut self.find {
+                    find.query = query;
+                }
+                self.refresh_find(true)
+            }
+            Message::FindReplacement(replacement) => {
+                if let Some(find) = &mut self.find {
+                    find.replacement = replacement;
+                }
+                Task::none()
+            }
+            Message::FindCase => {
+                if let Some(find) = &mut self.find {
+                    find.case = !find.case;
+                }
+                self.refresh_find(true)
+            }
+            Message::FindStep(step) => {
+                let count = self.doc().found.len();
+                let Some(find) = &mut self.find else { return Task::none() };
+                if count == 0 {
+                    return Task::none();
+                }
+                let current = find.current.unwrap_or(0) as i32;
+                find.current = Some((current + step).rem_euclid(count as i32) as usize);
+                self.select_match()
+            }
+            Message::FindReplace => self.replace_match(false),
+            Message::FindReplaceAll => self.replace_match(true),
+            Message::FindClose => {
+                self.find = None;
+                for doc in &mut self.docs {
+                    doc.found.clear();
+                }
+                let doc = self.doc_mut();
+                doc.marks = marks_for(doc);
+                operation::focus(editor_text_id())
+            }
+            Message::ToggleComment => {
+                let (text, cursor) = (self.doc().content.text(), self.doc().content.cursor());
+                let other = cursor.selection.unwrap_or(cursor.position);
+                let (first, last) = (cursor.position.line.min(other.line), cursor.position.line.max(other.line));
+                self.rewrite(forms::toggle_comment(&text, first, last), cursor.position)
+            }
+            Message::Reindent => {
+                let (text, cursor) = (self.doc().content.text(), self.doc().content.cursor());
+                let lines = cursor.selection.map(|other| {
+                    let (first, last) = (cursor.position.line.min(other.line), cursor.position.line.max(other.line));
+                    first..last + 1
+                });
+                self.rewrite(forms::reindent(&text, lines), cursor.position)
+            }
             Message::EditorScrolled(viewport) => {
                 self.doc_mut().offset = viewport.absolute_offset().y;
                 self.editor_width = viewport.bounds().width;
@@ -1154,6 +1409,134 @@ impl Studio {
         Task::batch([follow, echo, self.run(source, true)])
     }
 
+    fn after_rewrite(&mut self) -> Task<Message> {
+        let doc = self.doc_mut();
+        doc.marks = marks_for(doc);
+        self.completion = None;
+        let refreshed = self.refresh_find(true);
+        Task::batch([self.follow_cursor(), refreshed, self.schedule_check()])
+    }
+
+    fn shortcut(&mut self, shortcut: Shortcut) -> Task<Message> {
+        match shortcut {
+            Shortcut::Escape => {
+                if self.completion.take().is_some() {
+                    return Task::none();
+                }
+                if self.find.is_some() {
+                    return self.update(Message::FindClose);
+                }
+                Task::none()
+            }
+            Shortcut::FindNext => self.update(Message::FindStep(1)),
+            Shortcut::FindPrevious => self.update(Message::FindStep(-1)),
+            Shortcut::Find => self.update(Message::FindOpen(false)),
+            Shortcut::Replace => self.update(Message::FindOpen(true)),
+            Shortcut::Save => self.update(Message::Save),
+            Shortcut::SaveAs => self.update(Message::SaveAs),
+            Shortcut::Open => self.update(Message::Open),
+            Shortcut::New => self.update(Message::NewFile),
+            Shortcut::Close => self.update(Message::CloseTab(Tab::Doc(self.current))),
+            Shortcut::Palette | Shortcut::GoToLine => Task::none(),
+            Shortcut::Pane(1) => operation::focus(editor_text_id()),
+            Shortcut::Pane(2) => operation::focus(console_text_id()),
+            Shortcut::Pane(n) => {
+                self.side = match n {
+                    3 => Side::Environment,
+                    4 => Side::Files,
+                    _ => Side::Project,
+                };
+                Task::none()
+            }
+        }
+    }
+
+    fn refresh_find(&mut self, from_cursor: bool) -> Task<Message> {
+        let Some(find) = &self.find else { return Task::none() };
+        let (query, case, previous) = (find.query.clone(), find.case, find.current);
+        let doc = self.doc_mut();
+        let text = doc.content.text();
+        let cursor = doc.content.cursor();
+        let anchor = match cursor.selection {
+            Some(other) if (other.line, other.column) < (cursor.position.line, cursor.position.column) => other,
+            _ => cursor.position,
+        };
+        let offset = forms::offset_of(&text, anchor.line, anchor.column);
+        doc.found = forms::find_all(&text, &query, case);
+        let count = doc.found.len();
+        let current = if count == 0 {
+            None
+        } else if from_cursor {
+            Some(doc.found.iter().position(|(start, _)| *start >= offset).unwrap_or(0))
+        } else {
+            Some(previous.unwrap_or(0).min(count - 1))
+        };
+        doc.marks = marks_for(doc);
+        if let Some(find) = &mut self.find {
+            find.current = current;
+        }
+        self.select_match()
+    }
+
+    fn select_match(&mut self) -> Task<Message> {
+        let Some(index) = self.find.as_ref().and_then(|f| f.current) else { return Task::none() };
+        let doc = self.doc_mut();
+        let Some(&(start, end)) = doc.found.get(index) else { return Task::none() };
+        let text = doc.content.text();
+        let (from_line, from_column) = forms::position_of(&text, start);
+        let (to_line, to_column) = forms::position_of(&text, end);
+        let position = Position { line: to_line, column: to_column };
+        let selection = Some(Position { line: from_line, column: from_column });
+        doc.content.move_to(text_editor::Cursor { position, selection });
+        doc.last_edit = None;
+        doc.marks = marks_for(doc);
+        self.follow_cursor()
+    }
+
+    fn replace_match(&mut self, all: bool) -> Task<Message> {
+        let Some(find) = self.find.clone() else { return Task::none() };
+        let doc = self.doc();
+        let text = doc.content.text();
+        let targets: Vec<(usize, usize)> = if all { doc.found.clone() } else { find.current.and_then(|i| doc.found.get(i)).copied().into_iter().collect() };
+        if targets.is_empty() {
+            return Task::none();
+        }
+        let mut out = String::with_capacity(text.len());
+        let mut last = 0;
+        for &(start, end) in &targets {
+            out.push_str(&text[last..start]);
+            out.push_str(&find.replacement);
+            last = end;
+        }
+        out.push_str(&text[last..]);
+        let resume = targets[0].0 + find.replacement.len();
+        let (line, column) = forms::position_of(&out, resume);
+        if all {
+            self.status = format!("Replaced {} of {}", targets.len(), if targets.len() == 1 { "1 match" } else { "the matches" });
+        }
+        self.doc_mut().replace_text(&out, Position { line, column }, None);
+        self.after_rewrite()
+    }
+
+    fn rewrite(&mut self, text: String, position: Position) -> Task<Message> {
+        if text == self.doc().content.text() {
+            return Task::none();
+        }
+        let line = position.line.min(text.split('\n').count().saturating_sub(1));
+        let column = position.column.min(text.split('\n').nth(line).map_or(0, |l| l.chars().count()));
+        self.doc_mut().replace_text(&text, Position { line, column }, None);
+        self.after_rewrite()
+    }
+
+    fn step_history(&mut self, back: bool) -> Task<Message> {
+        let doc = self.doc_mut();
+        let moved = if back { doc.undo() } else { doc.redo() };
+        if !moved {
+            return Task::none();
+        }
+        self.after_rewrite()
+    }
+
     fn load_path(&self) -> Vec<PathBuf> {
         let mut load_path: Vec<PathBuf> = self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf).into_iter().collect();
         load_path.extend(self.root.clone());
@@ -1365,6 +1748,104 @@ mod tests {
         let _ = view::view(&studio);
         let _ = studio.update(Message::Edit(Action::Edit(Edit::Insert('x'))));
         assert_eq!(studio.doc().checked, generation + 1);
+    }
+
+    #[test]
+    fn edits_group_into_undo_steps_and_redo_restores_them() {
+        let mut studio = Studio::new();
+        let edit = |studio: &mut Studio, edit: Edit| {
+            let _ = studio.update(Message::Edit(Action::Edit(edit)));
+        };
+        for c in "ab".chars() {
+            edit(&mut studio, Edit::Insert(c));
+        }
+        edit(&mut studio, Edit::Enter);
+        edit(&mut studio, Edit::Insert(' '));
+        edit(&mut studio, Edit::Insert('c'));
+        assert_eq!(studio.doc().content.text(), "ab\n c");
+        assert_eq!(studio.doc().history.len(), 3);
+        let _ = studio.update(Message::Undo);
+        assert_eq!(studio.doc().content.text(), "ab\n ");
+        let _ = studio.update(Message::Undo);
+        assert_eq!(studio.doc().content.text(), "ab");
+        assert_eq!(studio.doc().content.cursor().position.column, 2);
+        let _ = studio.update(Message::Undo);
+        assert_eq!(studio.doc().content.text(), "");
+        let _ = studio.update(Message::Undo);
+        let _ = studio.update(Message::Redo);
+        assert_eq!(studio.doc().content.text(), "ab");
+        edit(&mut studio, Edit::Insert('!'));
+        assert!(studio.doc().future.is_empty());
+        let _ = studio.update(Message::Redo);
+        assert_eq!(studio.doc().content.text(), "ab!");
+    }
+
+    #[test]
+    fn comment_toggle_and_reindent_rewrite_the_document_undoably() {
+        let mut studio = Studio::new();
+        studio.doc_mut().content = text_editor::Content::with_text("(define (f x)\n(+ x 1))\n");
+        let _ = studio.update(Message::Edit(Action::Move(Motion::Down)));
+        let _ = studio.update(Message::ToggleComment);
+        assert_eq!(studio.doc().content.text(), "(define (f x)\n;; (+ x 1))\n");
+        assert_eq!(studio.doc().content.cursor().position.line, 1);
+        let _ = studio.update(Message::ToggleComment);
+        assert_eq!(studio.doc().content.text(), "(define (f x)\n(+ x 1))\n");
+        let _ = studio.update(Message::Reindent);
+        assert_eq!(studio.doc().content.text(), "(define (f x)\n  (+ x 1))\n");
+        assert!(studio.doc().dirty);
+        let _ = studio.update(Message::Undo);
+        assert_eq!(studio.doc().content.text(), "(define (f x)\n(+ x 1))\n");
+    }
+
+    #[test]
+    fn find_selects_matches_and_replace_rewrites_them() {
+        let mut studio = Studio::new();
+        studio.doc_mut().content = text_editor::Content::with_text("(foo 1)\n(Foo 2)\n(bar foo)\n");
+        let _ = studio.update(Message::FindOpen(false));
+        let _ = studio.update(Message::FindQuery("foo".into()));
+        assert_eq!(studio.doc().found, [(1, 4), (9, 12), (21, 24)]);
+        assert_eq!(studio.find.as_ref().unwrap().current, Some(0));
+        let cursor = studio.doc().content.cursor();
+        assert_eq!((cursor.position.line, cursor.position.column), (0, 4));
+        assert_eq!(cursor.selection.map(|p| (p.line, p.column)), Some((0, 1)));
+        assert_eq!(studio.doc().marks.found, vec![(0, 1..4), (1, 1..4), (2, 5..8)]);
+        let _ = studio.update(Message::FindStep(1));
+        assert_eq!(studio.doc().content.cursor().position.line, 1);
+        let _ = studio.update(Message::FindStep(-1));
+        let _ = studio.update(Message::FindStep(-1));
+        assert_eq!((studio.find.as_ref().unwrap().current, studio.doc().content.cursor().position.line), (Some(2), 2));
+        let _ = studio.update(Message::FindCase);
+        assert_eq!(studio.doc().found, [(1, 4), (21, 24)]);
+        let _ = studio.update(Message::FindStep(1));
+        let _ = studio.update(Message::FindReplacement("qux".into()));
+        let _ = studio.update(Message::FindReplace);
+        assert_eq!(studio.doc().content.text(), "(qux 1)\n(Foo 2)\n(bar foo)\n");
+        assert_eq!(studio.doc().found, [(21, 24)]);
+        assert_eq!(studio.doc().content.cursor().position.line, 2);
+        let _ = studio.update(Message::FindReplaceAll);
+        assert_eq!(studio.doc().content.text(), "(qux 1)\n(Foo 2)\n(bar qux)\n");
+        assert!(studio.doc().found.is_empty());
+        let _ = studio.update(Message::Shortcut(Shortcut::Escape));
+        assert!(studio.find.is_none() && studio.doc().marks.found.is_empty());
+        let _ = studio.update(Message::Undo);
+        assert_eq!(studio.doc().content.text(), "(qux 1)\n(Foo 2)\n(bar foo)\n");
+        let _ = view::view(&studio);
+    }
+
+    #[test]
+    fn shortcuts_are_recognised_from_keys() {
+        use iced::keyboard::key::Named;
+        use iced::keyboard::{Key, Modifiers};
+        let character = |c: &str| Key::Character(c.into());
+        assert_eq!(shortcut_of(&Key::Named(Named::Escape), Modifiers::empty()), Some(Shortcut::Escape));
+        assert_eq!(shortcut_of(&Key::Named(Named::F3), Modifiers::SHIFT), Some(Shortcut::FindPrevious));
+        assert_eq!(shortcut_of(&character("f"), Modifiers::COMMAND), Some(Shortcut::Find));
+        assert_eq!(shortcut_of(&character("F"), Modifiers::COMMAND | Modifiers::SHIFT), None);
+        assert_eq!(shortcut_of(&character("S"), Modifiers::COMMAND | Modifiers::SHIFT), Some(Shortcut::SaveAs));
+        assert_eq!(shortcut_of(&character("P"), Modifiers::COMMAND | Modifiers::SHIFT), Some(Shortcut::Palette));
+        assert_eq!(shortcut_of(&character("3"), Modifiers::COMMAND), Some(Shortcut::Pane(3)));
+        assert_eq!(shortcut_of(&character("9"), Modifiers::COMMAND), None);
+        assert_eq!(shortcut_of(&character("f"), Modifiers::empty()), None);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use iced::keyboard::{Key, key};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::text::{LineHeight, Span};
-use iced::widget::text_editor::{Binding, KeyPress, Status};
+use iced::widget::text_editor::{Binding, KeyPress, Motion, Status};
 use iced::widget::{
     Column, Row, button, canvas, column, container, lazy, pane_grid, rich_text, row, rule, scrollable, sensor, space, span,
     stack, table, text, text_editor, text_input, tooltip,
@@ -12,13 +12,13 @@ use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
-    EDITOR_PAD, LINE_HEIGHT, LineKind, Message, NamingKind, PAGE, Page, PaneKind, Side, Source, Studio, Tab, console_id,
-    console_text_id, editor_id, editor_text_id, naming_id,
+    EDITOR_PAD, Find, LINE_HEIGHT, LineKind, Message, NamingKind, PAGE, Page, PaneKind, Side, Source, Studio, Tab, console_id,
+    console_text_id, editor_id, editor_text_id, find_id, naming_id,
 };
 use crate::chart::Chart;
 use crate::icons::{Glyph, Ink, icon};
 use crate::worker::Grid;
-use crate::{fonts, highlight, theme};
+use crate::{fonts, forms, highlight, theme};
 
 type TextStyle = fn(&Theme) -> text::Style;
 
@@ -377,8 +377,46 @@ fn completion_binding(press: &KeyPress) -> Option<Message> {
     }
 }
 
-fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Message>> {
-    let current = studio.current;
+fn closer_of(open: char) -> char {
+    match open {
+        '(' => ')',
+        '[' => ']',
+        _ => '}',
+    }
+}
+
+fn pairing(press: &KeyPress, text: &str, offset: usize) -> Option<Binding<Message>> {
+    let context = forms::context_at(text, offset);
+    let open_next = context.after.is_none_or(|c| c.is_whitespace() || matches!(c, ')' | ']' | '}'));
+    match &press.key {
+        Key::Named(key::Named::Backspace) if !press.modifiers.command() => {
+            let pair = matches!((context.before, context.after), (Some('('), Some(')')) | (Some('['), Some(']')) | (Some('{'), Some('}')));
+            let quotes = context.before == Some('"') && context.after == Some('"') && context.in_string;
+            (pair && !context.in_string && !context.in_comment || quotes).then(|| Binding::Sequence(vec![Binding::Backspace, Binding::Delete]))
+        }
+        Key::Character(c) if press.modifiers.command() => {
+            let _ = c;
+            None
+        }
+        Key::Character(c) => {
+            let typed = c.chars().next()?;
+            match typed {
+                '(' | '[' | '{' if !context.in_string && !context.in_comment && open_next => {
+                    Some(Binding::Sequence(vec![Binding::Insert(typed), Binding::Insert(closer_of(typed)), Binding::Move(Motion::Left)]))
+                }
+                ')' | ']' | '}' if context.after == Some(typed) && !context.in_string => Some(Binding::Move(Motion::Right)),
+                '"' if context.in_string && context.after == Some('"') && context.before != Some('\\') => Some(Binding::Move(Motion::Right)),
+                '"' if !context.in_string && !context.in_comment && open_next => {
+                    Some(Binding::Sequence(vec![Binding::Insert('"'), Binding::Insert('"'), Binding::Move(Motion::Left)]))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Message>> + '_ {
     let completing = studio.completion.as_ref().is_some_and(|c| c.source == Source::Editor);
     move |press| {
         if completing
@@ -392,17 +430,36 @@ fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messag
             Key::Named(key::Named::Space) if command => Some(Message::Complete(Source::Editor)),
             Key::Named(key::Named::F1) => Some(Message::LookUp(Source::Editor)),
             Key::Named(key::Named::F8) => Some(Message::NextProblem),
-            Key::Character(c) if command && c.eq_ignore_ascii_case("s") => Some(if shift { Message::SaveAs } else { Message::Save }),
-            Key::Character(c) if command && c.eq_ignore_ascii_case("o") => Some(Message::Open),
-            Key::Character(c) if command && c.eq_ignore_ascii_case("n") => Some(Message::NewFile),
-            Key::Character(c) if command && c.eq_ignore_ascii_case("w") => Some(Message::CloseTab(Tab::Doc(current))),
+            Key::Character(c) if command && c.eq_ignore_ascii_case("z") => Some(if shift { Message::Redo } else { Message::Undo }),
+            Key::Character(c) if command && c.eq_ignore_ascii_case("y") => Some(Message::Redo),
+            Key::Character(c) if command && c == "/" => Some(Message::ToggleComment),
+            Key::Character(c) if command && shift && c.eq_ignore_ascii_case("f") => Some(Message::Reindent),
             _ => None,
         };
         if let Some(message) = global {
             return Some(Binding::Custom(message));
         }
-        if matches!(press.key, Key::Named(key::Named::Tab)) && matches!(press.status, Status::Focused { .. }) {
+        if !matches!(press.status, Status::Focused { .. }) {
+            return Binding::from_key_press(press);
+        }
+        if matches!(press.key, Key::Named(key::Named::Tab)) {
             return Some(Binding::Sequence(vec![Binding::Insert(' '), Binding::Insert(' ')]));
+        }
+        let plain_enter = matches!(press.key, Key::Named(key::Named::Enter)) && !command && !shift;
+        if plain_enter || matches!(press.key, Key::Character(_) | Key::Named(key::Named::Backspace)) {
+            let content = &studio.doc().content;
+            let text = content.text();
+            let position = content.cursor().position;
+            let offset = forms::offset_of(&text, position.line, position.column);
+            if plain_enter {
+                let indent = forms::indent_for(&text, offset);
+                let mut steps = vec![Binding::Enter];
+                steps.extend(std::iter::repeat_n(Binding::Insert(' '), indent));
+                return Some(Binding::Sequence(steps));
+            }
+            if let Some(binding) = pairing(&press, &text, offset) {
+                return Some(binding);
+            }
         }
         Binding::from_key_press(press)
     }
@@ -440,8 +497,63 @@ fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messa
 fn workspace(studio: &Studio) -> Element<'_, Message> {
     match (studio.tab, &studio.help) {
         (Tab::Help, Some(_)) => help(studio),
-        _ => editor(studio),
+        _ => match &studio.find {
+            Some(find) => column![find_bar(studio, find), line(), editor(studio)].into(),
+            None => editor(studio),
+        },
     }
+}
+
+fn find_bar<'a>(studio: &'a Studio, find: &'a Find) -> Element<'a, Message> {
+    let count = studio.doc().found.len();
+    let where_at = match (find.current, count) {
+        (_, 0) if find.query.is_empty() => String::new(),
+        (_, 0) => "No matches".to_string(),
+        (Some(i), n) => format!("{} of {n}", i + 1),
+        (None, n) => format!("{n} matches"),
+    };
+    let query = text_input("Find", &find.query)
+        .id(find_id())
+        .on_input(Message::FindQuery)
+        .on_submit(Message::FindStep(1))
+        .size(12.5)
+        .padding([4, 8])
+        .style(theme::field)
+        .width(260);
+    let case = button(text("Aa").size(12).font(fonts::UI_MEDIUM)).padding([3, 7]).style(theme::choice(find.case)).on_press(Message::FindCase);
+    let mut first = row![
+        query,
+        text(where_at).size(12).style(theme::muted).width(90),
+        small("↑", (count > 0).then_some(Message::FindStep(-1))),
+        small("↓", (count > 0).then_some(Message::FindStep(1))),
+        tip(case, "Match case"),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center);
+    if !find.replacing {
+        first = first.push(small("Replace…", Some(Message::FindOpen(true))));
+    }
+    first = first.push(space::horizontal()).push(small("×", Some(Message::FindClose)));
+    let mut bar = Column::new().push(first).spacing(6).padding(Padding { top: 6.0, right: 10.0, bottom: 6.0, left: 12.0 });
+    if find.replacing {
+        let replacement = text_input("Replace with", &find.replacement)
+            .on_input(Message::FindReplacement)
+            .on_submit(Message::FindReplace)
+            .size(12.5)
+            .padding([4, 8])
+            .style(theme::field)
+            .width(260);
+        let ready = count > 0;
+        let second = row![
+            replacement,
+            small("Replace", ready.then_some(Message::FindReplace)),
+            small("Replace all", ready.then_some(Message::FindReplaceAll)),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center);
+        bar = bar.push(second);
+    }
+    container(bar).width(Length::Fill).style(theme::pane).into()
 }
 
 fn editor(studio: &Studio) -> Element<'_, Message> {
