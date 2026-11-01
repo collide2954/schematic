@@ -168,6 +168,18 @@ impl Globals {
         self.namespaces.contains_key(&name)
     }
 
+    pub fn create(&mut self, name: Symbol) {
+        self.ensure(name);
+    }
+
+    pub fn owner(&self, slot: usize) -> Symbol {
+        self.owners[slot]
+    }
+
+    pub fn resolve_prefix(&self, prefix: Symbol) -> Option<Symbol> {
+        self.namespace_for(prefix)
+    }
+
     pub fn namespaces(&self) -> &[Symbol] {
         &self.created
     }

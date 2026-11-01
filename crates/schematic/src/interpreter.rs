@@ -10,7 +10,7 @@ use crate::error::Error;
 use crate::reader::read_all;
 use crate::symbol::Symbol;
 use crate::value::Value;
-use crate::vm::{USER, Vm};
+use crate::vm::{Globals, USER, Vm};
 
 const PRELUDE: &str = include_str!("prelude.scm");
 
@@ -32,6 +32,10 @@ impl Interpreter {
         interp.eval_str(PRELUDE).expect("prelude failed to load");
         interp.vm.globals.set_current(Symbol::intern(USER));
         interp
+    }
+
+    pub(crate) fn globals_mut(&mut self) -> &mut Globals {
+        &mut self.vm.globals
     }
 
     pub fn set_frame_limit(&mut self, limit: usize) {

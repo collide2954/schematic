@@ -1,6 +1,7 @@
 pub mod array;
 pub mod builtins;
 pub mod bytecode;
+pub mod check;
 pub mod compiler;
 pub mod date;
 pub mod docs;

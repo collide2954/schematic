@@ -60,6 +60,7 @@ pub struct ReadError {
     pub message: String,
     pub line: usize,
     pub col: usize,
+    pub offset: usize,
     pub incomplete: bool,
 }
 
@@ -122,7 +123,7 @@ impl<'a> Reader<'a> {
     }
 
     fn error(&self, message: impl Into<String>) -> ReadError {
-        ReadError { message: message.into(), line: self.line, col: self.col, incomplete: false }
+        ReadError { message: message.into(), line: self.line, col: self.col, offset: self.pos, incomplete: false }
     }
 
     fn incomplete(&self, message: impl Into<String>) -> ReadError {
