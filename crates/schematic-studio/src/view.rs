@@ -1,57 +1,47 @@
 use iced::keyboard::{Key, key};
 use iced::widget::scrollable::{Direction, Scrollbar};
+use iced::widget::text::LineHeight;
 use iced::widget::text_editor::{Binding, KeyPress, Status};
 use iced::widget::{
-    Column, button, canvas, column, container, pane_grid, row, rule, scrollable, space, table, text, text_editor,
+    Column, button, canvas, column, container, pane_grid, row, rule, scrollable, sensor, space, table, text, text_editor,
     tooltip,
 };
-use iced::{Alignment, Element, Font, Length, Padding, Theme};
+use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
 
-use crate::app::{LineKind, Message, PAGE, PaneKind, Studio, console_id};
+use crate::app::{EDITOR_PAD, LINE_HEIGHT, LineKind, Message, PAGE, PaneKind, Studio, console_id, editor_id};
 use crate::chart::Chart;
-use crate::theme::Tint;
+use crate::icons::{Glyph, Ink, icon};
 use crate::worker::Grid;
 use crate::{fonts, highlight, theme};
 
 type TextStyle = fn(&Theme) -> text::Style;
-type ButtonStyle = fn(&Theme, button::Status) -> button::Style;
 
 pub fn view(studio: &Studio) -> Element<'_, Message> {
     let panes = pane_grid(&studio.panes, |_, kind, _| {
-        let (label, subtitle, controls, body): (&str, Option<String>, Option<Element<'_, Message>>, Element<'_, Message>) =
+        let (name, detail, controls, body): (&str, Option<String>, Option<Element<'_, Message>>, Element<'_, Message>) =
             match kind {
-                PaneKind::Editor => ("EDITOR", Some(editor_label(studio)), None, editor(studio)),
-                PaneKind::Console => {
-                    ("CONSOLE", None, Some(small("Clear", theme::ghost, Some(Message::ClearConsole))), console(studio))
-                }
-                PaneKind::Environment => ("ENVIRONMENT", environment_label(studio), None, environment(studio)),
+                PaneKind::Editor => ("Editor", Some(editor_label(studio)), None, editor(studio)),
+                PaneKind::Console => ("Console", None, Some(small("Clear", Some(Message::ClearConsole))), console(studio)),
+                PaneKind::Environment => ("Environment", environment_label(studio), None, environment(studio)),
                 PaneKind::Viewer => {
                     let grid = studio.grid.as_ref();
-                    ("DATA", grid.map(|g| g.name.clone()), grid.map(pager), viewer(studio))
+                    ("Data", grid.map(|g| g.name.clone()), grid.map(pager), viewer(studio))
                 }
                 PaneKind::Plots => {
                     let plot = studio.plot.as_ref();
-                    let subtitle = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
-                    let save = small("Save as SVG", theme::ghost, plot.map(|_| Message::SavePlot));
-                    ("PLOTS", subtitle, Some(save), plots(studio))
+                    let detail = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
+                    let save = small("Save as SVG", plot.map(|_| Message::SavePlot));
+                    ("Plots", detail, Some(save), plots(studio))
                 }
             };
-        let mut header =
-            row![text(label).font(fonts::UI_SEMIBOLD).size(11).style(theme::muted)].spacing(10).align_y(Alignment::Center);
-        if let Some(subtitle) = subtitle {
-            header = header.push(text(subtitle).size(12).style(theme::strong));
-        }
-        let mut bar = pane_grid::TitleBar::new(header).padding([7, 12]).style(theme::card_header);
-        if let Some(controls) = controls {
-            bar = bar.controls(controls);
-        }
-        pane_grid::Content::new(body).title_bar(bar).style(theme::card)
+        let bar = pane_grid::TitleBar::new(strip(name, detail, controls)).style(theme::strip);
+        pane_grid::Content::new(body).title_bar(bar).style(theme::pane)
     })
-    .spacing(10)
+    .spacing(1)
     .style(theme::panes)
-    .on_resize(10, Message::PaneResized)
+    .on_resize(6, Message::PaneResized)
     .on_drag(Message::PaneDragged);
-    let workspace = container(panes).padding(10).width(Length::Fill).height(Length::Fill).style(theme::canvas);
+    let workspace = container(panes).width(Length::Fill).height(Length::Fill).style(theme::gaps);
     column![toolbar(studio), line(), workspace, line(), status_bar(studio)].into()
 }
 
@@ -59,40 +49,57 @@ fn line<'a>() -> Element<'a, Message> {
     rule::horizontal(1).style(theme::separator).into()
 }
 
-fn small<'a>(label: &'a str, style: ButtonStyle, message: Option<Message>) -> Element<'a, Message> {
-    button(text(label).font(fonts::UI_MEDIUM).size(12)).padding([3, 10]).style(style).on_press_maybe(message).into()
+fn strip<'a>(name: &'a str, detail: Option<String>, controls: Option<Element<'a, Message>>) -> Element<'a, Message> {
+    let mut label = row![text(name).size(12.5).font(fonts::UI_MEDIUM)].spacing(8).align_y(Alignment::Center);
+    if let Some(detail) = detail {
+        label = label.push(text(detail).size(12).style(theme::muted));
+    }
+    let tab = container(label).padding([0, 12]).height(Length::Fill).align_y(Alignment::Center).style(theme::tab);
+    let mut bar = row![tab, space::horizontal()].height(30).align_y(Alignment::Center);
+    if let Some(controls) = controls {
+        bar = bar.push(container(controls).padding([0, 6]));
+    }
+    column![bar, line()].into()
 }
 
-fn action<'a>(label: &'a str, hint: &'a str, style: ButtonStyle, message: Option<Message>) -> Element<'a, Message> {
-    let control = button(text(label).font(fonts::UI_MEDIUM).size(13)).padding([6, 12]).style(style).on_press_maybe(message);
+fn small<'a>(label: &'a str, message: Option<Message>) -> Element<'a, Message> {
+    button(text(label).font(fonts::UI_MEDIUM).size(12)).padding([3, 8]).style(theme::ghost).on_press_maybe(message).into()
+}
+
+fn tip<'a>(content: impl Into<Element<'a, Message>>, hint: &'a str) -> Element<'a, Message> {
     let bubble = container(text(hint).size(12)).padding([4, 8]).style(theme::tip);
-    tooltip(control, bubble, tooltip::Position::Bottom).gap(6).into()
+    tooltip(content, bubble, tooltip::Position::Bottom).gap(4).into()
+}
+
+fn tool<'a>(glyph: Glyph, ink: Ink, label: &'a str, hint: &'a str, message: Option<Message>) -> Element<'a, Message> {
+    let ink = if message.is_none() { Ink::Muted } else { ink };
+    let content = row![icon(glyph, ink), text(label).size(12.5).font(fonts::UI_MEDIUM)].spacing(6).align_y(Alignment::Center);
+    tip(button(content).padding([4, 8]).style(theme::tool).on_press_maybe(message), hint)
 }
 
 fn divider<'a>() -> Element<'a, Message> {
-    container(rule::vertical(1).style(theme::separator)).height(22).padding([0, 4]).into()
+    container(rule::vertical(1).style(theme::separator)).height(18).padding([0, 6]).into()
 }
 
 fn toolbar(studio: &Studio) -> Element<'_, Message> {
     let ready = studio.worker.is_some();
-    let brand = row![
-        text("Schematic").font(fonts::UI_SEMIBOLD).size(15).style(theme::strong),
-        text("Studio").size(15).style(theme::muted)
+    let stop_ink = if studio.running { Ink::Danger } else { Ink::Muted };
+    let theme_glyph = if theme::is_dark(&studio.theme) { Glyph::Sun } else { Glyph::Moon };
+    let toggle = tip(button(icon(theme_glyph, Ink::Muted)).padding(6).style(theme::tool).on_press(Message::ToggleTheme), "Switch theme");
+    let items = row![
+        tool(Glyph::Play, Ink::Accent, "Run", "Run the form at the cursor (Ctrl+Enter)", ready.then_some(Message::RunForm)),
+        tool(Glyph::PlayAll, Ink::Text, "Run file", "Run the whole file (Ctrl+Shift+Enter)", ready.then_some(Message::RunFile)),
+        tool(Glyph::Stop, stop_ink, "Stop", "Interrupt the running code", studio.running.then_some(Message::Stop)),
+        divider(),
+        tool(Glyph::Open, Ink::Text, "Open", "Open a script (Ctrl+O)", Some(Message::Open)),
+        tool(Glyph::Save, Ink::Text, "Save", "Save (Ctrl+S)", Some(Message::Save)),
+        small("Save as", Some(Message::SaveAs)),
+        space::horizontal(),
+        toggle,
     ]
-    .spacing(6)
+    .spacing(2)
     .align_y(Alignment::Center);
-    let run = action("Run form", "Ctrl+Enter", theme::primary, ready.then_some(Message::RunForm));
-    let run_file = action("Run file", "Ctrl+Shift+Enter", theme::subtle, ready.then_some(Message::RunFile));
-    let stop = action("Stop", "Interrupt the running code", theme::danger, studio.running.then_some(Message::Stop));
-    let open = action("Open", "Ctrl+O", theme::subtle, Some(Message::Open));
-    let save = action("Save", "Ctrl+S", theme::subtle, Some(Message::Save));
-    let save_as = action("Save as", "Ctrl+Shift+S", theme::ghost, Some(Message::SaveAs));
-    let mode = if theme::is_dark(&studio.theme) { "Light" } else { "Dark" };
-    let toggle = action(mode, "Switch the theme", theme::ghost, Some(Message::ToggleTheme));
-    let bar = row![brand, divider(), run, run_file, stop, space::horizontal(), open, save, save_as, divider(), toggle]
-        .spacing(8)
-        .align_y(Alignment::Center);
-    container(bar).padding([8, 14]).width(Length::Fill).style(theme::bar).into()
+    container(items).padding([4, 8]).width(Length::Fill).style(theme::bar).into()
 }
 
 fn status_bar(studio: &Studio) -> Element<'_, Message> {
@@ -101,15 +108,15 @@ fn status_bar(studio: &Studio) -> Element<'_, Message> {
     let status_style: TextStyle = if studio.status.starts_with("Error") { theme::alarm } else { theme::muted };
     let path = studio.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
     let bar = row![
-        text("•").size(14).style(dot_style),
-        text(&studio.status).size(12).style(status_style),
+        text("•").size(13).style(dot_style),
+        text(&studio.status).size(11.5).style(status_style),
         space::horizontal(),
-        text(path).size(12).style(theme::faint),
-        text(format!("Ln {line}, Col {column}")).size(12).style(theme::muted),
+        text(path).size(11.5).style(theme::faint),
+        text(format!("Ln {line}, Col {column}")).size(11.5).style(theme::muted),
     ]
     .spacing(12)
     .align_y(Alignment::Center);
-    container(bar).padding([5, 14]).width(Length::Fill).style(theme::bar).into()
+    container(bar).padding([3, 10]).width(Length::Fill).style(theme::bar).into()
 }
 
 fn editor_label(studio: &Studio) -> String {
@@ -165,19 +172,39 @@ fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messa
 }
 
 fn editor(studio: &Studio) -> Element<'_, Message> {
-    text_editor(&studio.editor)
+    let lines = studio.editor.line_count().max(1);
+    let current = studio.editor.cursor().position.line;
+    let digits = lines.to_string().len().max(2);
+    let numbers = Column::with_children((0..lines).map(|i| {
+        let style: TextStyle = if i == current { theme::strong } else { theme::faint };
+        text(format!("{:>digits$}", i + 1))
+            .font(fonts::MONO)
+            .size(13.5)
+            .line_height(LineHeight::Absolute(Pixels(LINE_HEIGHT)))
+            .style(style)
+            .into()
+    }))
+    .padding(Padding { top: EDITOR_PAD, right: 10.0, bottom: EDITOR_PAD, left: 14.0 });
+    let code = text_editor(&studio.editor)
         .on_action(Message::Edit)
         .placeholder("Open a script or start typing. Ctrl+Enter runs the form at the cursor.")
         .font(fonts::MONO)
         .size(13.5)
-        .line_height(1.55)
-        .padding(12)
-        .height(Length::Fill)
+        .line_height(LineHeight::Absolute(Pixels(LINE_HEIGHT)))
+        .padding(Padding { top: EDITOR_PAD, right: 12.0, bottom: EDITOR_PAD, left: 6.0 })
+        .height(Length::Shrink)
         .wrapping(text::Wrapping::None)
         .style(theme::editor)
         .highlight_with::<highlight::Schematic>(studio.marks.clone(), highlight::format)
-        .key_binding(editor_binding)
-        .into()
+        .key_binding(editor_binding);
+    let body = row![numbers, code].align_y(Alignment::Start).width(Length::Fill);
+    let scroller = scrollable(body)
+        .id(editor_id())
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .on_scroll(Message::EditorScrolled)
+        .style(theme::scroll);
+    sensor(scroller).on_show(Message::EditorResized).on_resize(Message::EditorResized).into()
 }
 
 fn console(studio: &Studio) -> Element<'_, Message> {
@@ -196,7 +223,7 @@ fn console(studio: &Studio) -> Element<'_, Message> {
         .spacing(8)
         .into()
     });
-    let history = scrollable(column(lines).spacing(4).padding([10, 12]).width(Length::Fill))
+    let history = scrollable(column(lines).spacing(3).padding([8, 12]).width(Length::Fill))
         .id(console_id())
         .height(Length::Fill)
         .style(theme::scroll);
@@ -206,12 +233,12 @@ fn console(studio: &Studio) -> Element<'_, Message> {
         .placeholder("Type an expression and press Enter")
         .font(fonts::MONO)
         .size(13)
-        .padding(Padding { top: 8.0, right: 0.0, bottom: 8.0, left: 0.0 })
+        .padding(Padding { top: 7.0, right: 0.0, bottom: 7.0, left: 0.0 })
         .style(theme::editor)
         .key_binding(console_binding(studio));
     let marker = container(text(prompt).font(fonts::MONO_BOLD).size(13).style(theme::accent))
         .width(14)
-        .padding(Padding { top: 8.0, right: 0.0, bottom: 8.0, left: 0.0 });
+        .padding(Padding { top: 7.0, right: 0.0, bottom: 7.0, left: 0.0 });
     let entry = row![marker, input].spacing(8).padding([0, 12]);
     column![history, line(), entry].into()
 }
@@ -219,23 +246,25 @@ fn console(studio: &Studio) -> Element<'_, Message> {
 fn environment(studio: &Studio) -> Element<'_, Message> {
     let groups = studio.groups();
     if groups.is_empty() {
-        return hint("Nothing defined yet. Values you define appear here; click one to open it in the data pane.");
+        return hint("Nothing defined yet. Values you define are listed here; click one to open it in the data pane.");
     }
     let selected = studio.grid.as_ref().map(|g| g.name.as_str());
-    let mut list = Column::new().spacing(2).padding([6, 8]).width(Length::Fill);
+    let heading = |label: &'static str| text(label).size(11.5).font(fonts::UI_MEDIUM).style(theme::muted);
+    let header = row![
+        heading("Name").width(Length::FillPortion(2)),
+        heading("Type").width(72),
+        heading("Value").width(Length::FillPortion(3)),
+    ]
+    .spacing(10)
+    .padding(Padding { top: 6.0, right: 12.0, bottom: 5.0, left: 12.0 });
+    let mut list = Column::new().push(header).push(line()).width(Length::Fill);
     for (group, members) in groups {
-        let heading = text(group.label().to_uppercase()).font(fonts::UI_SEMIBOLD).size(10.5).style(theme::faint);
-        list = list.push(container(heading).padding(Padding { top: 10.0, right: 8.0, bottom: 4.0, left: 8.0 }));
+        let label = text(group.label()).size(11.5).font(fonts::UI_SEMIBOLD).style(theme::muted);
+        list = list.push(container(label).padding(Padding { top: 9.0, right: 12.0, bottom: 2.0, left: 12.0 }));
         for binding in members {
-            let tint = match binding.kind.as_str() {
-                "table" => Tint::Accent,
-                "array" => Tint::Violet,
-                "function" => Tint::Amber,
-                _ => Tint::Neutral,
-            };
             let content = row![
-                text(&binding.name).font(fonts::MONO).size(13).style(theme::strong).width(Length::FillPortion(2)),
-                container(text(&binding.kind).font(fonts::UI_MEDIUM).size(11)).padding([1, 7]).style(theme::pill(tint)),
+                text(&binding.name).font(fonts::MONO).size(12.5).style(theme::strong).width(Length::FillPortion(2)),
+                text(&binding.kind).size(12).style(theme::muted).width(72),
                 text(&binding.summary).size(12).style(theme::muted).width(Length::FillPortion(3)),
             ]
             .spacing(10)
@@ -243,14 +272,14 @@ fn environment(studio: &Studio) -> Element<'_, Message> {
             let chosen = selected == Some(binding.name.as_str());
             list = list.push(
                 button(content)
-                    .padding([5, 8])
+                    .padding([3, 12])
                     .width(Length::Fill)
                     .style(theme::row(chosen))
                     .on_press(Message::Inspect(binding.name.clone())),
             );
         }
     }
-    scrollable(list).height(Length::Fill).style(theme::scroll).into()
+    scrollable(list.padding(Padding { top: 0.0, right: 0.0, bottom: 8.0, left: 0.0 })).height(Length::Fill).style(theme::scroll).into()
 }
 
 fn pager(grid: &Grid) -> Element<'_, Message> {
@@ -293,5 +322,5 @@ fn plots(studio: &Studio) -> Element<'_, Message> {
 }
 
 fn hint(message: &str) -> Element<'_, Message> {
-    container(text(message).size(13).style(theme::faint)).padding(14).into()
+    container(text(message).size(12.5).style(theme::faint)).padding(12).into()
 }

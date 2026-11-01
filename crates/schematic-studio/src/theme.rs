@@ -1,4 +1,3 @@
-use iced::border::Radius;
 use iced::theme::Palette;
 use iced::widget::{button, container, pane_grid, rule, scrollable, text, text_editor, text_input};
 use iced::{Background, Border, Color, Theme};
@@ -29,14 +28,6 @@ pub struct Tones {
     pub tooltip_text: Color,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tint {
-    Accent,
-    Violet,
-    Amber,
-    Neutral,
-}
-
 const fn rgb(hex: u32) -> Color {
     Color {
         r: ((hex >> 16) & 0xFF) as f32 / 255.0,
@@ -51,11 +42,11 @@ pub const fn fade(color: Color, a: f32) -> Color {
 }
 
 pub const LIGHT: Tones = Tones {
-    canvas: rgb(0xE8EBF0),
+    canvas: rgb(0xE3E6EB),
     surface: rgb(0xFFFFFF),
-    raised: rgb(0xF3F5F8),
-    hover: rgb(0xE9EDF3),
-    line: rgb(0xD8DDE5),
+    raised: rgb(0xF1F3F6),
+    hover: rgb(0xE8ECF1),
+    line: rgb(0xDADFE6),
     text: rgb(0x1A2230),
     muted: rgb(0x66728A),
     faint: rgb(0x9AA5B8),
@@ -76,11 +67,11 @@ pub const LIGHT: Tones = Tones {
 };
 
 pub const DARK: Tones = Tones {
-    canvas: rgb(0x0F1216),
-    surface: rgb(0x171B21),
-    raised: rgb(0x1E232B),
-    hover: rgb(0x262C36),
-    line: rgb(0x2A313C),
+    canvas: rgb(0x0C0E12),
+    surface: rgb(0x16191F),
+    raised: rgb(0x1C2027),
+    hover: rgb(0x252A33),
+    line: rgb(0x272D37),
     text: rgb(0xE3E8EF),
     muted: rgb(0x8C97AA),
     faint: rgb(0x5B6678),
@@ -124,125 +115,68 @@ pub fn toggled(theme: &Theme) -> Theme {
     if is_dark(theme) { light() } else { dark() }
 }
 
-impl Tint {
-    pub fn color(self, t: &Tones) -> Color {
-        match self {
-            Tint::Accent => t.accent,
-            Tint::Violet => t.keyword,
-            Tint::Amber => t.number,
-            Tint::Neutral => t.muted,
-        }
-    }
-}
-
-fn shift(color: Color, dark: bool, amount: f32) -> Color {
-    let d = if dark { amount } else { -amount };
-    Color { r: (color.r + d).clamp(0.0, 1.0), g: (color.g + d).clamp(0.0, 1.0), b: (color.b + d).clamp(0.0, 1.0), a: color.a }
-}
-
-fn edge(color: Color, radius: f32) -> Border {
-    Border { color, width: 1.0, radius: radius.into() }
-}
-
 fn rounded(radius: f32) -> Border {
     Border { radius: radius.into(), ..Border::default() }
 }
 
-pub fn canvas(theme: &Theme) -> container::Style {
-    container::Style { background: Some(tones(theme).canvas.into()), ..container::Style::default() }
+fn filled(color: Color) -> container::Style {
+    container::Style { background: Some(color.into()), ..container::Style::default() }
 }
 
 pub fn bar(theme: &Theme) -> container::Style {
     let t = tones(theme);
-    container::Style { background: Some(t.surface.into()), text_color: Some(t.text), ..container::Style::default() }
+    container::Style { text_color: Some(t.text), ..filled(t.surface) }
 }
 
-pub fn card(theme: &Theme) -> container::Style {
-    let t = tones(theme);
-    container::Style { background: Some(t.surface.into()), border: edge(t.line, 8.0), ..container::Style::default() }
+pub fn pane(theme: &Theme) -> container::Style {
+    filled(tones(theme).surface)
 }
 
-pub fn card_header(theme: &Theme) -> container::Style {
+pub fn gaps(theme: &Theme) -> container::Style {
+    filled(tones(theme).line)
+}
+
+pub fn strip(theme: &Theme) -> container::Style {
+    filled(tones(theme).raised)
+}
+
+pub fn tab(theme: &Theme) -> container::Style {
     let t = tones(theme);
-    container::Style {
-        background: Some(t.raised.into()),
-        text_color: Some(t.text),
-        border: Border { radius: Radius { top_left: 8.0, top_right: 8.0, bottom_right: 0.0, bottom_left: 0.0 }, ..Border::default() },
-        ..container::Style::default()
-    }
+    container::Style { text_color: Some(t.text), ..filled(t.surface) }
 }
 
 pub fn tip(theme: &Theme) -> container::Style {
     let t = tones(theme);
-    container::Style { background: Some(t.tooltip.into()), text_color: Some(t.tooltip_text), border: rounded(6.0), ..container::Style::default() }
+    container::Style { text_color: Some(t.tooltip_text), border: rounded(5.0), ..filled(t.tooltip) }
 }
 
-pub fn zebra(theme: &Theme) -> container::Style {
-    container::Style { background: Some(tones(theme).raised.into()), ..container::Style::default() }
-}
-
-pub fn selected_row(theme: &Theme) -> container::Style {
-    let t = tones(theme);
-    container::Style { background: Some(fade(t.accent, 0.12).into()), ..container::Style::default() }
-}
-
-pub fn pill(tint: Tint) -> impl Fn(&Theme) -> container::Style {
-    move |theme| {
-        let color = tint.color(tones(theme));
-        container::Style { background: Some(fade(color, 0.14).into()), text_color: Some(color), border: rounded(999.0), ..container::Style::default() }
-    }
-}
-
-fn plain(background: Option<Color>, text_color: Color, outline: Option<Color>) -> button::Style {
+fn plain(background: Option<Color>, text_color: Color) -> button::Style {
     button::Style {
         background: background.map(Background::from),
         text_color,
-        border: match outline {
-            Some(color) => edge(color, 6.0),
-            None => rounded(6.0),
-        },
+        border: rounded(4.0),
         shadow: iced::Shadow::default(),
         snap: true,
     }
 }
 
-pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
-    let t = tones(theme);
-    let dark = is_dark(theme);
-    match status {
-        button::Status::Active => plain(Some(t.accent), t.accent_text, None),
-        button::Status::Hovered => plain(Some(shift(t.accent, dark, 0.06)), t.accent_text, None),
-        button::Status::Pressed => plain(Some(shift(t.accent, dark, 0.12)), t.accent_text, None),
-        button::Status::Disabled => plain(Some(fade(t.accent, 0.35)), fade(t.accent_text, 0.8), None),
-    }
-}
-
-pub fn subtle(theme: &Theme, status: button::Status) -> button::Style {
+pub fn tool(theme: &Theme, status: button::Status) -> button::Style {
     let t = tones(theme);
     match status {
-        button::Status::Active => plain(Some(t.raised), t.text, Some(t.line)),
-        button::Status::Hovered => plain(Some(t.hover), t.text, Some(t.line)),
-        button::Status::Pressed => plain(Some(t.line), t.text, Some(t.line)),
-        button::Status::Disabled => plain(Some(t.raised), t.faint, Some(t.line)),
+        button::Status::Active => plain(None, t.text),
+        button::Status::Hovered => plain(Some(t.hover), t.text),
+        button::Status::Pressed => plain(Some(t.line), t.text),
+        button::Status::Disabled => plain(None, t.faint),
     }
 }
 
 pub fn ghost(theme: &Theme, status: button::Status) -> button::Style {
     let t = tones(theme);
     match status {
-        button::Status::Active => plain(None, t.muted, None),
-        button::Status::Hovered => plain(Some(t.hover), t.text, None),
-        button::Status::Pressed => plain(Some(t.line), t.text, None),
-        button::Status::Disabled => plain(None, t.faint, None),
-    }
-}
-
-pub fn danger(theme: &Theme, status: button::Status) -> button::Style {
-    let t = tones(theme);
-    match status {
-        button::Status::Active => plain(Some(fade(t.danger, 0.14)), t.danger, None),
-        button::Status::Hovered | button::Status::Pressed => plain(Some(t.danger), t.surface, None),
-        button::Status::Disabled => plain(None, t.faint, None),
+        button::Status::Active => plain(None, t.muted),
+        button::Status::Hovered => plain(Some(t.hover), t.text),
+        button::Status::Pressed => plain(Some(t.line), t.text),
+        button::Status::Disabled => plain(None, t.faint),
     }
 }
 
@@ -254,7 +188,7 @@ pub fn row(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
             button::Status::Hovered | button::Status::Pressed => Some(t.hover),
             _ => None,
         };
-        button::Style { border: rounded(6.0), ..plain(background, t.text, None) }
+        button::Style { border: Border::default(), ..plain(background, t.text) }
     }
 }
 
@@ -278,7 +212,7 @@ pub fn field(theme: &Theme, status: text_input::Status) -> text_input::Style {
     };
     text_input::Style {
         background: t.raised.into(),
-        border: edge(outline, 6.0),
+        border: Border { color: outline, width: 1.0, radius: 4.0.into() },
         icon: t.muted,
         placeholder: t.faint,
         value: t.text,
@@ -303,7 +237,10 @@ pub fn scroll(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
 pub fn panes(theme: &Theme) -> pane_grid::Style {
     let t = tones(theme);
     pane_grid::Style {
-        hovered_region: pane_grid::Highlight { background: fade(t.accent, 0.12).into(), border: edge(t.accent, 8.0) },
+        hovered_region: pane_grid::Highlight {
+            background: fade(t.accent, 0.12).into(),
+            border: Border { color: t.accent, width: 1.0, radius: 0.0.into() },
+        },
         picked_split: pane_grid::Line { color: t.accent, width: 2.0 },
         hovered_split: pane_grid::Line { color: fade(t.accent, 0.6), width: 2.0 },
     }

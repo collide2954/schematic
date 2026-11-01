@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
-use iced::widget::scrollable::RelativeOffset;
+use iced::widget::scrollable::{AbsoluteOffset, RelativeOffset, Viewport};
 use iced::widget::text_editor::{Action, Motion};
 use iced::widget::{Id, operation, pane_grid, text_editor};
 use iced::{Size, Subscription, Task, Theme, window};
@@ -15,6 +15,8 @@ use crate::worker::{self, Binding, Event, Grid, Request};
 use crate::{fonts, forms, theme, view};
 
 pub const PAGE: usize = 100;
+pub const LINE_HEIGHT: f32 = 21.0;
+pub const EDITOR_PAD: f32 = 10.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneKind {
@@ -68,6 +70,8 @@ pub struct Studio {
     pub panes: pane_grid::State<PaneKind>,
     pub editor: text_editor::Content,
     pub marks: Marks,
+    pub editor_offset: f32,
+    pub editor_height: f32,
     pub path: Option<PathBuf>,
     pub dirty: bool,
     pub console: Vec<Line>,
@@ -90,6 +94,8 @@ pub struct Studio {
 pub enum Message {
     Worker(Event),
     Edit(Action),
+    EditorScrolled(Viewport),
+    EditorResized(Size),
     Input(Action),
     Open,
     Opened(Option<PathBuf>),
@@ -132,6 +138,22 @@ pub fn run() -> iced::Result {
 
 pub fn console_id() -> Id {
     Id::new("console")
+}
+
+pub fn editor_id() -> Id {
+    Id::new("editor")
+}
+
+pub fn scroll_target(top: f32, bottom: f32, offset: f32, height: f32) -> Option<f32> {
+    if height <= 0.0 {
+        None
+    } else if top < offset {
+        Some((top - EDITOR_PAD).max(0.0))
+    } else if bottom > offset + height {
+        Some(bottom + EDITOR_PAD - height)
+    } else {
+        None
+    }
 }
 
 fn scripts() -> rfd::AsyncFileDialog {
@@ -182,6 +204,8 @@ impl Studio {
             panes: pane_grid::State::with_configuration(layout),
             editor: text_editor::Content::new(),
             marks: Marks::default(),
+            editor_offset: 0.0,
+            editor_height: 0.0,
             path: None,
             dirty: false,
             console: Vec::new(),
@@ -252,6 +276,15 @@ impl Studio {
                 }
                 self.editor.perform(action);
                 self.refresh_marks();
+                self.follow_cursor()
+            }
+            Message::EditorScrolled(viewport) => {
+                self.editor_offset = viewport.absolute_offset().y;
+                self.editor_height = viewport.bounds().height;
+                Task::none()
+            }
+            Message::EditorResized(size) => {
+                self.editor_height = size.height;
                 Task::none()
             }
             Message::Input(action) => {
@@ -262,6 +295,8 @@ impl Studio {
             Message::Opened(path) => {
                 if let Some(path) = path {
                     self.load(path);
+                    self.editor_offset = 0.0;
+                    return operation::scroll_to(editor_id(), AbsoluteOffset { x: 0.0, y: 0.0 });
                 }
                 Task::none()
             }
@@ -405,6 +440,18 @@ impl Studio {
         self.push(LineKind::Input, source.to_string())
     }
 
+    fn follow_cursor(&mut self) -> Task<Message> {
+        let line = self.editor.cursor().position.line as f32;
+        let top = EDITOR_PAD + line * LINE_HEIGHT;
+        match scroll_target(top, top + LINE_HEIGHT, self.editor_offset, self.editor_height) {
+            Some(y) => {
+                self.editor_offset = y;
+                operation::scroll_to(editor_id(), AbsoluteOffset { x: 0.0, y })
+            }
+            None => Task::none(),
+        }
+    }
+
     fn refresh_marks(&mut self) {
         let text = self.editor.text();
         let cursor = self.editor.cursor().position;
@@ -431,8 +478,9 @@ impl Studio {
             self.editor.move_to(text_editor::Cursor { position, selection: None });
             self.refresh_marks();
         }
+        let follow = self.follow_cursor();
         let echo = self.echo(&source);
-        Task::batch([echo, self.run(source, true)])
+        Task::batch([follow, echo, self.run(source, true)])
     }
 
     fn set_input(&mut self, text: &str) {
@@ -655,6 +703,20 @@ mod tests {
         assert!(std::fs::read_to_string(&target).unwrap().starts_with("<svg"));
         assert!(studio.status.starts_with("Saved"));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_editor_scrolls_to_keep_the_cursor_visible() {
+        assert_eq!(scroll_target(10.0, 31.0, 0.0, 0.0), None);
+        assert_eq!(scroll_target(10.0, 31.0, 0.0, 300.0), None);
+        assert_eq!(scroll_target(430.0, 451.0, 0.0, 300.0), Some(161.0));
+        assert_eq!(scroll_target(52.0, 73.0, 200.0, 300.0), Some(42.0));
+        assert_eq!(scroll_target(10.0, 31.0, 200.0, 300.0), Some(0.0));
+        let mut studio = Studio::new();
+        studio.editor = text_editor::Content::with_text(&"x\n".repeat(50));
+        let _ = studio.update(Message::EditorResized(Size::new(400.0, 300.0)));
+        let _ = studio.update(Message::Edit(text_editor::Action::Move(text_editor::Motion::DocumentEnd)));
+        assert!(studio.editor_offset > 700.0, "{}", studio.editor_offset);
     }
 
     #[test]

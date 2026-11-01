@@ -3,6 +3,7 @@ pub mod chart;
 pub mod fonts;
 pub mod forms;
 pub mod highlight;
+pub mod icons;
 pub mod theme;
 pub mod view;
 pub mod worker;
