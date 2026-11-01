@@ -42,6 +42,49 @@ fn reports_errors_from_a_file_on_stderr() {
     assert!(err.contains("error: boom"), "{err}");
 }
 
+fn run_in(dir: &std::path::Path, args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(BIN).args(args).current_dir(dir).stdin(Stdio::null()).output().unwrap();
+    (output.status.code().unwrap_or(-1), String::from_utf8_lossy(&output.stdout).into_owned(), String::from_utf8_lossy(&output.stderr).into_owned())
+}
+
+#[test]
+fn projects_are_created_restored_and_run_from_the_command_line() {
+    let root = std::env::temp_dir().join(format!("schematic-cli-project-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let (code, out, _) = run_in(&root, &["new", "demo"]);
+    assert_eq!((code, out.as_str()), (0, "Created demo/ with project.scm and src/demo.scm\n"));
+    let demo = root.join("demo");
+    assert!(demo.join("project.scm").is_file() && demo.join("src").join("demo.scm").is_file());
+    let (code, out, _) = run_in(&demo, &["run"]);
+    assert_eq!((code, out.as_str()), (0, "hello from demo\n"));
+    let (code, out, _) = run_in(&demo, &["restore"]);
+    assert_eq!((code, out.as_str()), (0, "demo has no dependencies\n"));
+    std::fs::create_dir_all(root.join("lib").join("src")).unwrap();
+    std::fs::write(root.join("lib").join("src").join("lib.scm"), "(ns lib)\n(define x 7)\n").unwrap();
+    let (code, out, err) = run_in(&demo, &["add", "lib", "--path", "../lib"]);
+    assert_eq!((code, out.as_str()), (0, "Added lib from ../lib\n"), "{err}");
+    std::fs::write(demo.join("src").join("demo.scm"), "(ns demo (:require [lib]))\n(println lib/x)\n").unwrap();
+    assert_eq!(run_in(&demo, &["run"]).1, "7\n");
+    assert_eq!(run_in(&demo, &["src/demo.scm"]).1, "7\n");
+    let (code, out, _) = run_in(&demo, &["restore", "--locked"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("lib") && out.contains("local path"), "{out}");
+    let (code, out, _) = run_in(&demo, &["remove", "lib"]);
+    assert_eq!((code, out.as_str()), (0, "Removed lib\n"));
+    let (code, _, err) = run_in(&demo, &["run"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("cannot find namespace lib"), "{err}");
+    let (code, _, err) = run_in(&root, &["add", "x"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no project.scm"), "{err}");
+    assert_eq!(run_in(&demo, &["add"]).0, 2);
+    let (code, _, err) = run_in(&demo, &["add", "x", "--git", "u"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("exactly one of --tag or --commit"), "{err}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
 #[test]
 fn missing_file_is_an_error() {
     let (code, _, err) = run(&["definitely-missing-file.scm"], "");
