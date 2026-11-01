@@ -51,7 +51,9 @@ fn compile(name: &str, pattern: &Value, whole: bool) -> Result<Rc<Regex>, Error>
     Ok(regex)
 }
 
-fn over(name: &str, subject: &Value, pattern: &Value, whole: bool, f: &dyn Fn(&Regex, &[char]) -> Result<Value, Error>) -> Result<Value, Error> {
+type Matcher<'a> = &'a dyn Fn(&Regex, &[char]) -> Result<Value, Error>;
+
+fn over(name: &str, subject: &Value, pattern: &Value, whole: bool, f: Matcher) -> Result<Value, Error> {
     let regex = compile(name, pattern, whole)?;
     let one = |value: &Value| -> Result<Value, Error> {
         let text: Vec<char> = as_str(name, value)?.chars().collect();

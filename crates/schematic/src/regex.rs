@@ -381,6 +381,12 @@ struct Thread {
     caps: Vec<Option<usize>>,
 }
 
+struct Step<'a> {
+    text: &'a [char],
+    visited: &'a mut [usize],
+    stamp: usize,
+}
+
 pub type Spans = Vec<Option<(usize, usize)>>;
 
 fn fold(c: char) -> char {
@@ -423,37 +429,37 @@ impl Regex {
         c.to_lowercase().chain(c.to_uppercase()).any(|variant| class.matches(variant))
     }
 
-    fn add_thread(&self, list: &mut Vec<Thread>, pc: usize, caps: Vec<Option<usize>>, pos: usize, text: &[char], visited: &mut [usize], stamp: usize) {
-        if visited[pc] == stamp {
+    fn add_thread(&self, list: &mut Vec<Thread>, pc: usize, caps: Vec<Option<usize>>, pos: usize, step: &mut Step) {
+        if step.visited[pc] == step.stamp {
             return;
         }
-        visited[pc] = stamp;
+        step.visited[pc] = step.stamp;
         match &self.insts[pc] {
-            Inst::Jmp(target) => self.add_thread(list, *target, caps, pos, text, visited, stamp),
+            Inst::Jmp(target) => self.add_thread(list, *target, caps, pos, step),
             Inst::Split(first, second) => {
-                self.add_thread(list, *first, caps.clone(), pos, text, visited, stamp);
-                self.add_thread(list, *second, caps, pos, text, visited, stamp);
+                self.add_thread(list, *first, caps.clone(), pos, step);
+                self.add_thread(list, *second, caps, pos, step);
             }
             Inst::Save(slot) => {
                 let mut caps = caps;
                 caps[*slot] = Some(pos);
-                self.add_thread(list, pc + 1, caps, pos, text, visited, stamp);
+                self.add_thread(list, pc + 1, caps, pos, step);
             }
             Inst::Start => {
                 if pos == 0 {
-                    self.add_thread(list, pc + 1, caps, pos, text, visited, stamp);
+                    self.add_thread(list, pc + 1, caps, pos, step);
                 }
             }
             Inst::End => {
-                if pos == text.len() {
-                    self.add_thread(list, pc + 1, caps, pos, text, visited, stamp);
+                if pos == step.text.len() {
+                    self.add_thread(list, pc + 1, caps, pos, step);
                 }
             }
             Inst::Boundary(word) => {
-                let before = pos > 0 && is_word(text[pos - 1]);
-                let after = pos < text.len() && is_word(text[pos]);
+                let before = pos > 0 && is_word(step.text[pos - 1]);
+                let after = pos < step.text.len() && is_word(step.text[pos]);
                 if (before != after) == *word {
-                    self.add_thread(list, pc + 1, caps, pos, text, visited, stamp);
+                    self.add_thread(list, pc + 1, caps, pos, step);
                 }
             }
             _ => list.push(Thread { pc, caps }),
@@ -463,38 +469,26 @@ impl Regex {
     fn run(&self, text: &[char], start: usize) -> Option<Vec<Option<usize>>> {
         let slots = 2 * (self.groups + 1);
         let mut visited = vec![0usize; self.insts.len()];
-        let mut stamp = 1;
+        let mut step = Step { text, visited: &mut visited, stamp: 1 };
         let mut current = Vec::new();
         let mut next = Vec::new();
         let mut matched: Option<Vec<Option<usize>>> = None;
-        self.add_thread(&mut current, 0, vec![None; slots], start, text, &mut visited, stamp);
+        self.add_thread(&mut current, 0, vec![None; slots], start, &mut step);
         let mut pos = start;
         loop {
             let c = text.get(pos).copied();
-            stamp += 1;
+            step.stamp += 1;
             next.clear();
-            for i in 0..current.len() {
-                let Thread { pc, caps } = current[i].clone();
+            for thread in &current {
+                let Thread { pc, caps } = thread.clone();
                 match &self.insts[pc] {
                     Inst::Match => {
                         matched = Some(caps);
                         break;
                     }
-                    Inst::Char(expected) => {
-                        if c.is_some_and(|c| self.same(*expected, c)) {
-                            self.add_thread(&mut next, pc + 1, caps, pos + 1, text, &mut visited, stamp);
-                        }
-                    }
-                    Inst::Any => {
-                        if c.is_some_and(|c| c != '\n') {
-                            self.add_thread(&mut next, pc + 1, caps, pos + 1, text, &mut visited, stamp);
-                        }
-                    }
-                    Inst::Class(class) => {
-                        if c.is_some_and(|c| self.in_class(class, c)) {
-                            self.add_thread(&mut next, pc + 1, caps, pos + 1, text, &mut visited, stamp);
-                        }
-                    }
+                    Inst::Char(expected) if c.is_some_and(|c| self.same(*expected, c)) => self.add_thread(&mut next, pc + 1, caps, pos + 1, &mut step),
+                    Inst::Any if c.is_some_and(|c| c != '\n') => self.add_thread(&mut next, pc + 1, caps, pos + 1, &mut step),
+                    Inst::Class(class) if c.is_some_and(|c| self.in_class(class, c)) => self.add_thread(&mut next, pc + 1, caps, pos + 1, &mut step),
                     _ => {}
                 }
             }
@@ -502,7 +496,7 @@ impl Regex {
                 break;
             }
             if matched.is_none() && !self.whole {
-                self.add_thread(&mut next, 0, vec![None; slots], pos + 1, text, &mut visited, stamp);
+                self.add_thread(&mut next, 0, vec![None; slots], pos + 1, &mut step);
             }
             if next.is_empty() && (matched.is_some() || self.whole) {
                 break;
