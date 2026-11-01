@@ -39,14 +39,18 @@ fn slashes(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+fn force_autocrlf() {
+    let gitconfig = std::env::temp_dir().join("schematic-test-gitconfig");
+    std::fs::write(&gitconfig, "[core]\n\tautocrlf = true\n").unwrap();
+    unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
+}
+
 #[test]
 fn projects_add_restore_and_remove_packages() {
     let root = std::env::temp_dir().join(format!("schematic-project-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    let gitconfig = root.join("gitconfig");
-    std::fs::write(&gitconfig, "[core]\n\tautocrlf = true\n").unwrap();
-    unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
+    force_autocrlf();
     let upstream = upstream(&root);
     let registry_dir = root.join("registry");
     write(
@@ -150,6 +154,7 @@ fn packages_bring_their_own_dependencies_and_declare_licenses() {
     let root = std::env::temp_dir().join(format!("schematic-deps-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
+    force_autocrlf();
     let upstream = slashes(&upstream_with_dependencies(&root));
     let registry_dir = root.join("registry");
     let entry = |subdir: &str, extra: &str, versions: &str| format!("{{:git \"{upstream}\" :subdir \"{subdir}\"{extra} :versions {{{versions}}}}}\n");
