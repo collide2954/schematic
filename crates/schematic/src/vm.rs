@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,32 +76,160 @@ impl fmt::Debug for Native {
     }
 }
 
-#[derive(Default)]
-pub struct Globals {
-    slots: HashMap<Symbol, usize>,
-    names: Vec<Symbol>,
-    values: Vec<Option<Value>>,
+pub const CORE: &str = "schematic.core";
+pub const USER: &str = "user";
+
+struct Namespace {
+    vars: HashMap<Symbol, usize>,
+    order: Vec<Symbol>,
+    refers: HashMap<Symbol, usize>,
+    aliases: HashMap<Symbol, Symbol>,
     macros: HashMap<Symbol, Rc<Macro>>,
+    referred_macros: HashMap<Symbol, Rc<Macro>>,
+}
+
+impl Namespace {
+    fn new() -> Namespace {
+        Namespace {
+            vars: HashMap::new(),
+            order: Vec::new(),
+            refers: HashMap::new(),
+            aliases: HashMap::new(),
+            macros: HashMap::new(),
+            referred_macros: HashMap::new(),
+        }
+    }
+}
+
+pub struct Globals {
+    names: Vec<Symbol>,
+    owners: Vec<Symbol>,
+    values: Vec<Option<Value>>,
+    namespaces: HashMap<Symbol, Namespace>,
+    created: Vec<Symbol>,
+    current: Symbol,
+    core: Symbol,
+    pub load_path: Vec<PathBuf>,
+    pub loading: Vec<Symbol>,
+}
+
+impl Default for Globals {
+    fn default() -> Globals {
+        let core = Symbol::intern(CORE);
+        let mut globals = Globals {
+            names: Vec::new(),
+            owners: Vec::new(),
+            values: Vec::new(),
+            namespaces: HashMap::new(),
+            created: Vec::new(),
+            current: core,
+            core,
+            load_path: vec![PathBuf::from(".")],
+            loading: Vec::new(),
+        };
+        globals.ensure(core);
+        globals.ensure(Symbol::intern(USER));
+        globals
+    }
+}
+
+fn split(name: Symbol) -> Option<(Symbol, Symbol)> {
+    let text = name.name();
+    let at = text.find('/')?;
+    if at == 0 || at + 1 >= text.len() {
+        return None;
+    }
+    Some((Symbol::intern(&text[..at]), Symbol::intern(&text[at + 1..])))
 }
 
 impl Globals {
-    pub fn define_macro(&mut self, name: Symbol, definition: Rc<Macro>) {
-        self.macros.insert(name, definition);
-    }
-
-    pub fn macro_for(&self, name: Symbol) -> Option<Rc<Macro>> {
-        self.macros.get(&name).cloned()
-    }
-
-    pub fn slot(&mut self, name: Symbol) -> usize {
-        if let Some(&slot) = self.slots.get(&name) {
-            return slot;
+    fn ensure(&mut self, name: Symbol) -> &mut Namespace {
+        if !self.namespaces.contains_key(&name) {
+            self.namespaces.insert(name, Namespace::new());
+            self.created.push(name);
         }
+        self.namespaces.get_mut(&name).expect("namespace")
+    }
+
+    fn here(&self) -> &Namespace {
+        &self.namespaces[&self.current]
+    }
+
+    pub fn current(&self) -> Symbol {
+        self.current
+    }
+
+    pub fn set_current(&mut self, name: Symbol) {
+        self.ensure(name);
+        self.current = name;
+    }
+
+    pub fn has_namespace(&self, name: Symbol) -> bool {
+        self.namespaces.contains_key(&name)
+    }
+
+    pub fn namespaces(&self) -> &[Symbol] {
+        &self.created
+    }
+
+    fn new_slot(&mut self, owner: Symbol, name: Symbol) -> usize {
         let slot = self.values.len();
-        self.slots.insert(name, slot);
         self.names.push(name);
+        self.owners.push(owner);
         self.values.push(None);
+        let namespace = self.ensure(owner);
+        namespace.vars.insert(name, slot);
+        namespace.order.push(name);
         slot
+    }
+
+    pub fn define_slot(&mut self, name: Symbol) -> usize {
+        match self.here().vars.get(&name) {
+            Some(&slot) => slot,
+            None => self.new_slot(self.current, name),
+        }
+    }
+
+    pub fn define(&mut self, name: &str, value: Value) {
+        let slot = self.define_slot(Symbol::intern(name));
+        self.set(slot, value);
+    }
+
+    fn namespace_for(&self, prefix: Symbol) -> Option<Symbol> {
+        self.here().aliases.get(&prefix).copied().or_else(|| self.namespaces.contains_key(&prefix).then_some(prefix))
+    }
+
+    pub fn find(&self, name: Symbol) -> Option<usize> {
+        let here = self.here();
+        let own = here.vars.get(&name).copied();
+        if let Some(slot) = own.filter(|&slot| self.values[slot].is_some()) {
+            return Some(slot);
+        }
+        if let Some(&slot) = here.refers.get(&name) {
+            return Some(slot);
+        }
+        if own.is_some() {
+            return own;
+        }
+        if let Some(&slot) = self.namespaces[&self.core].vars.get(&name) {
+            return Some(slot);
+        }
+        let (prefix, rest) = split(name)?;
+        let target = self.namespace_for(prefix)?;
+        self.namespaces[&target].vars.get(&rest).copied()
+    }
+
+    pub fn reference(&mut self, name: Symbol) -> Result<usize, Error> {
+        if let Some(slot) = self.find(name) {
+            return Ok(slot);
+        }
+        if let Some((prefix, rest)) = split(name) {
+            let target = self
+                .namespace_for(prefix)
+                .ok_or_else(|| Error::new("unbound", format!("{prefix} is not a namespace or alias")))?;
+            return Ok(self.new_slot(target, rest));
+        }
+        Ok(self.new_slot(self.current, name))
     }
 
     pub fn get(&self, slot: usize) -> Option<&Value> {
@@ -115,25 +244,97 @@ impl Globals {
         self.names[slot]
     }
 
-    pub fn define(&mut self, name: &str, value: Value) {
-        let slot = self.slot(Symbol::intern(name));
-        self.set(slot, value);
-    }
-
     pub fn lookup(&self, name: Symbol) -> Option<&Value> {
-        self.slots.get(&name).and_then(|&slot| self.get(slot))
+        self.find(name).and_then(|slot| self.get(slot))
     }
 
-    pub fn len(&self) -> usize {
-        self.values.len()
+    pub fn define_macro(&mut self, name: Symbol, definition: Rc<Macro>) {
+        let current = self.current;
+        self.ensure(current).macros.insert(name, definition);
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (Symbol, Option<&Value>)> {
-        self.names.iter().copied().zip(self.values.iter().map(Option::as_ref))
+    pub fn macro_for(&self, name: Symbol) -> Option<Rc<Macro>> {
+        let here = self.here();
+        if let Some(found) = here.macros.get(&name).or_else(|| here.referred_macros.get(&name)) {
+            return Some(found.clone());
+        }
+        if let Some(found) = self.namespaces[&self.core].macros.get(&name) {
+            return Some(found.clone());
+        }
+        let (prefix, rest) = split(name)?;
+        let target = self.namespace_for(prefix)?;
+        self.namespaces[&target].macros.get(&rest).cloned()
     }
 
-    pub fn macro_names(&self) -> impl Iterator<Item = Symbol> + '_ {
-        self.macros.keys().copied()
+    pub fn alias(&mut self, alias: Symbol, target: Symbol) -> Result<(), Error> {
+        if !self.has_namespace(target) {
+            return Err(Error::new("unbound", format!("{target} is not a loaded namespace")));
+        }
+        let current = self.current;
+        self.ensure(current).aliases.insert(alias, target);
+        Ok(())
+    }
+
+    pub fn refer(&mut self, target: Symbol, only: Option<&[Symbol]>) -> Result<(), Error> {
+        if target == self.current {
+            return Ok(());
+        }
+        let Some(source) = self.namespaces.get(&target) else {
+            return Err(Error::new("unbound", format!("{target} is not a loaded namespace")));
+        };
+        let names: Vec<Symbol> = match only {
+            Some(names) => names.to_vec(),
+            None => source.order.iter().chain(source.macros.keys()).copied().collect(),
+        };
+        let mut vars = Vec::new();
+        let mut macros = Vec::new();
+        for name in names {
+            let var = source.vars.get(&name).copied();
+            let found = source.macros.get(&name).cloned();
+            if var.is_none() && found.is_none() {
+                return Err(Error::new("unbound", format!("{name} is not defined in {target}")));
+            }
+            if let Some(slot) = var {
+                vars.push((name, slot));
+            }
+            if let Some(definition) = found {
+                macros.push((name, definition));
+            }
+        }
+        let current = self.current;
+        let here = self.ensure(current);
+        here.refers.extend(vars);
+        here.referred_macros.extend(macros);
+        Ok(())
+    }
+
+    pub fn vars(&self, namespace: Symbol) -> impl Iterator<Item = (Symbol, Option<&Value>)> {
+        let found = self.namespaces.get(&namespace);
+        found.into_iter().flat_map(move |ns| ns.order.iter().map(move |name| (*name, self.values[ns.vars[name]].as_ref())))
+    }
+
+    pub fn visible_names(&self) -> Vec<String> {
+        let here = self.here();
+        let core = &self.namespaces[&self.core];
+        let mut names: Vec<String> = here
+            .vars
+            .keys()
+            .chain(here.refers.keys())
+            .chain(here.macros.keys())
+            .chain(here.referred_macros.keys())
+            .chain(core.vars.keys())
+            .chain(core.macros.keys())
+            .map(|s| s.to_string())
+            .collect();
+        for (alias, target) in &here.aliases {
+            if let Some(ns) = self.namespaces.get(target) {
+                names.extend(ns.vars.keys().chain(ns.macros.keys()).map(|name| format!("{alias}/{name}")));
+            }
+        }
+        names.retain(|n| !n.starts_with(' '));
+        names.sort();
+        names.dedup();
+        names
     }
 }
 

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::builtins::namespaces;
 use crate::bytecode::{Capture, Intrinsic, Op, Proto};
 use crate::error::Error;
 use crate::expander::Expander;
@@ -516,7 +517,7 @@ impl<'a> Compiler<'a> {
 
     fn compile(&mut self, form: &Value, tail: bool) -> Result<(), Error> {
         match form {
-            Value::Symbol(s) => self.compile_symbol(*s, tail),
+            Value::Symbol(s) => self.compile_symbol(*s, tail)?,
             Value::List(l) if !l.is_empty() => return self.compile_list(l, tail),
             Value::Vector(v) => {
                 for item in v.iter() {
@@ -543,9 +544,9 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn compile_symbol(&mut self, name: Symbol, take: bool) {
+    fn compile_symbol(&mut self, name: Symbol, take: bool) -> Result<(), Error> {
         let take = take || self.current().movable.contains(&name);
-        match self.resolve(name) {
+        match self.resolve(name)? {
             Resolved::Local(slot, false) if take => self.emit(Op::TakeLocal(slot as u32)),
             Resolved::Local(slot, false) => self.emit(Op::GetLocal(slot as u32)),
             Resolved::Local(slot, true) => self.emit(Op::GetLocalCell(slot as u32)),
@@ -553,13 +554,14 @@ impl<'a> Compiler<'a> {
             Resolved::Upvalue(i, true) => self.emit(Op::GetUpvalueCell(i as u32)),
             Resolved::Global(slot) => self.emit(Op::GetGlobal(slot as u32)),
         }
+        Ok(())
     }
 
-    fn resolve(&mut self, name: Symbol) -> Resolved {
+    fn resolve(&mut self, name: Symbol) -> Result<Resolved, Error> {
         let top = self.functions.len() - 1;
         match self.resolve_in(top, name) {
-            Some(r) => r,
-            None => Resolved::Global(self.globals.slot(name.root())),
+            Some(r) => Ok(r),
+            None => Ok(Resolved::Global(self.globals.reference(name.root())?)),
         }
     }
 
@@ -641,6 +643,16 @@ impl<'a> Compiler<'a> {
                     return Err(syntax_error(&sym.name(), "not inside quasiquote"));
                 }
                 "define-syntax" => return self.compile_define_syntax(&args, tail),
+                "ns" => {
+                    let Some(name) = args.first() else {
+                        return Err(syntax_error("ns", "expected a namespace name"));
+                    };
+                    if !matches!(name, Value::Symbol(_)) {
+                        return Err(syntax_error("ns", &format!("cannot switch to {name}")));
+                    }
+                    let form = namespaces::enter_form(name, args.iter().skip(1).cloned().collect());
+                    return self.compile(&form, tail);
+                }
                 "if" => return self.compile_if(&args, tail),
                 "define" => return self.compile_define(&args, tail),
                 "set!" => return self.compile_set(&args, tail),
@@ -1126,6 +1138,19 @@ impl<'a> Compiler<'a> {
             return Err(syntax_error("define", "expected a name"));
         };
         let body = args.rest();
+        let defined = match target {
+            Value::Symbol(name) => Some(*name),
+            Value::List(signature) => match signature.first() {
+                Some(Value::Symbol(name)) => Some(*name),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(name) = defined {
+            if self.functions.len() == 1 && !self.functions[0].locals.iter().any(|l| l.name == name) {
+                self.globals.define_slot(name.root());
+            }
+        }
         let name = match target {
             Value::Symbol(name) => {
                 if body.len() > 1 {
@@ -1161,7 +1186,7 @@ impl<'a> Compiler<'a> {
             Some((slot, false)) => self.emit(Op::SetLocal(slot)),
             Some((slot, true)) => self.emit(Op::SetLocalCell(slot)),
             None if top == 0 => {
-                let slot = self.globals.slot(name.root()) as u32;
+                let slot = self.globals.define_slot(name.root()) as u32;
                 self.emit(Op::DefineGlobal(slot));
                 self.finish_tail(tail);
                 return Ok(());
@@ -1182,7 +1207,7 @@ impl<'a> Compiler<'a> {
             return Err(syntax_error("set!", "expected a variable name and a value"));
         };
         self.compile(value, false)?;
-        match self.resolve(*name) {
+        match self.resolve(*name)? {
             Resolved::Local(slot, false) => self.emit(Op::SetLocal(slot as u32)),
             Resolved::Local(slot, true) => self.emit(Op::SetLocalCell(slot as u32)),
             Resolved::Upvalue(i, true) => self.emit(Op::SetUpvalueCell(i as u32)),

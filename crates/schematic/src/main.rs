@@ -22,11 +22,16 @@ fn main() {
 }
 
 fn run_file(path: &str) -> i32 {
-    match std::fs::read_to_string(path) {
-        Ok(source) => run_source(&source, false),
+    if let Err(e) = std::fs::read_to_string(path) {
+        eprintln!("error: cannot read {path}: {e}");
+        return 2;
+    }
+    let mut interp = Interpreter::new();
+    match interp.load_file(std::path::Path::new(path)) {
+        Ok(_) => 0,
         Err(e) => {
-            eprintln!("error: cannot read {path}: {e}");
-            2
+            eprintln!("error: {e}");
+            1
         }
     }
 }

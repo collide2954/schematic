@@ -12,6 +12,7 @@ mod functional;
 mod help;
 mod io;
 pub mod math;
+pub mod namespaces;
 mod plots;
 mod stats;
 pub mod strings;
@@ -30,6 +31,7 @@ pub fn install(globals: &mut Globals) {
     csv::install(globals);
     plots::install(globals);
     help::install(globals);
+    namespaces::install(globals);
 }
 
 fn native(globals: &mut Globals, name: &'static str, arity: Arity, func: PureFn) {

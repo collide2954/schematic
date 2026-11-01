@@ -372,7 +372,7 @@ fn eval_with_frame_limit(src: &str, limit: usize) -> String {
 fn tail_calls_do_not_grow_the_stack() {
     let count = "(define (count n) (if (= n 0) 'done (count (- n 1)))) (count 10000)";
     assert_eq!(eval_with_frame_limit(count, 100), "done");
-    let mutual = "(define (even? n) (if (= n 0) true (odd? (- n 1)))) (define (odd? n) (if (= n 0) false (even? (- n 1)))) (even? 10001)";
+    let mutual = "(define (ev? n) (if (= n 0) true (od? (- n 1)))) (define (od? n) (if (= n 0) false (ev? (- n 1)))) (ev? 10001)";
     assert_eq!(eval_with_frame_limit(mutual, 100), "false");
     let through_begin = "(define (count n) (begin 1 (if (= n 0) 'done (count (- n 1))))) (count 10000)";
     assert_eq!(eval_with_frame_limit(through_begin, 100), "done");
@@ -1175,6 +1175,70 @@ fn facets_split_a_chart_into_small_multiples() {
     assert_eq!(lines.matches(">Oslo<").count(), 1, "{lines}");
     assert!(lines.matches(">units<").count() == 1 && lines.matches(">year<").count() == 1, "{lines}");
     assert_eq!(eval("(bar-chart [\"a\"] [1] {:facet :x})"), "error: bar-chart expects a table for :facet");
+}
+
+#[test]
+fn namespaces_separate_names_and_share_core() {
+    let mut interp = Interpreter::new();
+    assert_eq!(interp.current_namespace(), "user");
+    interp.eval_str("(define shared 1) (ns my.app) (define shared 2) (define (twice x) (* 2 x))").unwrap();
+    assert_eq!(interp.current_namespace(), "my.app");
+    assert_eq!(interp.eval_str("shared").unwrap().to_string(), "2");
+    assert_eq!(interp.eval_str("user/shared").unwrap().to_string(), "1");
+    assert_eq!(interp.eval_str("(inc shared)").unwrap().to_string(), "3");
+    interp.eval_str("(define-syntax thrice (syntax-rules () ((_ x) (* 3 x))))").unwrap();
+    assert_eq!(interp.eval_str("(ns user) shared").unwrap().to_string(), "1");
+    assert_eq!(interp.eval_str("my.app/shared").unwrap().to_string(), "2");
+    assert_eq!(interp.eval_str("(my.app/twice 4)").unwrap().to_string(), "8");
+    assert_eq!(interp.eval_str("twice").unwrap_err().to_string(), "twice is not defined");
+    interp.eval_str("(alias 'app 'my.app)").unwrap();
+    assert_eq!(interp.eval_str("(app/twice 5)").unwrap().to_string(), "10");
+    interp.eval_str("(refer 'my.app :only '[twice thrice])").unwrap();
+    assert_eq!(interp.eval_str("(twice 6)").unwrap().to_string(), "12");
+    assert_eq!(interp.eval_str("(thrice 2)").unwrap().to_string(), "6");
+    assert_eq!(interp.eval_str("shared").unwrap().to_string(), "1");
+    assert_eq!(interp.eval_str("(current-ns)").unwrap().to_string(), "user");
+    assert_eq!(eval("(call/ec (lambda (k) (k 7)))"), "7");
+    assert_eq!(eval("(/ 6 3)"), "2.0");
+    assert_eq!(eval("(nope/x 1)"), "error: nope is not a namespace or alias");
+    assert_eq!(eval("(refer 'nope)"), "error: nope is not a loaded namespace");
+    assert_eq!(eval("(ns 1)"), "error: ns: cannot switch to 1");
+    let names: Vec<String> = interp.user_globals().map(|(n, _)| n).collect();
+    assert_eq!(names, ["shared"]);
+    let visible = interp.global_names();
+    assert!(visible.contains(&"app/twice".to_string()) && visible.contains(&"twice".to_string()) && visible.contains(&"inc".to_string()));
+    assert!(!visible.contains(&"my.app/shared".to_string()));
+}
+
+#[test]
+fn namespaces_load_from_files_on_the_load_path() {
+    let dir = std::env::temp_dir().join(format!("schematic-ns-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("my")).unwrap();
+    std::fs::create_dir_all(dir.join("cyc")).unwrap();
+    let write = |name: &str, text: &str| std::fs::write(dir.join(name), text).unwrap();
+    write("my/lib.scm", "(ns my.lib (:require [my.util :as u]))\n(define (greet name) (str \"hi \" (u/shout name)))\n(define secret 42)\n");
+    write("my/util.scm", "(ns my.util)\n(define (shout s) (string-upcase s))\n");
+    write("extra.scm", "(define loaded (+ 1 2))\n");
+    write("cyc/a.scm", "(ns cyc.a (:require [cyc.b]))\n");
+    write("cyc/b.scm", "(ns cyc.b (:require [cyc.a]))\n");
+    let mut interp = Interpreter::new();
+    interp.add_load_path(dir.clone());
+    interp.eval_str("(ns app (:require [my.lib :as lib :refer [greet]]))").unwrap();
+    assert_eq!(interp.current_namespace(), "app");
+    assert_eq!(interp.eval_str("(greet \"bo\")").unwrap().to_string(), "\"hi BO\"");
+    assert_eq!(interp.eval_str("lib/secret").unwrap().to_string(), "42");
+    assert_eq!(interp.eval_str("shout").unwrap_err().to_string(), "shout is not defined");
+    assert_eq!(interp.eval_str("(require '[my.util :refer :all]) (shout \"x\")").unwrap().to_string(), "\"X\"");
+    let missing = interp.eval_str("(require 'my.missing)").unwrap_err().to_string();
+    assert!(missing.starts_with("cannot find namespace my.missing") && missing.contains("my/missing.scm"), "{missing}");
+    assert_eq!(interp.eval_str("(load \"extra.scm\") loaded").unwrap().to_string(), "3");
+    assert_eq!(interp.eval_str("(require 'cyc.a)").unwrap_err().to_string(), "circular require of cyc.a");
+    assert_eq!(interp.eval_str("(current-ns)").unwrap().to_string(), "app");
+    let path = dir.join("my").join("util.scm");
+    assert!(interp.load_file(&path).is_ok());
+    assert_eq!(interp.current_namespace(), "app");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]
