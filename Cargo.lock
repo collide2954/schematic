@@ -2524,11 +2524,11 @@ dependencies = [
 
 [[package]]
 name = "schematic"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "schematic-studio"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "iced",
  "rfd",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "schematic-web"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "schematic",
 ]
