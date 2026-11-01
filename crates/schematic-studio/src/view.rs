@@ -38,7 +38,9 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
     let panes = pane_grid(&studio.panes, |_, kind, _| {
         let (tabs, controls, body): (Vec<TabItem>, Option<Element<'_, Message>>, Element<'_, Message>) = match kind {
             PaneKind::Editor => (editor_tabs(studio), Some(editor_controls(studio)), workspace(studio)),
-            PaneKind::Console => (single("Console", None), Some(small("Clear", Some(Message::ClearConsole))), console(studio)),
+            PaneKind::Console => {
+                (single("Console", Some(studio.namespace.clone())), Some(small("Clear", Some(Message::ClearConsole))), console(studio))
+            }
             PaneKind::Environment => match studio.side {
                 Side::Environment => (side_tabs(studio), None, environment(studio)),
                 Side::Files => (side_tabs(studio), Some(file_controls(studio)), files(studio)),

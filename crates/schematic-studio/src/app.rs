@@ -188,6 +188,7 @@ pub struct Studio {
     pub recalled: Option<usize>,
     pub draft: String,
     pub bindings: Vec<Binding>,
+    pub namespace: String,
     pub grid: Option<Grid>,
     pub plots: Vec<Plot>,
     pub plot_at: usize,
@@ -412,6 +413,7 @@ impl Studio {
             recalled: None,
             draft: String::new(),
             bindings: Vec::new(),
+            namespace: "user".to_string(),
             grid: None,
             plots: Vec::new(),
             plot_at: 0,
@@ -842,6 +844,10 @@ impl Studio {
                 self.bindings = bindings;
                 Task::none()
             }
+            Event::Namespace(name) => {
+                self.namespace = name;
+                Task::none()
+            }
             Event::Grid(grid) => {
                 self.grid = Some(grid);
                 Task::none()
@@ -880,7 +886,9 @@ impl Studio {
         };
         self.running = true;
         self.status = "Running".to_string();
-        let _ = worker.send(Request::Run { source, show_results });
+        let mut load_path: Vec<PathBuf> = self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf).into_iter().collect();
+        load_path.extend(self.root.clone());
+        let _ = worker.send(Request::Run { source, show_results, load_path });
         Task::none()
     }
 

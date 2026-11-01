@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{Receiver, Sender};
@@ -14,7 +15,7 @@ use schematic::{Interpreter, Value};
 
 #[derive(Debug, Clone)]
 pub enum Request {
-    Run { source: String, show_results: bool },
+    Run { source: String, show_results: bool, load_path: Vec<PathBuf> },
     Inspect { name: String, offset: usize, limit: usize },
 }
 
@@ -43,6 +44,7 @@ pub enum Event {
     Result(String),
     Error(String),
     Environment(Vec<Binding>),
+    Namespace(String),
     Grid(Grid),
     Plot(Plot),
     Finished,
@@ -52,7 +54,7 @@ impl PartialEq for Event {
     fn eq(&self, other: &Event) -> bool {
         use Event::*;
         match (self, other) {
-            (Output(a), Output(b)) | (Result(a), Result(b)) | (Error(a), Error(b)) => a == b,
+            (Output(a), Output(b)) | (Result(a), Result(b)) | (Error(a), Error(b)) | (Namespace(a), Namespace(b)) => a == b,
             (Environment(a), Environment(b)) => a == b,
             (Grid(a), Grid(b)) => a == b,
             (Plot(a), Plot(b)) => a == b,
@@ -96,9 +98,13 @@ pub fn run(mut interp: Interpreter, requests: Receiver<Request>, mut emit: impl 
     interp.set_output(Box::new(Forward(emit.clone())));
     for request in requests {
         match request {
-            Request::Run { source, show_results } => {
+            Request::Run { source, show_results, load_path } => {
+                let mut dirs = load_path;
+                dirs.push(PathBuf::from("."));
+                interp.set_load_path(dirs);
                 execute(&mut interp, &source, show_results, &mut emit);
                 emit(Event::Environment(environment(&interp)));
+                emit(Event::Namespace(interp.current_namespace()));
                 emit(Event::Finished);
             }
             Request::Inspect { name, offset, limit } => match interp.global(&name) {
@@ -235,7 +241,11 @@ mod tests {
     }
 
     fn run_request(source: &str) -> Request {
-        Request::Run { source: source.to_string(), show_results: true }
+        Request::Run { source: source.to_string(), show_results: true, load_path: Vec::new() }
+    }
+
+    fn quiet_request(source: &str) -> Request {
+        Request::Run { source: source.to_string(), show_results: false, load_path: Vec::new() }
     }
 
     fn binding(name: &str, kind: &str, summary: &str) -> Binding {
@@ -256,6 +266,7 @@ mod tests {
                 Event::Output("hi\n".into()),
                 Event::Result("3".into()),
                 Event::Environment(vec![table("t", "2 rows, 1 column", &["a"])]),
+                Event::Namespace("user".into()),
                 Event::Finished,
             ]
         );
@@ -263,19 +274,41 @@ mod tests {
 
     #[test]
     fn quiet_runs_report_only_output_and_errors() {
-        let events = drive(vec![Request::Run { source: "(define a 1) (print a) (error \"boom\") (define b 2)".into(), show_results: false }]);
+        let events = drive(vec![quiet_request("(define a 1) (print a) (error \"boom\") (define b 2)")]);
         assert_eq!(
             events,
             vec![
                 Event::Output("1".into()),
                 Event::Error("boom".into()),
                 Event::Environment(vec![binding("a", "integer", "1")]),
+                Event::Namespace("user".into()),
                 Event::Finished,
             ]
         );
         let events = drive(vec![run_request("(+ 1")]);
         assert!(matches!(&events[0], Event::Error(_)), "{events:?}");
-        assert_eq!(events[1..], [Event::Environment(vec![]), Event::Finished]);
+        assert_eq!(events[1..], [Event::Environment(vec![]), Event::Namespace("user".into()), Event::Finished]);
+    }
+
+    #[test]
+    fn runs_report_the_namespace_they_end_in_and_load_from_the_script_folder() {
+        let dir = std::env::temp_dir().join(format!("studio-ns-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("helpers")).unwrap();
+        std::fs::write(dir.join("helpers").join("text.scm"), "(ns helpers.text)\n(define (loud s) (string-upcase s))\n").unwrap();
+        let events = drive(vec![Request::Run {
+            source: "(ns report (:require [helpers.text :as t])) (define shout (t/loud \"hi\"))".into(),
+            show_results: false,
+            load_path: vec![dir.clone()],
+        }]);
+        assert_eq!(
+            events,
+            vec![
+                Event::Environment(vec![binding("shout", "string", "\"HI\"")]),
+                Event::Namespace("report".into()),
+                Event::Finished,
+            ]
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -285,7 +318,7 @@ mod tests {
              (define (f x & more) x) (define g inc) (define s \"{}\") (define n 2.5)",
             "x".repeat(70)
         );
-        let events = drive(vec![Request::Run { source, show_results: false }]);
+        let events = drive(vec![quiet_request(&source)]);
         let Event::Environment(bindings) = &events[0] else { panic!("{events:?}") };
         assert_eq!(
             *bindings,
@@ -305,14 +338,15 @@ mod tests {
     #[test]
     fn plots_are_events_of_their_own() {
         let events = drive(vec![
-            Request::Run { source: "(define p (bar-chart [\"a\"] [1])) p".into(), show_results: false },
+            quiet_request("(define p (bar-chart [\"a\"] [1])) p"),
             Request::Inspect { name: "p".into(), offset: 0, limit: 10 },
         ]);
         assert!(matches!(&events[0], Event::Plot(plot) if plot.kind == schematic::plot::Kind::Bar), "{events:?}");
         assert_eq!(events[1], Event::Environment(vec![binding("p", "plot", "bar chart with 1 bar")]));
-        assert_eq!(events[2], Event::Finished);
-        assert!(matches!(&events[3], Event::Plot(_)), "{events:?}");
-        assert_eq!(events.len(), 4);
+        assert_eq!(events[2], Event::Namespace("user".into()));
+        assert_eq!(events[3], Event::Finished);
+        assert!(matches!(&events[4], Event::Plot(_)), "{events:?}");
+        assert_eq!(events.len(), 5);
     }
 
     #[test]
@@ -320,7 +354,7 @@ mod tests {
         let setup = "(define t (table {:city [\"Oslo\" \"Rome\" \"Bern\"] :n [1 2 nil]})) (define v [10 20]) (define m {:a 1}) (define s \"text\")";
         let inspect = |name: &str, offset, limit| Request::Inspect { name: name.into(), offset, limit };
         let events = drive(vec![
-            Request::Run { source: setup.into(), show_results: false },
+            quiet_request(setup),
             inspect("t", 1, 1),
             inspect("v", 0, 10),
             inspect("m", 0, 10),
@@ -339,7 +373,7 @@ mod tests {
             })
         };
         assert_eq!(
-            events[2..],
+            events[3..],
             [
                 grid("t", &["#", "city", "n"], &[true, false, true], &[&["1", "Rome", "2"]], 1, 3),
                 grid("v", &["#", "value"], &[true, true], &[&["0", "10"], &["1", "20"]], 0, 2),
