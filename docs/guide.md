@@ -26,7 +26,9 @@ greeting
 ```
 
 Run a file with `schematic file.scm`, evaluate one expression with
-`schematic -e "(* 6 7)"`, and leave the REPL with `(exit)` or Ctrl-D.
+`schematic -e "(* 6 7)"`, and leave the REPL with `(exit)` or Ctrl-D. Ask
+about any name with `(doc name)`, which prints its entry from the reference,
+and find names with `(apropos "chart")`.
 
 If you prefer a window, Schematic Studio (`cargo run --release -p
 schematic-studio`) puts an editor, a console, an environment pane, and a

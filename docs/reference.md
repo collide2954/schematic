@@ -269,6 +269,14 @@ and `:labels true` prints each value next to its bar or point. A chart is a
 value: printing it draws a text version, Schematic Studio shows it in the
 Plots pane with values on hover, and missing values are left out.
 
+## Help
+
+| Function | Description |
+|---|---|
+| `(doc name)` | print the reference entry for `name`, which is not evaluated |
+| `(doc-string name)` | the same text as a string, or `nil` when there is none; `name` may be a symbol, keyword, or string |
+| `(apropos part)` | a vector of the documented names that contain `part` |
+
 ## Errors
 
 | Function | Description |

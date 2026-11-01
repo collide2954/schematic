@@ -1178,6 +1178,27 @@ fn facets_split_a_chart_into_small_multiples() {
 }
 
 #[test]
+fn documentation_comes_from_the_reference() {
+    let (result, output) = eval_with_output("(doc inc)");
+    assert_eq!(result, "nil");
+    assert!(output.starts_with("inc (Numbers)\n  (abs x), (inc x), (dec x)\n  absolute value, plus one, minus one\n"), "{output}");
+    assert_eq!(eval_with_output("(doc nope)").1, "No documentation for nope\n");
+    let text = eval("(doc-string \"where\")");
+    assert!(text.contains("where (Arrays)") && text.contains("where (Tables)"), "{text}");
+    assert_eq!(eval("(doc-string :nope)"), "nil");
+    assert_eq!(eval("(doc-string 1)"), "error: doc-string expects a name, got 1");
+    let names = eval("(apropos \"-chart\")");
+    assert!(names.starts_with("[\"area-chart\" \"bar-chart\"") && names.contains("\"pie-chart\""), "{names}");
+    let mut interp = Interpreter::new();
+    let names = interp.global_names();
+    assert!(names.contains(&"bar-chart".to_string()) && names.contains(&"doc".to_string()));
+    assert!(!names.contains(&"define-syntax".to_string()));
+    assert!(names.iter().all(|n| !n.starts_with(' ')));
+    interp.eval_str("(define mine 1)").unwrap();
+    assert!(interp.global_names().contains(&"mine".to_string()));
+}
+
+#[test]
 fn axes_prefer_whole_numbers_and_stacks_label_their_totals() {
     let svg = eval("(to-svg (line-chart [2020 2021 2022] [1 2 3]))");
     assert!(svg.contains(">2021<") && !svg.contains(".5<"), "{svg}");

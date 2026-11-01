@@ -3,6 +3,7 @@ pub mod builtins;
 pub mod bytecode;
 pub mod compiler;
 pub mod date;
+pub mod docs;
 pub mod error;
 pub mod expander;
 mod interpreter;

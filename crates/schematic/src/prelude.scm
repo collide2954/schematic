@@ -23,3 +23,7 @@
 (define (juxt & fs)
   (lambda (& args)
     (map (lambda (f) (apply f args)) (vec fs))))
+
+(define-syntax doc
+  (syntax-rules ()
+    ((_ name) (print-doc 'name))))

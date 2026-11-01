@@ -4,6 +4,10 @@
   (unless (equal? expected actual)
     (error (str label ": expected " expected " but got " actual))))
 
+;; Help
+(check "doc-string" true (string-starts-with? (doc-string "doc") "doc (Help)"))
+(check "apropos" true (some (lambda (n) (= n "bar-chart")) (apropos "chart")))
+
 ;; Expressions
 (check "add" 3 (+ 1 2))
 (check "nested" 14 (* 2 (+ 3 4)))

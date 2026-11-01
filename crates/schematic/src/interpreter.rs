@@ -54,6 +54,15 @@ impl Interpreter {
             .filter_map(|(name, value)| value.map(|v| (name.to_string(), v)))
     }
 
+    pub fn global_names(&self) -> Vec<String> {
+        let defined = self.vm.globals.iter().filter(|(_, value)| value.is_some()).map(|(name, _)| name.to_string());
+        let mut names: Vec<String> =
+            defined.chain(self.vm.globals.macro_names().map(|name| name.to_string())).filter(|n| !n.starts_with(' ')).collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     pub fn global(&self, name: &str) -> Option<&Value> {
         self.vm.globals.lookup(Symbol::intern(name))
     }

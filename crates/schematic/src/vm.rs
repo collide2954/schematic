@@ -131,6 +131,10 @@ impl Globals {
     pub fn iter(&self) -> impl Iterator<Item = (Symbol, Option<&Value>)> {
         self.names.iter().copied().zip(self.values.iter().map(Option::as_ref))
     }
+
+    pub fn macro_names(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.macros.keys().copied()
+    }
 }
 
 #[inline]
