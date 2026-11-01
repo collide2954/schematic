@@ -2,6 +2,7 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use schematic::Interpreter;
+use schematic::check::check_file;
 use schematic::error::Error;
 use schematic::project::{Project, Reference, Source};
 use schematic::reader::read_all;
@@ -11,7 +12,8 @@ const USAGE: &str = "usage: schematic [file | -e expression | --version]
        schematic add <name>[@version] [--path dir | --git url [--tag t | --commit c] [--subdir d]]
        schematic remove <name>
        schematic restore [--locked]
-       schematic run [file]";
+       schematic run [file]
+       schematic check [file...]";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,6 +31,13 @@ fn main() {
         ["restore", "--locked"] => report(restore(true)),
         ["run"] => report(run_project()),
         ["run", path] => run_file(path),
+        ["check", files @ ..] => match check(files) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
+                1
+            }
+        },
         [path] if !path.starts_with('-') => run_file(path),
         _ => {
             eprintln!("{USAGE}");
@@ -169,6 +178,49 @@ fn restore(locked: bool) -> Result<(), Error> {
         println!("{name:<24} {}", status.label());
     }
     Ok(())
+}
+
+fn scripts_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scripts_under(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "scm") {
+            out.push(path);
+        }
+    }
+}
+
+fn check(files: &[&str]) -> Result<i32, Error> {
+    let targets: Vec<(PathBuf, String)> = if files.is_empty() {
+        let project = project_at(Path::new("."))?;
+        let mut found = Vec::new();
+        scripts_under(&project.root.join(&project.manifest.source), &mut found);
+        found.sort();
+        found
+            .into_iter()
+            .map(|path| {
+                let shown = path.strip_prefix(&project.root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+                (path, shown)
+            })
+            .collect()
+    } else {
+        files.iter().map(|file| (PathBuf::from(file), file.to_string())).collect()
+    };
+    let mut count = 0;
+    for (path, shown) in &targets {
+        for diagnostic in check_file(path, &load_path_for(path)) {
+            println!("{shown}:{diagnostic}");
+            count += 1;
+        }
+    }
+    match count {
+        0 => println!("No problems"),
+        1 => println!("1 problem"),
+        n => println!("{n} problems"),
+    }
+    Ok(i32::from(count > 0))
 }
 
 fn run_project() -> Result<(), Error> {

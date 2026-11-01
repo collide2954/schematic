@@ -86,6 +86,38 @@ fn projects_are_created_restored_and_run_from_the_command_line() {
 }
 
 #[test]
+fn check_reports_problems_with_positions() {
+    let path = temp_file("check", "(define n 3)\n(string-upcase n)\n(define (sq x) (* x x))\n(sq 1 2)\n");
+    let shown = path.to_str().unwrap();
+    let (code, out, err) = run(&["check", shown], "");
+    assert_eq!(code, 1, "{err}");
+    assert_eq!(out, format!("{shown}:2:16: string-upcase expects a string, got an integer\n{shown}:4:1: sq expects 1 argument, got 2\n2 problems\n"));
+    let clean = temp_file("check-clean", "(define (sq [x : int]) : int (* x x))\n(sq 7)\n");
+    let (code, out, _) = run(&["check", clean.to_str().unwrap()], "");
+    assert_eq!((code, out.as_str()), (0, "No problems\n"));
+    let (code, out, _) = run(&["check", "definitely-missing-file.scm"], "");
+    assert_eq!(code, 1);
+    assert!(out.starts_with("definitely-missing-file.scm:1:1: cannot read"), "{out}");
+}
+
+#[test]
+fn check_covers_a_project_when_no_file_is_given() {
+    let root = std::env::temp_dir().join(format!("schematic-cli-check-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    assert_eq!(run_in(&root, &["new", "demo"]).0, 0);
+    let demo = root.join("demo");
+    assert_eq!(run_in(&demo, &["check"]), (0, "No problems\n".to_string(), String::new()));
+    std::fs::write(demo.join("src").join("extra.scm"), "(ns extra)\n(string-length 1)\n").unwrap();
+    let (code, out, _) = run_in(&demo, &["check"]);
+    assert_eq!((code, out.as_str()), (1, "src/extra.scm:2:16: string-length expects a string, got an integer\n1 problem\n"));
+    let (code, _, err) = run_in(&root, &["check"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("no project.scm"), "{err}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn missing_file_is_an_error() {
     let (code, _, err) = run(&["definitely-missing-file.scm"], "");
     assert_eq!(code, 2);
