@@ -48,6 +48,10 @@ that line. The data pane sorts by a column header, filters rows, copies
 rows, exports a table as CSV, and plots a column's histogram from its
 header; the console finds text, copies any line, and saves its transcript
 as Markdown; and a Watch tab keeps expressions evaluated after every run.
+Studio remembers its theme, sizes, layout, open files, and watches between
+sessions; Ctrl+, opens the Settings tab, Ctrl+= and Ctrl+- resize the code,
+a Start page lists recent files and projects, files changed on disk are
+reloaded, and plots zoom with the wheel, pan by dragging, and copy as SVG.
 
 ## Expressions
 

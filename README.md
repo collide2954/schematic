@@ -111,13 +111,21 @@ tab re-evaluates expressions after every run; the interpreter can be
 restarted; and File has a New project dialog.
 A Help tab renders the guide and the reference with search, F1 looks up
 the name under the cursor, and a Project tab creates a project in the open
-folder, adds and removes packages, and restores them. The type checker runs
+folder, adds and removes packages, restores them, and shows every package
+in use with its license. The type checker runs
 as you type: problems turn red, the status bar explains the one under the
-cursor, and F8 jumps to the next. It has its own light
-and dark themes and bundles
-the Inter and JetBrains Mono fonts, so it looks the same everywhere. The
-interpreter runs on its own thread, so the window stays responsive and a
-runaway loop can be stopped.
+cursor, and F8 jumps to the next. Studio remembers its state between
+sessions in a settings file: theme, interface size, code size, word wrap,
+window size, pane layout, open and recent files, projects, and watches. A
+Settings tab (Ctrl+,) changes them, Ctrl+= and Ctrl+- zoom the code, and a
+Start page lists recent files and projects. Files dropped on the window
+open, files changed on disk reload (or say so, when they have unsaved
+edits), and saving keeps the previous version in a backups folder. Plots
+zoom with the wheel, pan by dragging, show a crosshair, copy as SVG, and
+line up as thumbnails when there are several. It has light, dark, warm,
+and high-contrast themes and bundles the Inter and JetBrains Mono fonts,
+so it looks the same everywhere. The interpreter runs on its own thread,
+so the window stays responsive and a runaway loop can be stopped.
 
 ```
 cargo run --release -p schematic-studio               # empty editor
