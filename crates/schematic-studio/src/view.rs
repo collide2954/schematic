@@ -8,7 +8,7 @@ use iced::widget::{
 };
 use std::path::{Path, PathBuf};
 
-use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
+use iced::{Alignment, Color, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
@@ -55,7 +55,7 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
             PaneKind::Plots => {
                 let plot = studio.plot();
                 let detail = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
-                (single("Plots", detail), Some(plot_controls(studio)), plots(studio))
+                (single("Plots", detail), None, plots(studio))
             }
         };
         let maximized = studio.panes.maximized().is_some();
@@ -90,27 +90,29 @@ const DROPDOWN_WIDTH: f32 = 280.0;
 const PALETTE_WIDTH: f32 = 560.0;
 const HEADER: Padding = Padding { top: 4.0, right: 6.0, bottom: 4.0, left: 12.0 };
 
-fn menu_width(menu: Menu) -> f32 {
-    18.0 + 7.4 * menu.label().chars().count() as f32
+const MENU_PAD: Padding = Padding { top: 2.0, right: 10.0, bottom: 2.0, left: 10.0 };
+
+fn menu_label<'a>(menu: Menu) -> iced::widget::Text<'a> {
+    text(menu.label()).size(theme::UI).font(fonts::UI_MEDIUM)
 }
 
 fn menu_bar(studio: &Studio) -> Element<'_, Message> {
     let mut bar = Row::new().height(MENU_HEIGHT).align_y(Alignment::Center).padding(Padding { top: 0.0, right: 8.0, bottom: 0.0, left: 6.0 });
     for menu in Menu::ALL {
         let open = studio.menu == Some(menu);
-        let head = button(text(menu.label()).size(theme::UI).font(fonts::UI_MEDIUM))
-            .padding([2, 0])
-            .width(menu_width(menu))
-            .style(theme::choice(open))
-            .on_press(Message::MenuToggle(menu));
+        let head = button(menu_label(menu)).padding(MENU_PAD).style(theme::choice(open)).on_press(Message::MenuToggle(menu));
         let head: Element<'_, Message> = if studio.menu.is_some() { mouse_area(head).on_enter(Message::MenuHover(menu)).into() } else { head.into() };
-        bar = bar.push(container(head).center_x(Length::Shrink));
+        bar = bar.push(head);
     }
     container(bar).width(Length::Fill).style(theme::bar).into()
 }
 
 fn dropdown(studio: &Studio, menu: Menu) -> Element<'_, Message> {
-    let x = 6.0 + Menu::ALL.iter().take_while(|m| **m != menu).map(|m| menu_width(*m)).sum::<f32>();
+    let mut lead = Row::new().padding(Padding { top: MENU_HEIGHT, right: 0.0, bottom: 0.0, left: 6.0 }).align_y(Alignment::Start);
+    for earlier in Menu::ALL.iter().take_while(|m| **m != menu) {
+        let ghost = menu_label(*earlier).style(|_| text::Style { color: Some(Color::TRANSPARENT) });
+        lead = lead.push(container(ghost).padding(MENU_PAD));
+    }
     let mut list = Column::new().width(DROPDOWN_WIDTH);
     let mut any = false;
     for (index, command) in commands::commands(studio).into_iter().enumerate() {
@@ -138,7 +140,7 @@ fn dropdown(studio: &Studio, menu: Menu) -> Element<'_, Message> {
         list = list.push(button(content).padding(theme::ITEM).width(Length::Fill).style(theme::row(false)).on_press_maybe(enabled.then_some(Message::MenuPick(index))));
     }
     let panel = container(list.padding(4)).style(theme::popup);
-    let placed = container(panel).padding(Padding { top: MENU_HEIGHT, right: 0.0, bottom: 0.0, left: x }).width(Length::Fill).height(Length::Fill);
+    let placed = lead.push(panel).width(Length::Fill).height(Length::Fill);
     let backdrop = mouse_area(container(space::horizontal()).width(Length::Fill).height(Length::Fill)).on_press(Message::MenuClose);
     stack![backdrop, placed].into()
 }
@@ -1253,31 +1255,32 @@ fn watch(studio: &Studio) -> Element<'_, Message> {
     scrollable(list).height(Length::Fill).style(theme::scroll).into()
 }
 
-fn plot_controls(studio: &Studio) -> Element<'_, Message> {
+fn plot_header(studio: &Studio) -> Element<'_, Message> {
     let count = studio.plots.len();
-    let shown = studio.plot().is_some();
-    let reset = small("Reset view", (studio.plot_view != PlotView::default()).then_some(Message::PlotReset));
-    let copy = small("Copy SVG", shown.then_some(Message::CopyPlot));
-    let save = small("Save as SVG", shown.then_some(Message::SavePlot));
-    let mut controls = Row::new().spacing(4).align_y(Alignment::Center);
+    let mut bar = Row::new().spacing(6).align_y(Alignment::Center).padding(HEADER);
     if count >= 2 {
-        let position = text(format!("{} of {count}", studio.plot_at + 1)).size(theme::META).style(theme::muted);
-        let back = glyph_button(Glyph::Left, (studio.plot_at > 0).then_some(Message::PlotBack));
-        let forward = glyph_button(Glyph::Right, (studio.plot_at + 1 < count).then_some(Message::PlotForward));
-        controls = controls.push(position).push(back).push(forward);
+        bar = bar
+            .push(glyph_button(Glyph::Left, (studio.plot_at > 0).then_some(Message::PlotBack)))
+            .push(text(format!("{} of {count}", studio.plot_at + 1)).size(theme::META).style(theme::muted))
+            .push(glyph_button(Glyph::Right, (studio.plot_at + 1 < count).then_some(Message::PlotForward)));
     }
-    controls.push(reset).push(copy).push(save).into()
+    bar.push(space::horizontal())
+        .push(small("Reset view", (studio.plot_view != PlotView::default()).then_some(Message::PlotReset)))
+        .push(small("Copy SVG", Some(Message::CopyPlot)))
+        .push(small("Save as SVG", Some(Message::SavePlot)))
+        .into()
 }
 
 fn plots(studio: &Studio) -> Element<'_, Message> {
     let Some(plot) = studio.plot() else { return hint("No charts.") };
     let chart: Element<'_, Message> = canvas(Chart { plot, view: studio.plot_view }).width(Length::Fill).height(Length::Fill).into();
-    if studio.plots.len() < 2 {
-        return chart;
+    let mut body = column![plot_header(studio), line(), chart];
+    if studio.plots.len() >= 2 {
+        let thumbs = studio.plots.iter().enumerate().map(|(i, plot)| canvas(Thumb { plot, index: i, selected: i == studio.plot_at }).width(128).height(72).into());
+        let strip = scrollable(row(thumbs).spacing(6).padding([6, 12])).direction(Direction::Horizontal(Scrollbar::new())).style(theme::scroll);
+        body = body.push(line()).push(strip);
     }
-    let thumbs = studio.plots.iter().enumerate().map(|(i, plot)| canvas(Thumb { plot, index: i, selected: i == studio.plot_at }).width(96).height(56).into());
-    let strip = scrollable(row(thumbs).spacing(6).padding([6, 12])).direction(Direction::Horizontal(Scrollbar::new())).style(theme::scroll);
-    column![chart, line(), strip].into()
+    body.into()
 }
 
 fn hint<'a>(message: &'a str) -> Element<'a, Message> {
