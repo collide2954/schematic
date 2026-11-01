@@ -2,9 +2,10 @@
 layout: default
 title: Schematic
 class: landing
+play: true
 ---
 <section class="hero">
-  <div>
+  <div class="hero-text">
     <span class="eyebrow">Open source · Apache-2.0 · written in Rust</span>
     <h1>A small Lisp for working with data.</h1>
     <p class="lead">Schematic has Scheme's shape and Clojure's literals, with typed arrays, tables, dates, and charts built in. Write a few forms at the prompt, step through a script in Schematic Studio, and get answers you can read.</p>
@@ -13,18 +14,43 @@ class: landing
       <a class="button quiet" href="https://github.com/collide2954/schematic">Source on GitHub</a>
     </p>
   </div>
-<pre class="terminal"><code><span class="bar"><span>schematic</span><span>sales.scm</span></span><span class="p">&gt;</span> (<span class="k">define</span> sales (read-csv <span class="s">"sales.csv"</span>))
-<span class="r">sales</span>
-<span class="p">&gt;</span> (aggregate sales <span class="ss">:city</span> {<span class="ss">:total</span> [sum <span class="ss">:units</span>] <span class="ss">:orders</span> [count]})
+  <div id="play" class="play">
+    <div class="play-bar">
+      <div class="chips">
+        <button type="button" data-example="tables" class="on">Tables</button>
+        <button type="button" data-example="arrays">Arrays</button>
+        <button type="button" data-example="dates">Dates</button>
+        <button type="button" data-example="patterns">Patterns</button>
+        <button type="button" data-example="charts">Charts</button>
+      </div>
+      <div class="play-actions">
+        <span class="play-status"></span>
+        <button type="button" class="play-reset">Reset</button>
+        <button type="button" class="play-run">Run <kbd>Ctrl+↵</kbd></button>
+      </div>
+    </div>
+    <div class="play-body">
+<textarea class="play-code" spellcheck="false" aria-label="Schematic code">(define sales
+  (table {:city ["Oslo" "Rome" "Bern" "Oslo"]
+          :year [2020 2021 2021 2021]
+          :units [12 7 nil 30]}))
+
+(aggregate sales :city {:total [sum :units] :orders [count]})
+
+(order-by (where sales (> (:units sales) 10)) :units :desc)</textarea>
+<pre class="play-out" aria-live="polite">sales
 city  total  orders
 Oslo     42       2
 Rome      7       1
 Bern      0       1
-<span class="r">(3 rows, 3 columns)</span>
-<span class="p">&gt;</span> (bar-chart (aggregate sales <span class="ss">:city</span> {<span class="ss">:total</span> [sum <span class="ss">:units</span>]}) <span class="ss">:city</span> <span class="ss">:total</span>)
-Oslo <span class="bar-fill">████████████████████████████████████████</span> 42
-Rome <span class="bar-fill">███████</span> 7
-Bern  0</code></pre>
+(3 rows, 3 columns)
+city  year  units
+Oslo  2021     30
+Oslo  2020     12
+(2 rows, 3 columns)</pre>
+    </div>
+    <p class="play-note">This runs in your browser: the same interpreter, compiled to WebAssembly. Edit anything and press Run.</p>
+  </div>
 </section>
 
 <section class="features">
@@ -57,7 +83,7 @@ Bern  0</code></pre>
 <section class="section">
   <span class="eyebrow">A short tour</span>
   <h2>Five things you can do before lunch</h2>
-  <p class="lead">Every result below is what the interpreter prints. The left column is what you type.</p>
+  <p class="lead">Every result below is what the interpreter prints. Press Try it on any of them to load it into the playground above.</p>
 
   <div class="example">
     <h3>Arrays do the looping</h3>
@@ -137,14 +163,15 @@ Oslo  2020     12
     <p>A chart is a value. In the terminal it draws itself with text; in Studio it draws in the Plots pane; <code>save-plot</code> writes an SVG.</p>
 <pre class="highlight"><code>(histogram #[<span class="m">3</span> <span class="m">5</span> <span class="m">4</span> <span class="m">8</span> <span class="m">9</span> <span class="m">7</span> <span class="m">12</span> <span class="m">11</span> <span class="m">14</span> <span class="m">13</span>] {<span class="ss">:bins</span> <span class="m">4</span>})
 
-(save-plot (bar-chart sales <span class="ss">:city</span> <span class="ss">:units</span> {<span class="ss">:by</span> <span class="ss">:year</span>})
-           <span class="s">"units.svg"</span>)</code></pre>
+(bar-chart sales <span class="ss">:city</span> <span class="ss">:units</span> {<span class="ss">:by</span> <span class="ss">:year</span> <span class="ss">:title</span> <span class="s">"Units by city"</span>})</code></pre>
 <pre class="out"><code>3–5.75    ████████████████████████████████████████ 3
 5.75–8.5  ███████████████████████████ 2
 8.5–11.25 ███████████████████████████ 2
 11.25–14  ████████████████████████████████████████ 3
-
-<span class="r">nil</span></code></pre>
+Units by city
+Oslo 2020 ████████████████ 12
+Oslo 2021 ████████████████████████████████████████ 30
+Rome 2021 █████████ 7</code></pre>
   </div>
 </section>
 

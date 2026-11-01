@@ -8,6 +8,7 @@
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
+<script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
 <header class="top">
@@ -16,6 +17,7 @@
     <a href="guide.html">Guide</a>
     <a href="reference.html">Reference</a>
     <a href="https://github.com/collide2954/schematic">GitHub</a>
+    <button class="theme-toggle" type="button" aria-label="Switch between light and dark"><span class="sun">☀</span><span class="moon">☾</span></button>
   </nav>
 </header>
 <main class="{{ page.class | default: 'prose' }}">
@@ -27,5 +29,7 @@
   <span>Apache-2.0</span>
   <a href="https://github.com/collide2954/schematic">Source on GitHub</a>
 </footer>
+<script src="site.js" defer></script>
+{% if page.play %}<script src="play.js" defer></script>{% endif %}
 </body>
 </html>
