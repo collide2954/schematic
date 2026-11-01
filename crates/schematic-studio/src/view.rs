@@ -452,7 +452,8 @@ fn project(studio: &Studio) -> Element<'_, Message> {
     let heading = |label: &'static str| text(label).size(theme::FINE).font(fonts::UI_MEDIUM).style(theme::muted);
     let columns = row![
         heading("Package").width(Length::FillPortion(3)),
-        heading("Version").width(72),
+        heading("Version").width(56),
+        heading("License").width(Length::FillPortion(2)),
         heading("Status").width(Length::FillPortion(2)),
     ]
     .spacing(10)
@@ -464,9 +465,18 @@ fn project(studio: &Studio) -> Element<'_, Message> {
             schematic::project::Status::Changed | schematic::project::Status::Unlocked => theme::warn,
             schematic::project::Status::Missing => theme::alarm,
         };
+        let mut name = row![text(&dependency.name).font(fonts::MONO).size(theme::UI).style(theme::strong)].spacing(6).align_y(Alignment::Center);
+        if !dependency.direct {
+            name = name.push(text(format!("via {}", dependency.required_by.join(", "))).size(theme::FINE).style(theme::faint));
+        }
+        let (license, license_style): (&str, TextStyle) = match &dependency.license {
+            Some(license) => (license, theme::muted),
+            None => ("no license", theme::faint),
+        };
         let content = row![
-            text(&dependency.name).font(fonts::MONO).size(theme::UI).style(theme::strong).width(Length::FillPortion(3)),
-            text(dependency.version.clone().unwrap_or_default()).size(theme::META).style(theme::muted).width(72),
+            container(name).width(Length::FillPortion(3)),
+            text(dependency.version.clone().unwrap_or_default()).size(theme::META).style(theme::muted).width(56),
+            text(license).size(theme::META).style(license_style).width(Length::FillPortion(2)),
             text(dependency.status.label()).size(theme::META).style(style).width(Length::FillPortion(2)),
         ]
         .spacing(10)

@@ -6,8 +6,11 @@ use schematic::project::{Origin, Project, Source, Status};
 pub struct DependencyInfo {
     pub name: String,
     pub version: Option<String>,
+    pub license: Option<String>,
     pub source: String,
     pub status: Status,
+    pub direct: bool,
+    pub required_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,25 +24,27 @@ pub struct ProjectInfo {
 }
 
 fn info(project: &Project) -> ProjectInfo {
-    let statuses = project.status();
     let dependencies = project
-        .manifest
-        .dependencies
-        .iter()
-        .zip(statuses)
-        .map(|(dependency, (_, status))| {
-            let locked = project.lock.get(&dependency.name);
-            let version = locked.and_then(|l| l.version.clone()).or_else(|| match &dependency.source {
-                Source::Registry { version } => version.clone(),
-                _ => None,
-            });
-            let source = match (&dependency.source, locked.map(|l| &l.origin)) {
-                (Source::Path(path), _) => path.clone(),
+        .packages()
+        .into_iter()
+        .map(|package| {
+            let declared = project.manifest.dependencies.iter().find(|d| d.name == package.name).map(|d| &d.source);
+            let locked = project.lock.get(&package.name);
+            let source = match (declared, locked.map(|l| &l.origin)) {
+                (Some(Source::Path(path)), _) | (_, Some(Origin::Path(path))) => path.clone(),
                 (_, Some(Origin::Git { url, commit, .. })) => format!("{url} @ {}", &commit[..commit.len().min(10)]),
-                (Source::Git { url, .. }, _) => url.clone(),
-                (Source::Registry { .. }, _) => "registry".to_string(),
+                (Some(Source::Git { url, .. }), _) => url.clone(),
+                _ => "registry".to_string(),
             };
-            DependencyInfo { name: dependency.name.clone(), version, source, status }
+            DependencyInfo {
+                name: package.name,
+                version: package.version,
+                license: package.license,
+                source,
+                status: package.status,
+                direct: package.direct,
+                required_by: package.required_by,
+            }
         })
         .collect();
     ProjectInfo {
@@ -85,7 +90,8 @@ pub fn add(root: &Path, spec: &str) -> Result<(ProjectInfo, String), String> {
     let registry = project.registry();
     let locked = project.add(&name, source, &registry).map_err(|e| e.to_string())?;
     let version = locked.version.map(|v| format!(" {v}")).unwrap_or_default();
-    Ok((info(&project), format!("Added {name}{version}")))
+    let license = locked.license.map(|l| format!(" ({l})")).unwrap_or_default();
+    Ok((info(&project), format!("Added {name}{version}{license}")))
 }
 
 pub fn remove(root: &Path, name: &str) -> Result<(ProjectInfo, String), String> {
