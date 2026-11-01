@@ -132,6 +132,33 @@ pub fn tokens(line: &str, state: &mut LineState) -> Vec<(Range<usize>, Kind)> {
     out
 }
 
+pub fn segments(text: &str) -> Vec<(Range<usize>, Option<Kind>)> {
+    let mut out: Vec<(Range<usize>, Option<Kind>)> = Vec::new();
+    let mut push = |range: Range<usize>, kind: Option<Kind>| {
+        if range.is_empty() {
+            return;
+        }
+        match out.last_mut() {
+            Some((last, None)) if kind.is_none() && last.end == range.start => last.end = range.end,
+            _ => out.push((range, kind)),
+        }
+    };
+    let mut state = LineState::default();
+    let mut start = 0;
+    for line in text.split('\n') {
+        let mut at = start;
+        for (range, kind) in tokens(line, &mut state) {
+            push(at..start + range.start, None);
+            push(start + range.start..start + range.end, Some(kind));
+            at = start + range.end;
+        }
+        let end = (start + line.len() + 1).min(text.len());
+        push(at..end, None);
+        start = end;
+    }
+    out
+}
+
 fn string_end(text: &str) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -276,6 +303,25 @@ mod tests {
         assert_eq!(state.depth, 2);
         assert_eq!(tokens(")", &mut state), [(0..1, Kind::Bracket(1))]);
         assert_eq!(tokens("))", &mut state), [(0..1, Kind::Bracket(0)), (1..2, Kind::Bracket(0))]);
+    }
+
+    #[test]
+    fn segments_cover_whole_texts_across_lines() {
+        let text = "(+ 1\n \"s\")";
+        let segments: Vec<(&str, Option<Kind>)> = segments(text).into_iter().map(|(r, k)| (&text[r], k)).collect();
+        assert_eq!(
+            segments,
+            [
+                ("(", Some(Kind::Bracket(0))),
+                ("+ ", None),
+                ("1", Some(Kind::Number)),
+                ("\n ", None),
+                ("\"s\"", Some(Kind::Str)),
+                (")", Some(Kind::Bracket(0))),
+            ]
+        );
+        assert_eq!(super::segments(""), []);
+        assert_eq!(super::segments("ab\n"), [(0..3, None)]);
     }
 
     #[test]

@@ -1,10 +1,10 @@
 use iced::keyboard::{Key, key};
 use iced::widget::scrollable::{Direction, Scrollbar};
-use iced::widget::text::LineHeight;
+use iced::widget::text::{LineHeight, Span};
 use iced::widget::text_editor::{Binding, KeyPress, Status};
 use iced::widget::{
-    Column, button, canvas, column, container, pane_grid, row, rule, scrollable, sensor, space, table, text, text_editor,
-    tooltip,
+    Column, button, canvas, column, container, pane_grid, rich_text, row, rule, scrollable, sensor, space, span, table,
+    text, text_editor, tooltip,
 };
 use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
 
@@ -206,6 +206,20 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
     sensor(scroller).on_show(Message::EditorResized).on_resize(Message::EditorResized).into()
 }
 
+fn code<'a>(source: &'a str, theme: &Theme, size: f32) -> Element<'a, Message> {
+    let base = theme::tones(theme).text;
+    let spans: Vec<Span<'a, (), Font>> = highlight::segments(source)
+        .into_iter()
+        .map(|(range, kind)| {
+            let format = kind.map(|kind| highlight::format(&kind, theme));
+            span(&source[range])
+                .color(format.and_then(|f| f.color).unwrap_or(base))
+                .font(format.and_then(|f| f.font).unwrap_or(fonts::MONO))
+        })
+        .collect();
+    rich_text(spans).size(size).width(Length::Fill).into()
+}
+
 fn console(studio: &Studio) -> Element<'_, Message> {
     let lines = studio.console.iter().map(|line| {
         let (marker, marker_style, style, font): (&str, TextStyle, TextStyle, Font) = match line.kind {
@@ -215,12 +229,14 @@ fn console(studio: &Studio) -> Element<'_, Message> {
             LineKind::Error => ("!", theme::alarm, theme::alarm, fonts::MONO),
             LineKind::Note => ("", theme::faint, theme::muted, fonts::MONO_ITALIC),
         };
-        row![
-            container(text(marker).font(fonts::MONO_BOLD).size(13).style(marker_style)).width(14),
-            text(line.text.trim_end_matches('\n')).font(font).size(13).style(style).width(Length::Fill),
-        ]
-        .spacing(8)
-        .into()
+        let content = line.text.trim_end_matches('\n');
+        let body: Element<'_, Message> = match line.kind {
+            LineKind::Input | LineKind::Result => code(content, &studio.theme, 13.0),
+            _ => text(content).font(font).size(13).style(style).width(Length::Fill).into(),
+        };
+        row![container(text(marker).font(fonts::MONO_BOLD).size(13).style(marker_style)).width(14), body]
+            .spacing(8)
+            .into()
     });
     let history = scrollable(column(lines).spacing(3).padding([8, 12]).width(Length::Fill))
         .id(console_id())
@@ -234,6 +250,7 @@ fn console(studio: &Studio) -> Element<'_, Message> {
         .size(13)
         .padding(Padding { top: 7.0, right: 0.0, bottom: 7.0, left: 0.0 })
         .style(theme::editor)
+        .highlight_with::<highlight::Schematic>(studio.input_marks.clone(), highlight::format)
         .key_binding(console_binding(studio));
     let marker = container(text(prompt).font(fonts::MONO_BOLD).size(13).style(theme::accent))
         .width(14)

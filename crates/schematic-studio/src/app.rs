@@ -76,6 +76,7 @@ pub struct Studio {
     pub dirty: bool,
     pub console: Vec<Line>,
     pub input: text_editor::Content,
+    pub input_marks: Marks,
     pub pending: String,
     pub history: Vec<String>,
     pub recalled: Option<usize>,
@@ -159,6 +160,15 @@ pub fn scroll_target(top: f32, bottom: f32, offset: f32, height: f32) -> Option<
     }
 }
 
+fn marks_of(content: &text_editor::Content) -> Marks {
+    let text = content.text();
+    let cursor = content.cursor().position;
+    let offset = forms::offset_of(&text, cursor.line, cursor.column);
+    let pair = forms::matching_bracket(&text, offset)
+        .map(|(open, close)| [forms::line_offset(&text, open), forms::line_offset(&text, close)]);
+    Marks { pair }
+}
+
 fn scripts() -> rfd::AsyncFileDialog {
     rfd::AsyncFileDialog::new().add_filter("Schematic scripts", &["scm"]).add_filter("All files", &["*"])
 }
@@ -213,6 +223,7 @@ impl Studio {
             dirty: false,
             console: Vec::new(),
             input: text_editor::Content::new(),
+            input_marks: Marks::default(),
             pending: String::new(),
             history: Vec::new(),
             recalled: None,
@@ -297,6 +308,7 @@ impl Studio {
             }
             Message::Input(action) => {
                 self.input.perform(action);
+                self.input_marks = marks_of(&self.input);
                 Task::none()
             }
             Message::Open => Task::perform(pick_file(), Message::Opened),
@@ -470,11 +482,7 @@ impl Studio {
     }
 
     fn refresh_marks(&mut self) {
-        let text = self.editor.text();
-        let cursor = self.editor.cursor().position;
-        let offset = forms::offset_of(&text, cursor.line, cursor.column);
-        self.marks.pair = forms::matching_bracket(&text, offset)
-            .map(|(open, close)| [forms::line_offset(&text, open), forms::line_offset(&text, close)]);
+        self.marks = marks_of(&self.editor);
     }
 
     fn run_form(&mut self) -> Task<Message> {
