@@ -218,7 +218,7 @@ fn strip<'a>(tabs: Vec<TabItem>, controls: Option<Element<'a, Message>>) -> Elem
         }
         let closable = tab.close.is_some();
         let pick = button(container(label).height(Length::Fill).align_y(Alignment::Center))
-            .padding(Padding { top: 0.0, right: if closable { 4.0 } else { 12.0 }, bottom: 0.0, left: 12.0 })
+            .padding(Padding { top: 0.0, right: if closable { 4.0 } else { 10.0 }, bottom: 0.0, left: 10.0 })
             .height(Length::Fill)
             .style(theme::tab_button(tab.active))
             .on_press_maybe(tab.select);
@@ -368,21 +368,20 @@ fn folder_name(path: &Path) -> String {
 }
 
 fn side_tabs(studio: &Studio) -> Vec<TabItem> {
-    let tab = |label: &str, side: Side, detail: Option<String>| TabItem {
+    let tab = |label: &str, side: Side| TabItem {
         label: label.to_string(),
-        detail: if studio.side == side { detail } else { None },
+        detail: None,
         active: studio.side == side,
         select: Some(Message::ShowSide(side)),
         close: None,
     };
-    let changes = studio.git.status.as_ref().map(git::Status::changes).filter(|n| *n > 0).map(|n| n.to_string());
     vec![
-        tab("Environment", Side::Environment, None),
-        tab("Files", Side::Files, studio.root.as_deref().map(folder_name)),
-        tab("Project", Side::Project, studio.project.as_ref().map(|p| p.name.clone())),
-        tab("Outline", Side::Outline, None),
-        tab("Watch", Side::Watch, (!studio.watches.is_empty()).then(|| studio.watches.len().to_string())),
-        tab("Git", Side::Git, changes),
+        tab("Environment", Side::Environment),
+        tab("Files", Side::Files),
+        tab("Project", Side::Project),
+        tab("Outline", Side::Outline),
+        tab("Watch", Side::Watch),
+        tab("Git", Side::Git),
     ]
 }
 
