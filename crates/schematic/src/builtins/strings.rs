@@ -40,6 +40,31 @@ pub fn install(globals: &mut Globals) {
     native(globals, "string-repeat", Arity::Exact(2), string_repeat);
     native(globals, "string-pad-left", Arity::Between(2, 3), |args| pad("string-pad-left", args, true));
     native(globals, "string-pad-right", Arity::Between(2, 3), |args| pad("string-pad-right", args, false));
+    native(globals, "letter?", Arity::Exact(1), |args| class("letter?", &args[0], char::is_alphabetic));
+    native(globals, "digit?", Arity::Exact(1), |args| class("digit?", &args[0], |c| c.is_ascii_digit()));
+    native(globals, "whitespace?", Arity::Exact(1), |args| class("whitespace?", &args[0], char::is_whitespace));
+    native(globals, "upper-case?", Arity::Exact(1), |args| class("upper-case?", &args[0], char::is_uppercase));
+    native(globals, "lower-case?", Arity::Exact(1), |args| class("lower-case?", &args[0], char::is_lowercase));
+    native(globals, "char-code", Arity::Exact(1), |args| {
+        array::unary(&args[0], &|value| {
+            let text = as_str("char-code", value)?;
+            let mut chars = text.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Ok(Value::Int(c as i64)),
+                _ => Err(expects("char-code", "a single character", value)),
+            }
+        })
+    });
+    native(globals, "code-char", Arity::Exact(1), |args| {
+        array::unary(&args[0], &|value| match value {
+            Value::Int(code) => u32::try_from(*code)
+                .ok()
+                .and_then(char::from_u32)
+                .map(|c| Value::string(c.encode_utf8(&mut [0; 4])))
+                .ok_or_else(|| expects("code-char", "a character code", value)),
+            other => Err(expects("code-char", "a character code", other)),
+        })
+    });
     native(globals, "string->number", Arity::Exact(1), string_to_number);
     native(globals, "number->string", Arity::Exact(1), |args| {
         array::unary(&args[0], &|value| match value {
@@ -84,6 +109,10 @@ fn each(name: &str, subject: &Value, f: &dyn Fn(&str) -> Result<Value, Error>) -
     array::unary(subject, &|value| f(as_str(name, value)?))
 }
 
+fn class(name: &str, subject: &Value, test: fn(char) -> bool) -> Result<Value, Error> {
+    each(name, subject, &|s| Ok(Value::Bool(!s.is_empty() && s.chars().all(test))))
+}
+
 fn check(name: &str, args: &[Value], test: fn(&str, &str) -> bool) -> Result<Value, Error> {
     let part = as_str(name, &args[1])?;
     each(name, &args[0], &|s| Ok(Value::Bool(test(s, part))))
@@ -125,17 +154,12 @@ fn substring(args: &[Value]) -> Result<Value, Error> {
 fn string_split(args: &[Value]) -> Result<Value, Error> {
     let separator = match args.get(1) {
         None => None,
-        Some(separator) => {
-            let separator = as_str("string-split", separator)?;
-            if separator.is_empty() {
-                return Err(Error::new("value-error", "string-split separator must not be empty"));
-            }
-            Some(separator)
-        }
+        Some(separator) => Some(as_str("string-split", separator)?),
     };
     let split = |s: &str| {
         let parts: Vec<Value> = match separator {
             None => s.split_whitespace().map(Value::string).collect(),
+            Some("") => s.chars().map(|c| Value::string(c.encode_utf8(&mut [0; 4]))).collect(),
             Some(separator) => s.split(separator).map(Value::string).collect(),
         };
         Value::vector(parts)

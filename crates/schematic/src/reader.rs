@@ -255,8 +255,30 @@ impl<'a> Reader<'a> {
         Ok(map)
     }
 
+    fn read_raw_string(&mut self) -> Result<Value, ReadError> {
+        let unterminated = self.incomplete("unterminated raw string");
+        self.bump();
+        self.bump();
+        let mut out = String::new();
+        loop {
+            match self.bump() {
+                None => return Err(unterminated),
+                Some('"') => return Ok(Value::Str(Rc::new(out))),
+                Some('\\') => {
+                    out.push('\\');
+                    match self.bump() {
+                        Some(c) => out.push(c),
+                        None => return Err(unterminated),
+                    }
+                }
+                Some(c) => out.push(c),
+            }
+        }
+    }
+
     fn read_dispatch(&mut self, start: usize) -> Result<Value, ReadError> {
         match self.peek_second() {
+            Some('"') => self.read_raw_string(),
             Some('{') => {
                 self.bump();
                 self.read_set(start)

@@ -14,6 +14,7 @@ mod io;
 pub mod math;
 pub mod namespaces;
 mod plots;
+mod regex;
 mod stats;
 pub mod strings;
 mod tables;
@@ -24,6 +25,7 @@ pub fn install(globals: &mut Globals) {
     collections::install(globals);
     functional::install(globals);
     strings::install(globals);
+    regex::install(globals);
     dates::install(globals);
     io::install(globals);
     stats::install(globals);

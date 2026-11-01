@@ -204,6 +204,17 @@ fn build() -> HashMap<&'static str, Builtin> {
     add("string-pad-left", vec![text(), Type::Int, Type::Str], None, Type::Str, true);
     add("string-pad-right", vec![text(), Type::Int, Type::Str], None, Type::Str, true);
     add("string->number", vec![text()], None, union([Type::Int, Type::Float, Type::Nil]), true);
+    for name in ["letter?", "digit?", "whitespace?", "upper-case?", "lower-case?"] {
+        add(name, vec![text()], None, Type::Bool, true);
+    }
+    add("char-code", vec![text()], None, Type::Int, true);
+    add("code-char", vec![number()], None, Type::Str, true);
+    add("re-find", vec![text(), Type::Str], None, any(), false);
+    add("re-matches", vec![text(), Type::Str], None, any(), false);
+    add("re-seq", vec![text(), Type::Str], None, vector(any()), false);
+    add("re-contains?", vec![text(), Type::Str], None, Type::Bool, true);
+    add("re-replace", vec![text(), Type::Str, any()], None, Type::Str, true);
+    add("re-split", vec![text(), Type::Str], None, vector(any()), false);
     add("number->string", vec![number()], None, Type::Str, true);
     add("name", vec![any()], None, Type::Str, false);
     add("keyword", vec![any()], None, Type::Keyword, false);
