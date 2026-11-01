@@ -279,7 +279,8 @@ impl Plot {
         let multi = self.series.len() > 1;
         let top = 16.0 + if self.title.is_some() { 24.0 } else { 0.0 } + if multi || self.y_label.is_some() { 22.0 } else { 0.0 };
         let bottom = 34.0 + if self.x_label.is_some() { 18.0 } else { 0.0 };
-        let (x0, x1, y0, y1) = (58.0f32, width - 18.0, top, height - bottom);
+        let right = if self.dates { 40.0 } else { 24.0 };
+        let (x0, x1, y0, y1) = (58.0f32, width - right, top, height - bottom);
         let (plot_w, plot_h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
         if let Some(title) = &self.title {
             shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true });
@@ -303,7 +304,7 @@ impl Plot {
         if ymax <= ymin {
             ymax = ymin + 1.0;
         }
-        let (yticks, ystep) = ticks(ymin, ymax, 5);
+        let (yticks, ystep) = ticks(ymin, ymax, ((plot_h / 40.0) as usize).clamp(2, 6));
         let (ylo, yhi) = (yticks[0], *yticks.last().unwrap());
         let sy = |y: f64| y1 - ((y - ylo) / (yhi - ylo)) as f32 * plot_h;
         for tick in &yticks {
@@ -355,10 +356,12 @@ impl Plot {
                 if xmax <= xmin {
                     xmax = xmin + 1.0;
                 }
-                let (xticks, xstep) = ticks(xmin, xmax, 6);
-                let (xlo, xhi) = (xticks[0], *xticks.last().unwrap());
+                let count = ((plot_w / if self.dates { 90.0 } else { 60.0 }) as usize).clamp(2, 6);
+                let (xticks, xstep) = ticks(xmin, xmax, count);
+                let pad = (xmax - xmin) * 0.03;
+                let (xlo, xhi) = (xmin - pad, xmax + pad);
                 let sx = |x: f64| x0 + ((x - xlo) / (xhi - xlo)) as f32 * plot_w;
-                for tick in &xticks {
+                for tick in xticks.iter().filter(|t| **t >= xlo && **t <= xhi) {
                     shapes.push(Shape::Text { x: sx(*tick), y: y1 + 14.0, text: tick_label(*tick, xstep, self.dates), size: 11.0, anchor: Anchor::Middle, paint: Paint::Muted, bold: false });
                 }
                 for (si, series) in self.series.iter().enumerate() {
