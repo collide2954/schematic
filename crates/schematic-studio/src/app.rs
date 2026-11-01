@@ -17,7 +17,7 @@ use crate::commands::{self, Menu};
 use crate::completion::{self, Candidate};
 use crate::highlight::Marks;
 use crate::project::{self, ProjectInfo};
-use crate::worker::{self, Binding, Event, Grid, Request};
+use crate::worker::{self, Binding, Event, Grid, Request, Watched};
 use crate::{files, fonts, forms, theme, view};
 
 pub const PAGE: usize = 100;
@@ -98,6 +98,7 @@ pub enum Side {
     Files,
     Project,
     Outline,
+    Watch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +107,8 @@ pub enum NamingKind {
     Folder,
     Rename(PathBuf),
     Package,
+    Watch,
+    Project,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,9 +144,60 @@ fn follow_completion(action: &Action) -> Follow {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
     pub kind: LineKind,
     pub text: String,
+}
+
+pub fn transcript(lines: &[Line]) -> String {
+    let mut out = String::from("# Schematic console\n");
+    for line in lines {
+        let kind = match line.kind {
+            LineKind::Input => "scheme",
+            LineKind::Output => "output",
+            LineKind::Result => "result",
+            LineKind::Error => "error",
+            LineKind::Note => "note",
+        };
+        out.push_str(&format!("\n```{kind}\n{}\n```\n", line.text.trim_end_matches('\n')));
+    }
+    out
+}
+
+pub fn parse_transcript(text: &str) -> Vec<Line> {
+    let mut lines = Vec::new();
+    let mut open: Option<(LineKind, Vec<&str>)> = None;
+    for raw in text.lines() {
+        match &mut open {
+            Some((kind, body)) => {
+                if raw.trim_end() == "```" {
+                    lines.push(Line { kind: *kind, text: body.join("\n") });
+                    open = None;
+                } else {
+                    body.push(raw);
+                }
+            }
+            None => {
+                let kind = match raw.strip_prefix("```").map(str::trim) {
+                    Some("scheme") => Some(LineKind::Input),
+                    Some("output") => Some(LineKind::Output),
+                    Some("result") => Some(LineKind::Result),
+                    Some("error") => Some(LineKind::Error),
+                    Some("note") => Some(LineKind::Note),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    open = Some((kind, Vec::new()));
+                }
+            }
+        }
+    }
+    lines
+}
+
+pub fn duration(ms: u128) -> String {
+    if ms < 1000 { format!("{ms} ms") } else { format!("{:.1} s", ms as f64 / 1000.0) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,6 +367,13 @@ pub struct Studio {
     pub bindings: Vec<Binding>,
     pub namespace: String,
     pub grid: Option<Grid>,
+    pub grid_sort: Option<(String, bool)>,
+    pub grid_filter: String,
+    pub selected_rows: HashSet<usize>,
+    pub watches: Vec<String>,
+    pub watched: Vec<Watched>,
+    pub console_find: Option<String>,
+    pub last_run: Option<u128>,
     pub plots: Vec<Plot>,
     pub plot_at: usize,
     pub worker: Option<Sender<Request>>,
@@ -416,6 +477,29 @@ pub enum Message {
     About,
     Quit,
     QuitDecided(bool),
+    SortBy(String),
+    GridFilter(String),
+    SelectRow(usize),
+    CopyRows,
+    ExportCsv,
+    ExportCsvTo(Option<PathBuf>),
+    PlotColumn(String),
+    ConsoleFind(bool),
+    ConsoleQuery(String),
+    CopyText(String),
+    SaveTranscript,
+    SaveTranscriptTo(Option<PathBuf>),
+    LoadTranscript,
+    LoadTranscriptFrom(Option<PathBuf>),
+    RemoveWatch(usize),
+    Restart,
+    RestartDecided(bool),
+    NewProject,
+    NewProjectIn(Option<PathBuf>),
+}
+
+pub fn console_find_id() -> Id {
+    Id::new("console-find")
 }
 
 pub fn palette_id() -> Id {
@@ -588,7 +672,7 @@ pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifie
         _ if letter("w") => Shortcut::Close,
         _ if letter("p") && shift => Shortcut::Palette,
         _ if letter("g") => Shortcut::GoToLine,
-        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=6).contains(n))?),
+        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=7).contains(n))?),
         _ => return None,
     })
 }
@@ -636,6 +720,34 @@ async fn confirm_delete(name: String) -> bool {
     let result = rfd::AsyncMessageDialog::new()
         .set_title("Delete")
         .set_description(format!("Delete {name} for good?"))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await;
+    matches!(result, rfd::MessageDialogResult::Yes)
+}
+
+async fn save_csv(name: String) -> Option<PathBuf> {
+    let dialog = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).set_file_name(format!("{name}.csv")).set_title("Export the table as CSV");
+    let handle = dialog.save_file().await?;
+    Some(handle.path().to_path_buf())
+}
+
+async fn save_markdown() -> Option<PathBuf> {
+    let dialog = rfd::AsyncFileDialog::new().add_filter("Markdown", &["md"]).set_file_name("console.md").set_title("Save the console transcript");
+    let handle = dialog.save_file().await?;
+    Some(handle.path().to_path_buf())
+}
+
+async fn pick_markdown() -> Option<PathBuf> {
+    let dialog = rfd::AsyncFileDialog::new().add_filter("Markdown", &["md"]).set_title("Load a console transcript");
+    let handle = dialog.pick_file().await?;
+    Some(handle.path().to_path_buf())
+}
+
+async fn confirm_restart() -> bool {
+    let result = rfd::AsyncMessageDialog::new()
+        .set_title("Restart")
+        .set_description("Restart the interpreter and forget every definition?")
         .set_buttons(rfd::MessageButtons::YesNo)
         .show()
         .await;
@@ -731,6 +843,13 @@ impl Studio {
             bindings: Vec::new(),
             namespace: "user".to_string(),
             grid: None,
+            grid_sort: None,
+            grid_filter: String::new(),
+            selected_rows: HashSet::new(),
+            watches: Vec::new(),
+            watched: Vec::new(),
+            console_find: None,
+            last_run: None,
             plots: Vec::new(),
             plot_at: 0,
             worker: None,
@@ -814,6 +933,44 @@ impl Studio {
     fn confirm_naming(&mut self) -> Task<Message> {
         let Some(naming) = self.naming.take() else { return Task::none() };
         let name = naming.text.trim().to_string();
+        if naming.kind == NamingKind::Watch {
+            if name.is_empty() {
+                return Task::none();
+            }
+            if !self.watches.contains(&name) {
+                self.watches.push(name);
+                self.send_watches();
+            }
+            self.side = Side::Watch;
+            return Task::none();
+        }
+        if naming.kind == NamingKind::Project {
+            if !files::valid_name(&name) {
+                self.status = "Project names cannot be empty or contain slashes".to_string();
+                return Task::none();
+            }
+            let dir = naming.parent.join(&name);
+            if dir.exists() {
+                self.status = format!("{} already exists", dir.display());
+                return Task::none();
+            }
+            return match project::create(&dir) {
+                Ok(info) => {
+                    let main = info.main.clone();
+                    let message = format!("Created {}", info_name(&info));
+                    self.set_root(dir);
+                    self.project = Some(info);
+                    self.side = Side::Project;
+                    let check = self.load(main);
+                    self.status = message;
+                    Task::batch([check, self.scroll_to_doc()])
+                }
+                Err(e) => {
+                    self.status = format!("Cannot create the project: {e}");
+                    Task::none()
+                }
+            };
+        }
         if naming.kind == NamingKind::Package {
             if name.is_empty() {
                 self.status = "Name a package, as name, name@version, or name ../path".to_string();
@@ -829,12 +986,12 @@ impl Studio {
         }
         let target = naming.parent.join(&name);
         let verb = match &naming.kind {
-            NamingKind::File | NamingKind::Folder | NamingKind::Package => "create",
             NamingKind::Rename(_) => "rename",
+            _ => "create",
         };
         let result = match &naming.kind {
             _ if target.exists() && naming.kind != NamingKind::Rename(target.clone()) => Err(format!("{name} already exists")),
-            NamingKind::File | NamingKind::Package => std::fs::write(&target, "").map_err(|e| e.to_string()),
+            NamingKind::File | NamingKind::Package | NamingKind::Watch | NamingKind::Project => std::fs::write(&target, "").map_err(|e| e.to_string()),
             NamingKind::Folder => std::fs::create_dir(&target).map_err(|e| e.to_string()),
             NamingKind::Rename(old) => match std::fs::rename(old, &target) {
                 Ok(()) => {
@@ -1122,6 +1279,130 @@ impl Studio {
                 }
                 Task::none()
             }
+            Message::SortBy(column) => {
+                self.grid_sort = match &self.grid_sort {
+                    Some((current, false)) if *current == column => Some((column, true)),
+                    Some((current, true)) if *current == column => None,
+                    _ => Some((column, false)),
+                };
+                self.reinspect()
+            }
+            Message::GridFilter(text) => {
+                self.grid_filter = text;
+                self.reinspect()
+            }
+            Message::SelectRow(row) => {
+                if !self.selected_rows.remove(&row) {
+                    self.selected_rows.insert(row);
+                }
+                Task::none()
+            }
+            Message::CopyRows => {
+                let Some(grid) = &self.grid else { return Task::none() };
+                let mut rows: Vec<usize> = if self.selected_rows.is_empty() {
+                    (0..grid.rows.len()).collect()
+                } else {
+                    self.selected_rows.iter().copied().filter(|r| *r < grid.rows.len()).collect()
+                };
+                rows.sort_unstable();
+                let mut text = grid.columns.join("\t");
+                for row in &rows {
+                    text.push('\n');
+                    text.push_str(&grid.rows[*row].join("\t"));
+                }
+                self.status = format!("Copied {}", if rows.len() == 1 { "1 row".to_string() } else { format!("{} rows", rows.len()) });
+                iced::clipboard::write(text)
+            }
+            Message::ExportCsv => match self.grid.as_ref().map(|g| g.name.clone()) {
+                Some(name) if self.table_shown() => Task::perform(save_csv(name), Message::ExportCsvTo),
+                _ => Task::none(),
+            },
+            Message::ExportCsvTo(path) => {
+                let (Some(path), Some(grid)) = (path, &self.grid) else { return Task::none() };
+                let literal = schematic::Value::string(&path.to_string_lossy()).to_string();
+                let source = format!("(write-csv {} {literal})", grid.name);
+                self.evaluate(source, format!("Saved {}", path.display()))
+            }
+            Message::PlotColumn(column) => {
+                let Some(grid) = &self.grid else { return Task::none() };
+                let source = if self.table_shown() {
+                    format!("(histogram (:{column} {}) {{:title {:?}}})", grid.name, format!("{column} of {}", grid.name))
+                } else {
+                    format!("(histogram {} {{:title {:?}}})", grid.name, grid.name)
+                };
+                self.evaluate(source, String::new())
+            }
+            Message::ConsoleFind(open) => {
+                if open {
+                    self.console_find.get_or_insert_with(String::new);
+                    return operation::focus(console_find_id());
+                }
+                self.console_find = None;
+                Task::none()
+            }
+            Message::ConsoleQuery(query) => {
+                self.console_find = Some(query);
+                Task::none()
+            }
+            Message::CopyText(text) => {
+                self.status = "Copied".to_string();
+                iced::clipboard::write(text)
+            }
+            Message::SaveTranscript => Task::perform(save_markdown(), Message::SaveTranscriptTo),
+            Message::SaveTranscriptTo(path) => {
+                if let Some(path) = path {
+                    self.status = match std::fs::write(&path, transcript(&self.console)) {
+                        Ok(()) => format!("Saved {}", path.display()),
+                        Err(e) => format!("Cannot save {}: {e}", path.display()),
+                    };
+                }
+                Task::none()
+            }
+            Message::LoadTranscript => Task::perform(pick_markdown(), Message::LoadTranscriptFrom),
+            Message::LoadTranscriptFrom(path) => {
+                let Some(path) = path else { return Task::none() };
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => {
+                        let lines = parse_transcript(&text);
+                        for line in lines.iter().filter(|l| l.kind == LineKind::Input) {
+                            self.remember(&line.text);
+                        }
+                        self.console.extend(lines);
+                        self.status = format!("Loaded {}", path.display());
+                    }
+                    Err(e) => self.status = format!("Cannot load {}: {e}", path.display()),
+                }
+                operation::snap_to(console_id(), RelativeOffset::END)
+            }
+            Message::RemoveWatch(index) => {
+                if index < self.watches.len() {
+                    let removed = self.watches.remove(index);
+                    self.watched.retain(|w| w.source != removed);
+                }
+                Task::none()
+            }
+            Message::Restart => match self.worker {
+                Some(_) => Task::perform(confirm_restart(), Message::RestartDecided),
+                None => Task::none(),
+            },
+            Message::RestartDecided(yes) => {
+                if yes && let Some(worker) = &self.worker {
+                    let _ = worker.send(Request::Restart);
+                    self.grid = None;
+                    self.bindings.clear();
+                    self.watched.clear();
+                    self.selected_rows.clear();
+                    self.status = "Restarting".to_string();
+                }
+                Task::none()
+            }
+            Message::NewProject => Task::perform(pick_folder(), Message::NewProjectIn),
+            Message::NewProjectIn(parent) => {
+                let Some(parent) = parent else { return Task::none() };
+                self.naming = Some(Naming { kind: NamingKind::Project, parent, text: String::new() });
+                self.side = Side::Project;
+                operation::focus(naming_id())
+            }
             Message::ToggleComment => {
                 let (text, cursor) = (self.doc().content.text(), self.doc().content.cursor());
                 let other = cursor.selection.unwrap_or(cursor.position);
@@ -1285,6 +1566,11 @@ impl Studio {
                 let (parent, text) = match &kind {
                     NamingKind::Rename(path) => (path.parent().map(Path::to_path_buf), file_name_of(path)),
                     NamingKind::Package => (self.project.as_ref().map(|p| p.root.clone()), String::new()),
+                    NamingKind::Watch => {
+                        self.side = Side::Watch;
+                        (Some(PathBuf::new()), String::new())
+                    }
+                    NamingKind::Project => return self.update(Message::NewProject),
                     _ => (self.naming_parent(), String::new()),
                 };
                 if let Some(parent) = parent {
@@ -1448,6 +1734,13 @@ impl Studio {
                 Task::none()
             }
             Event::Grid(grid) => {
+                let same = self
+                    .grid
+                    .as_ref()
+                    .is_some_and(|g| g.name == grid.name && g.offset == grid.offset && g.sort == grid.sort && g.filter == grid.filter);
+                if !same {
+                    self.selected_rows.clear();
+                }
                 self.grid = Some(grid);
                 Task::none()
             }
@@ -1456,10 +1749,30 @@ impl Studio {
                 self.plot_at = self.plots.len() - 1;
                 Task::none()
             }
-            Event::Finished => {
+            Event::Watches(watched) => {
+                self.watched = watched;
+                Task::none()
+            }
+            Event::Evaluated { label, error } => {
+                match error {
+                    Some(e) => self.status = format!("Error: {e}"),
+                    None if !label.is_empty() => self.status = label,
+                    None => {}
+                }
+                Task::none()
+            }
+            Event::Restarted(flag) => {
+                self.interrupt = Some(flag);
+                self.namespace = "user".to_string();
+                self.status = "Ready".to_string();
+                self.note("Interpreter restarted; every definition is gone.");
+                operation::snap_to(console_id(), RelativeOffset::END)
+            }
+            Event::Finished(elapsed) => {
                 self.running = false;
+                self.last_run = Some(elapsed);
                 if !self.status.starts_with("Error") {
-                    self.status = "Ready".to_string();
+                    self.status = format!("Ready · {}", duration(elapsed));
                 }
                 Task::none()
             }
@@ -1486,8 +1799,36 @@ impl Studio {
         self.running = true;
         self.status = "Running".to_string();
         let load_path = self.load_path();
-        let _ = worker.send(Request::Run { source, show_results, load_path });
+        let watches = self.watches.clone();
+        let _ = worker.send(Request::Run { source, show_results, load_path, watches });
         Task::none()
+    }
+
+    fn evaluate(&mut self, source: String, label: String) -> Task<Message> {
+        match &self.worker {
+            Some(worker) => {
+                let _ = worker.send(Request::Evaluate { source, label });
+            }
+            None => self.status = "The interpreter is still starting".to_string(),
+        }
+        Task::none()
+    }
+
+    fn reinspect(&mut self) -> Task<Message> {
+        match self.grid.as_ref().map(|g| g.name.clone()) {
+            Some(name) => self.inspect(name, 0),
+            None => Task::none(),
+        }
+    }
+
+    pub fn table_shown(&self) -> bool {
+        self.grid.as_ref().is_some_and(|g| self.bindings.iter().any(|b| b.name == g.name && b.kind == "table"))
+    }
+
+    fn send_watches(&self) {
+        if let Some(worker) = &self.worker {
+            let _ = worker.send(Request::Watch { watches: self.watches.clone() });
+        }
     }
 
     fn echo(&mut self, source: &str) -> Task<Message> {
@@ -1686,7 +2027,8 @@ impl Studio {
                     3 => Side::Environment,
                     4 => Side::Files,
                     5 => Side::Project,
-                    _ => Side::Outline,
+                    6 => Side::Outline,
+                    _ => Side::Watch,
                 };
                 Task::none()
             }
@@ -1880,7 +2222,9 @@ impl Studio {
 
     fn inspect(&mut self, name: String, offset: usize) -> Task<Message> {
         if let Some(worker) = &self.worker {
-            let _ = worker.send(Request::Inspect { name, offset, limit: PAGE });
+            let sort = self.grid_sort.clone();
+            let filter = self.grid_filter.clone();
+            let _ = worker.send(Request::Inspect { name, offset, limit: PAGE, sort, filter });
         }
         Task::none()
     }
@@ -1955,6 +2299,7 @@ mod tests {
             rows: vec![vec!["0".into(), "1".into()]],
             offset: 0,
             total: 2,
+            ..Grid::default()
         });
         studio
     }
@@ -2134,6 +2479,67 @@ mod tests {
         assert_eq!(studio.panes.iter().count(), 1, "the last pane stays");
         let _ = studio.update(Message::ShowHelp(Page::Guide));
         assert_eq!((studio.tab, studio.help.as_ref().map(|h| h.page)), (Tab::Help, Some(Page::Guide)));
+    }
+
+    #[test]
+    fn grids_sort_and_copy_the_console_filters_and_transcripts_round_trip() {
+        let mut studio = studio_with_content();
+        let _ = studio.update(Message::SortBy("a".into()));
+        assert_eq!(studio.grid_sort, Some(("a".to_string(), false)));
+        let _ = studio.update(Message::SortBy("a".into()));
+        assert_eq!(studio.grid_sort, Some(("a".to_string(), true)));
+        let _ = studio.update(Message::SortBy("a".into()));
+        assert_eq!(studio.grid_sort, None);
+        let _ = studio.update(Message::GridFilter("1".into()));
+        let _ = studio.update(Message::SelectRow(0));
+        assert!(studio.selected_rows.contains(&0));
+        let _ = studio.update(Message::CopyRows);
+        assert_eq!(studio.status, "Copied 1 row");
+        assert!(studio.table_shown());
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::ConsoleFind(true));
+        let _ = studio.update(Message::ConsoleQuery("boom".into()));
+        let _ = view::view(&studio);
+        let markdown = transcript(&studio.console);
+        assert!(markdown.contains("```scheme\n(+ 1 2)\n```") && markdown.contains("```error\nboom\n```"), "{markdown}");
+        let lines = parse_transcript(&markdown);
+        assert_eq!(lines, studio.console);
+        let _ = studio.update(Message::StartNaming(NamingKind::Watch));
+        let _ = studio.update(Message::Naming("(count t)".into()));
+        let _ = studio.update(Message::ConfirmNaming);
+        assert_eq!((studio.watches.as_slice(), studio.side), (["(count t)".to_string()].as_slice(), Side::Watch));
+        let _ = studio.update(Message::Worker(Event::Watches(vec![Watched { source: "(count t)".into(), value: Ok("2".into()) }])));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::RemoveWatch(0));
+        assert!(studio.watches.is_empty() && studio.watched.is_empty());
+        let _ = studio.update(Message::Worker(Event::Finished(1234)));
+        assert_eq!(studio.status, "Ready · 1.2 s");
+        let _ = studio.update(Message::Worker(Event::Evaluated { label: "Saved x.csv".into(), error: None }));
+        assert_eq!(studio.status, "Saved x.csv");
+        let _ = studio.update(Message::RestartDecided(true));
+        assert!(studio.grid.is_some(), "without a worker nothing is reset");
+    }
+
+    #[test]
+    fn a_new_project_is_created_from_a_name_in_a_chosen_folder() {
+        let dir = scratch("newproject");
+        let mut studio = Studio::new();
+        let _ = studio.update(Message::NewProjectIn(Some(dir.clone())));
+        assert_eq!((studio.naming.as_ref().map(|n| n.kind.clone()), studio.side), (Some(NamingKind::Project), Side::Project));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::Naming("bad/name".into()));
+        let _ = studio.update(Message::ConfirmNaming);
+        assert!(studio.status.starts_with("Project names"));
+        let _ = studio.update(Message::NewProjectIn(Some(dir.clone())));
+        let _ = studio.update(Message::Naming("report".into()));
+        let _ = studio.update(Message::ConfirmNaming);
+        let created = dir.join("report");
+        assert!(created.join("project.scm").is_file() && created.join("src").join("report.scm").is_file());
+        assert_eq!(studio.root.as_deref(), Some(created.as_path()));
+        assert_eq!(studio.project.as_ref().map(|p| p.name.as_str()), Some("report"));
+        assert_eq!(studio.doc().path.as_deref(), Some(created.join("src").join("report.scm").as_path()));
+        assert!(studio.status.starts_with("Created report"), "{}", studio.status);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
