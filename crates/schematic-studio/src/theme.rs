@@ -91,6 +91,56 @@ pub const DARK: Tones = Tones {
     tooltip_text: rgb(0x171B21),
 };
 
+pub const WARM: Tones = Tones {
+    canvas: rgb(0xE6DFD3),
+    surface: rgb(0xFBF7F0),
+    raised: rgb(0xF2ECE1),
+    hover: rgb(0xE9E1D3),
+    line: rgb(0xDED4C4),
+    text: rgb(0x2B2620),
+    muted: rgb(0x7A6F62),
+    faint: rgb(0xA99E8F),
+    accent: rgb(0x9A4F23),
+    accent_text: rgb(0xFFFFFF),
+    danger: rgb(0xB8402F),
+    warning: rgb(0xA66A12),
+    success: rgb(0x3F7D4E),
+    comment: rgb(0x9A8E7F),
+    string: rgb(0x3B7A4A),
+    number: rgb(0xB25A1C),
+    keyword: rgb(0x7A3DBD),
+    special: rgb(0x2C5FB5),
+    constant: rgb(0xB03070),
+    brackets: [rgb(0x6B5E50), rgb(0x3E62B2), rgb(0xA3701F)],
+    tooltip: rgb(0x2B2620),
+    tooltip_text: rgb(0xFBF7F0),
+};
+
+pub const CONTRAST: Tones = Tones {
+    canvas: rgb(0x000000),
+    surface: rgb(0x0A0A0A),
+    raised: rgb(0x171717),
+    hover: rgb(0x262626),
+    line: rgb(0x3C3C3C),
+    text: rgb(0xFFFFFF),
+    muted: rgb(0xCFCFCF),
+    faint: rgb(0x8F8F8F),
+    accent: rgb(0x5EF1F8),
+    accent_text: rgb(0x000000),
+    danger: rgb(0xFF7B6E),
+    warning: rgb(0xFFC84A),
+    success: rgb(0x7CF2A5),
+    comment: rgb(0xA6A6A6),
+    string: rgb(0xA9F0B5),
+    number: rgb(0xFFBE7D),
+    keyword: rgb(0xE0C2FF),
+    special: rgb(0xA6CCFF),
+    constant: rgb(0xFFA6CC),
+    brackets: [rgb(0xE6E6E6), rgb(0xA6CCFF), rgb(0xFFD27A)],
+    tooltip: rgb(0xFFFFFF),
+    tooltip_text: rgb(0x000000),
+};
+
 fn palette(t: &Tones) -> Palette {
     Palette { background: t.surface, text: t.text, primary: t.accent, success: t.success, warning: t.warning, danger: t.danger }
 }
@@ -103,12 +153,43 @@ pub fn dark() -> Theme {
     Theme::custom("Schematic Dark", palette(&DARK))
 }
 
+pub fn warm() -> Theme {
+    Theme::custom("Schematic Warm", palette(&WARM))
+}
+
+pub fn contrast() -> Theme {
+    Theme::custom("Schematic Contrast", palette(&CONTRAST))
+}
+
+pub fn named(name: &str) -> Theme {
+    match name {
+        "dark" => dark(),
+        "warm" => warm(),
+        "contrast" => contrast(),
+        _ => light(),
+    }
+}
+
+pub fn name_of(theme: &Theme) -> &'static str {
+    match theme.to_string().as_str() {
+        "Schematic Dark" => "dark",
+        "Schematic Warm" => "warm",
+        "Schematic Contrast" => "contrast",
+        _ => "light",
+    }
+}
+
 pub fn is_dark(theme: &Theme) -> bool {
     theme.extended_palette().is_dark
 }
 
 pub fn tones(theme: &Theme) -> &'static Tones {
-    if is_dark(theme) { &DARK } else { &LIGHT }
+    match name_of(theme) {
+        "dark" => &DARK,
+        "warm" => &WARM,
+        "contrast" => &CONTRAST,
+        _ => &LIGHT,
+    }
 }
 
 pub fn toggled(theme: &Theme) -> Theme {
@@ -358,5 +439,18 @@ mod tests {
         assert_eq!(toggled(&light()), dark());
         assert_eq!(tones(&dark()).canvas, DARK.canvas);
         assert_eq!(rgb(0x0F7B86).g, 123.0 / 255.0);
+    }
+
+    #[test]
+    fn themes_are_named_and_keep_their_tones() {
+        for name in ["light", "dark", "warm", "contrast"] {
+            assert_eq!(name_of(&named(name)), name);
+        }
+        assert_eq!(name_of(&named("nope")), "light");
+        assert_eq!(tones(&warm()).accent, WARM.accent);
+        assert_eq!(tones(&contrast()).text, CONTRAST.text);
+        assert!(is_dark(&contrast()) && !is_dark(&warm()));
+        assert_eq!(toggled(&warm()), dark());
+        assert_eq!(toggled(&contrast()), light());
     }
 }
