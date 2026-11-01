@@ -292,6 +292,35 @@ loading it leaves the current namespace unchanged. Defining a name that
 already exists in `schematic.core` shadows it from then on in that
 namespace; code compiled earlier keeps the builtin.
 
+## Projects
+
+A project is a folder with a `project.scm` manifest, a `src` folder of
+namespaces, and, once it has dependencies, a `packages` folder holding their
+sources and a `project.lock` pinning them. Running a file inside a project,
+or `schematic run`, puts `src` and every package's source folder on the load
+path, so `(require 'text-tools)` finds a dependency called `text-tools`.
+
+| Command | Effect |
+|---|---|
+| `schematic new <name>` | create `<name>/project.scm` and `<name>/src/<name>.scm` |
+| `schematic add <name>[@version]` | add a package from the registry, the newest version unless one is given: its source is copied into `packages/<name>` and the commit and a hash of the files are pinned in `project.lock` |
+| `schematic add <name> --path <dir>` | depend on a local folder, used in place |
+| `schematic add <name> --git <url> --tag <t>`, `schematic add <name> --git <url> --commit <c> --subdir <d>` | depend on a git repository, or on one folder of it |
+| `schematic remove <name>` | drop a dependency and its vendored copy |
+| `schematic restore` | fetch whatever `packages` is missing or has changed, at the pinned commits, and pin anything new |
+| `schematic restore --locked` | the same, but refuse to resolve anything `project.lock` does not pin, and fail when a fetched package does not hash as the lock says |
+| `schematic run [file]` | run the project's main namespace, `src/<name>.scm` unless `:main` names another, or a given file |
+
+`project.scm` is a map with `:name`, `:version`, an optional `:source`
+(`"src"` by default), `:main`, and `:registry`, and a `:dependencies` map
+from names to a version string, `{:path "../lib"}`, or `{:git url :tag t
+:subdir d}`. `project.lock` records, per package, the version, the git
+source and commit, and a `sha256:` hash of its files; packages are vendored,
+so a checked-in project builds offline. The registry is the repository
+`collide2954/schematic-registry`, read over HTTPS one file per package;
+`:registry` in the manifest or the `SCHEMATIC_REGISTRY` variable can name
+another one, including a local folder.
+
 ## Help
 
 | Function | Description |

@@ -65,10 +65,12 @@ Early development. Working today:
   histogram, box plot, and pie as values that print as text, save as SVG,
   and show in Studio's Plots pane, with facets, log scales, formatted
   axes, reference lines, and value labels
+- Projects: a `project.scm` manifest, packages vendored into `packages/`
+  and pinned by commit and hash in `project.lock`, a registry read over
+  HTTPS, and `schematic new`, `add`, `remove`, `restore --locked`, and `run`
 - A REPL and file runner, plus `doc` and `apropos` for help at the prompt
 
-Next up: projects with a manifest, a lock file, and a package registry;
-then a gradual type checker.
+Next up: a gradual type checker.
 
 ## Running
 
@@ -93,8 +95,10 @@ everything you have defined into data, values, and functions, sharing its
 pane with a Files tab that browses a folder and creates, renames, and deletes
 files; a data grid with numbers right-aligned; and a plots pane that walks
 through the session's charts, shows values on hover, and saves them as SVG.
-A Help tab renders the guide and the reference with search, and F1 looks up
-the name under the cursor. It has its own light and dark themes and bundles
+A Help tab renders the guide and the reference with search, F1 looks up
+the name under the cursor, and a Project tab creates a project in the open
+folder, adds and removes packages, and restores them. It has its own light
+and dark themes and bundles
 the Inter and JetBrains Mono fonts, so it looks the same everywhere. The
 interpreter runs on its own thread, so the window stays responsive and a
 runaway loop can be stopped.
@@ -113,6 +117,15 @@ dismisses. In the console, Enter runs a complete form, Shift+Enter adds a
 line, and the up and down arrows walk through earlier inputs. Clicking a name
 in the environment pane opens it in the data viewer, and clicking a file in
 the Files tab opens it in the editor.
+
+## Reproducible builds
+
+`rust-toolchain.toml` pins the Rust version and `Cargo.lock` pins every
+crate, so `cargo build --release --locked` builds the same binary on any
+machine of the same platform. To keep source paths out of the binary as
+well, build with `RUSTFLAGS=--remap-path-prefix=$PWD=/schematic`. Projects
+written in Schematic get the same treatment from `project.lock` and
+`schematic restore --locked`.
 
 ## Learning more
 

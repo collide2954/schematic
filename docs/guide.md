@@ -560,6 +560,27 @@ found on the load path, which starts with the folder of the file being run
 and the working directory. `require`, `refer`, and `alias` also work on
 their own, with quoted arguments.
 
+## Projects and packages
+
+When a script grows into several files, make it a project:
+
+```
+schematic new report
+cd report
+schematic add text-tools
+schematic run
+```
+
+`new` creates `report/project.scm` and `report/src/report.scm`. `add` looks
+`text-tools` up in the package registry, copies its source into
+`report/packages/text-tools`, and writes `project.lock` with the exact
+commit and a hash of the files, so whoever checks the project out gets the
+same code, and `schematic restore --locked` proves it. `run` loads
+`src/report.scm` with `src` and every package on the load path, so the main
+file can say `(ns report (:require [text-tools :as t]))`. Studio's Project
+tab does the same from the window: it creates a project in the open folder,
+adds and removes packages, and restores them.
+
 ## Where to go next
 
 The [reference](reference.md) lists every special form and built-in
