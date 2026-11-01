@@ -1276,7 +1276,7 @@ fn plots(studio: &Studio) -> Element<'_, Message> {
     let chart: Element<'_, Message> = canvas(Chart { plot, view: studio.plot_view }).width(Length::Fill).height(Length::Fill).into();
     let mut body = column![plot_header(studio), line(), chart];
     if studio.plots.len() >= 2 {
-        let thumbs = studio.plots.iter().enumerate().map(|(i, plot)| canvas(Thumb { plot, index: i, selected: i == studio.plot_at }).width(128).height(72).into());
+        let thumbs = studio.plots.iter().enumerate().map(|(i, plot)| canvas(Thumb { plot, index: i, selected: i == studio.plot_at }).width(140).height(80).into());
         let strip = scrollable(row(thumbs).spacing(6).padding([6, 12])).direction(Direction::Horizontal(Scrollbar::new())).style(theme::scroll);
         body = body.push(line()).push(strip);
     }

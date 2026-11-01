@@ -262,10 +262,9 @@ impl Program<Message> for Thumb<'_> {
         let mut frame = Frame::new(renderer, bounds.size());
         let inset = 4.0;
         let inner = Size::new(bounds.width - 2.0 * inset, bounds.height - 2.0 * inset);
-        let scene = self.plot.scene(inner.width * 2.0, inner.height * 2.0);
+        let scene = self.plot.scene(inner.width, inner.height);
         frame.with_save(|frame| {
             frame.translate(Vector::new(inset, inset));
-            frame.scale(0.5_f32);
             paint_scene(frame, &scene, theme, false);
         });
         let border = Path::rounded_rectangle(Point::new(0.5, 0.5), Size::new(bounds.width - 1.0, bounds.height - 1.0), 4.0.into());
