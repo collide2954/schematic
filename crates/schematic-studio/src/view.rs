@@ -6,10 +6,15 @@ use iced::widget::{
     Column, Row, button, canvas, column, container, lazy, pane_grid, rich_text, row, rule, scrollable, sensor, space, span,
     table, text, text_editor, text_input, tooltip,
 };
+use std::path::Path;
+
 use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
 
-use crate::app::{EDITOR_PAD, LINE_HEIGHT, LineKind, Message, PAGE, Page, PaneKind, Source, Studio, Tab, console_id, editor_id};
+use crate::app::{
+    EDITOR_PAD, LINE_HEIGHT, LineKind, Message, NamingKind, PAGE, Page, PaneKind, Side, Source, Studio, Tab, console_id, editor_id,
+    naming_id,
+};
 use crate::chart::Chart;
 use crate::icons::{Glyph, Ink, icon};
 use crate::worker::Grid;
@@ -34,7 +39,10 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
         let (tabs, controls, body): (Vec<TabItem>, Option<Element<'_, Message>>, Element<'_, Message>) = match kind {
             PaneKind::Editor => (editor_tabs(studio), Some(editor_controls(studio)), workspace(studio)),
             PaneKind::Console => (single("Console", None), Some(small("Clear", Some(Message::ClearConsole))), console(studio)),
-            PaneKind::Environment => (single("Environment", environment_label(studio)), None, environment(studio)),
+            PaneKind::Environment => match studio.side {
+                Side::Environment => (side_tabs(studio), None, environment(studio)),
+                Side::Files => (side_tabs(studio), Some(file_controls(studio)), files(studio)),
+            },
             PaneKind::Viewer => {
                 let grid = studio.grid.as_ref();
                 (single("Data", grid.map(|g| g.name.clone())), grid.map(pager), viewer(studio))
@@ -181,6 +189,106 @@ fn environment_label(studio: &Studio) -> Option<String> {
         1 => Some("1 binding".to_string()),
         n => Some(format!("{n} bindings")),
     }
+}
+
+fn folder_name(path: &Path) -> String {
+    path.file_name().and_then(|n| n.to_str()).map_or_else(|| path.display().to_string(), str::to_string)
+}
+
+fn side_tabs(studio: &Studio) -> Vec<TabItem> {
+    let files = studio.side == Side::Files;
+    vec![
+        TabItem {
+            label: "Environment".to_string(),
+            detail: if files { None } else { environment_label(studio) },
+            active: !files,
+            select: Some(Message::ShowSide(Side::Environment)),
+            close: None,
+        },
+        TabItem {
+            label: "Files".to_string(),
+            detail: if files { studio.root.as_deref().map(folder_name) } else { None },
+            active: files,
+            select: Some(Message::ShowSide(Side::Files)),
+            close: None,
+        },
+    ]
+}
+
+fn file_controls(studio: &Studio) -> Element<'_, Message> {
+    let picked = studio.selected.clone();
+    let has_root = studio.root.is_some();
+    row![
+        small("+ File", has_root.then_some(Message::StartNaming(NamingKind::File))),
+        small("+ Folder", has_root.then_some(Message::StartNaming(NamingKind::Folder))),
+        small("Rename", picked.clone().map(|path| Message::StartNaming(NamingKind::Rename(path)))),
+        small("Delete", picked.map(|_| Message::DeleteEntry)),
+    ]
+    .spacing(2)
+    .into()
+}
+
+fn files(studio: &Studio) -> Element<'_, Message> {
+    let Some(root) = &studio.root else {
+        let open = container(small("Open a folder…", Some(Message::OpenFolder))).padding([0, 8]);
+        return column![hint("Browse, open, and manage the files of a folder here."), open].into();
+    };
+    let header = row![
+        text(folder_name(root)).size(12.5).font(fonts::UI_MEDIUM),
+        space::horizontal(),
+        small("Refresh", Some(Message::RefreshFiles)),
+        small("Change…", Some(Message::OpenFolder)),
+    ]
+    .spacing(2)
+    .align_y(Alignment::Center)
+    .padding(Padding { top: 4.0, right: 6.0, bottom: 4.0, left: 12.0 });
+    let mut list = Column::new().push(header).push(line()).width(Length::Fill);
+    if let Some(naming) = &studio.naming {
+        let label = match naming.kind {
+            NamingKind::File => "New file",
+            NamingKind::Folder => "New folder",
+            NamingKind::Rename(_) => "Rename to",
+        };
+        let field = text_input("name", &naming.text)
+            .id(naming_id())
+            .on_input(Message::Naming)
+            .on_submit(Message::ConfirmNaming)
+            .size(12.5)
+            .padding([4, 8])
+            .style(theme::field)
+            .width(Length::Fill);
+        let entry = row![
+            text(label).size(12).style(theme::muted),
+            field,
+            small("OK", Some(Message::ConfirmNaming)),
+            small("Cancel", Some(Message::CancelNaming)),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .padding([6, 12]);
+        list = list.push(entry).push(line());
+    }
+    for entry in &studio.entries {
+        let chevron = match (entry.dir, entry.expanded) {
+            (true, true) => "▾",
+            (true, false) => "▸",
+            (false, _) => "",
+        };
+        let style: TextStyle = if entry.dir || entry.name.ends_with(".scm") { theme::strong } else { theme::muted };
+        let content = row![text(chevron).size(11).style(theme::faint).width(12), text(&entry.name).size(12.5).style(style)]
+            .spacing(4)
+            .align_y(Alignment::Center);
+        let selected = studio.selected.as_deref() == Some(entry.path.as_path());
+        let indent = 12.0 + 14.0 * entry.depth as f32;
+        list = list.push(
+            button(content)
+                .padding(Padding { top: 3.0, right: 12.0, bottom: 3.0, left: indent })
+                .width(Length::Fill)
+                .style(theme::row(selected))
+                .on_press(Message::PickEntry(entry.path.clone())),
+        );
+    }
+    scrollable(list.padding(Padding { top: 0.0, right: 0.0, bottom: 8.0, left: 0.0 })).height(Length::Fill).style(theme::scroll).into()
 }
 
 fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Message>> {

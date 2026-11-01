@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,7 +13,7 @@ use schematic::reader::read_all;
 
 use crate::highlight::Marks;
 use crate::worker::{self, Binding, Event, Grid, Request};
-use crate::{fonts, forms, theme, view};
+use crate::{files, fonts, forms, theme, view};
 
 pub const PAGE: usize = 100;
 pub const LINE_HEIGHT: f32 = 21.0;
@@ -86,6 +87,26 @@ pub enum Decision {
     Cancel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Environment,
+    Files,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamingKind {
+    File,
+    Folder,
+    Rename(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Naming {
+    pub kind: NamingKind,
+    pub parent: PathBuf,
+    pub text: String,
+}
+
 pub struct Help {
     pub page: Page,
     pub query: String,
@@ -129,6 +150,12 @@ pub struct Studio {
     pub tab: Tab,
     pub help: Option<Help>,
     pub editor_height: f32,
+    pub side: Side,
+    pub root: Option<PathBuf>,
+    pub expanded: HashSet<PathBuf>,
+    pub entries: Vec<files::Entry>,
+    pub selected: Option<PathBuf>,
+    pub naming: Option<Naming>,
     pub console: Vec<Line>,
     pub input: text_editor::Content,
     pub input_marks: Marks,
@@ -168,6 +195,17 @@ pub enum Message {
     LookUp(Source),
     HelpQuery(String),
     HelpPage(Page),
+    ShowSide(Side),
+    OpenFolder,
+    OpenedFolder(Option<PathBuf>),
+    PickEntry(PathBuf),
+    StartNaming(NamingKind),
+    Naming(String),
+    ConfirmNaming,
+    CancelNaming,
+    DeleteEntry,
+    DeleteDecided(PathBuf, bool),
+    RefreshFiles,
     RunForm,
     RunFile,
     Stop,
@@ -210,6 +248,14 @@ pub fn console_id() -> Id {
 
 pub fn editor_id() -> Id {
     Id::new("editor")
+}
+
+pub fn naming_id() -> Id {
+    Id::new("naming")
+}
+
+fn file_name_of(path: &Path) -> String {
+    path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string()
 }
 
 pub fn scroll_target(top: f32, bottom: f32, offset: f32, height: f32) -> Option<f32> {
@@ -262,6 +308,21 @@ async fn save_svg() -> Option<PathBuf> {
     Some(handle.path().to_path_buf())
 }
 
+async fn pick_folder() -> Option<PathBuf> {
+    let handle = rfd::AsyncFileDialog::new().set_title("Open a folder").pick_folder().await?;
+    Some(handle.path().to_path_buf())
+}
+
+async fn confirm_delete(name: String) -> bool {
+    let result = rfd::AsyncMessageDialog::new()
+        .set_title("Delete")
+        .set_description(format!("Delete {name} for good?"))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await;
+    matches!(result, rfd::MessageDialogResult::Yes)
+}
+
 async fn confirm_close(name: String) -> Decision {
     let result = rfd::AsyncMessageDialog::new()
         .set_title("Unsaved changes")
@@ -298,6 +359,12 @@ impl Studio {
             tab: Tab::Doc(0),
             help: None,
             editor_height: 0.0,
+            side: Side::Environment,
+            root: None,
+            expanded: HashSet::new(),
+            entries: Vec::new(),
+            selected: None,
+            naming: None,
             console: Vec::new(),
             input: text_editor::Content::new(),
             input_marks: Marks::default(),
@@ -324,7 +391,84 @@ impl Studio {
         if let Some(path) = std::env::args().nth(1) {
             studio.load(PathBuf::from(path));
         }
+        if studio.root.is_none() {
+            if let Ok(dir) = std::env::current_dir() {
+                studio.set_root(dir);
+            }
+        }
         studio
+    }
+
+    pub fn set_root(&mut self, root: PathBuf) {
+        self.root = Some(root);
+        self.expanded.clear();
+        self.selected = None;
+        self.naming = None;
+        self.refresh_files();
+    }
+
+    fn refresh_files(&mut self) {
+        self.entries = match &self.root {
+            Some(root) => files::listing(root, &self.expanded),
+            None => Vec::new(),
+        };
+    }
+
+    fn naming_parent(&self) -> Option<PathBuf> {
+        match &self.selected {
+            Some(path) if path.is_dir() => Some(path.clone()),
+            Some(path) => path.parent().map(Path::to_path_buf),
+            None => self.root.clone(),
+        }
+    }
+
+    fn retarget(&mut self, old: &Path, new: &Path) {
+        for doc in &mut self.docs {
+            let Some(rest) = doc.path.as_ref().and_then(|p| p.strip_prefix(old).ok()) else { continue };
+            doc.path = Some(if rest.as_os_str().is_empty() { new.to_path_buf() } else { new.join(rest) });
+        }
+    }
+
+    fn confirm_naming(&mut self) -> Task<Message> {
+        let Some(naming) = self.naming.take() else { return Task::none() };
+        let name = naming.text.trim().to_string();
+        if !files::valid_name(&name) {
+            self.status = "Names cannot be empty or contain slashes".to_string();
+            return Task::none();
+        }
+        let target = naming.parent.join(&name);
+        let verb = match &naming.kind {
+            NamingKind::File | NamingKind::Folder => "create",
+            NamingKind::Rename(_) => "rename",
+        };
+        let result = match &naming.kind {
+            _ if target.exists() && naming.kind != NamingKind::Rename(target.clone()) => Err(format!("{name} already exists")),
+            NamingKind::File => std::fs::write(&target, "").map_err(|e| e.to_string()),
+            NamingKind::Folder => std::fs::create_dir(&target).map_err(|e| e.to_string()),
+            NamingKind::Rename(old) => match std::fs::rename(old, &target) {
+                Ok(()) => {
+                    self.retarget(old, &target);
+                    Ok(())
+                }
+                Err(e) => Err(e.to_string()),
+            },
+        };
+        match result {
+            Ok(()) => {
+                self.status = format!("{}d {}", verb[..1].to_uppercase() + &verb[1..], target.display());
+                self.refresh_files();
+                self.selected = Some(target.clone());
+                if naming.kind == NamingKind::File {
+                    self.load(target);
+                    return self.scroll_to_doc();
+                }
+                Task::none()
+            }
+            Err(e) => {
+                self.status = format!("Cannot {verb} {name}: {e}");
+                Task::none()
+            }
+        }
     }
 
     pub fn doc(&self) -> &Document {
@@ -479,6 +623,71 @@ impl Studio {
                 if let Some(help) = &mut self.help {
                     help.page = page;
                 }
+                Task::none()
+            }
+            Message::ShowSide(side) => {
+                self.side = side;
+                Task::none()
+            }
+            Message::OpenFolder => Task::perform(pick_folder(), Message::OpenedFolder),
+            Message::OpenedFolder(root) => {
+                if let Some(root) = root {
+                    self.set_root(root);
+                    self.side = Side::Files;
+                }
+                Task::none()
+            }
+            Message::PickEntry(path) => {
+                self.selected = Some(path.clone());
+                if path.is_dir() {
+                    if !self.expanded.remove(&path) {
+                        self.expanded.insert(path);
+                    }
+                    self.refresh_files();
+                    return Task::none();
+                }
+                self.load(path);
+                self.scroll_to_doc()
+            }
+            Message::StartNaming(kind) => {
+                let (parent, text) = match &kind {
+                    NamingKind::Rename(path) => (path.parent().map(Path::to_path_buf), file_name_of(path)),
+                    _ => (self.naming_parent(), String::new()),
+                };
+                if let Some(parent) = parent {
+                    self.naming = Some(Naming { kind, parent, text });
+                    return operation::focus(naming_id());
+                }
+                Task::none()
+            }
+            Message::Naming(text) => {
+                if let Some(naming) = &mut self.naming {
+                    naming.text = text;
+                }
+                Task::none()
+            }
+            Message::ConfirmNaming => self.confirm_naming(),
+            Message::CancelNaming => {
+                self.naming = None;
+                Task::none()
+            }
+            Message::DeleteEntry => match self.selected.clone() {
+                Some(path) => Task::perform(confirm_delete(file_name_of(&path)), move |yes| Message::DeleteDecided(path.clone(), yes)),
+                None => Task::none(),
+            },
+            Message::DeleteDecided(path, true) => {
+                let result = if path.is_dir() { std::fs::remove_dir_all(&path) } else { std::fs::remove_file(&path) };
+                self.status = match result {
+                    Ok(()) => format!("Deleted {}", path.display()),
+                    Err(e) => format!("Cannot delete {}: {e}", path.display()),
+                };
+                self.selected = None;
+                self.refresh_files();
+                Task::none()
+            }
+            Message::DeleteDecided(_, false) => Task::none(),
+            Message::RefreshFiles => {
+                self.refresh_files();
                 Task::none()
             }
             Message::RunForm => self.run_form(),
@@ -758,6 +967,11 @@ impl Studio {
         match std::fs::read_to_string(&path) {
             Ok(source) => {
                 self.status = format!("Opened {}", path.display());
+                if self.root.is_none() {
+                    if let Some(parent) = path.parent() {
+                        self.set_root(parent.to_path_buf());
+                    }
+                }
                 let content = text_editor::Content::with_text(&source.replace("\r\n", "\n"));
                 let doc = Document { path: Some(path), content, marks: Marks::default(), dirty: false, offset: 0.0 };
                 if self.doc().blank() {
@@ -779,6 +993,7 @@ impl Studio {
                 doc.dirty = false;
                 doc.path = Some(path.clone());
                 self.status = format!("Saved {}", path.display());
+                self.refresh_files();
             }
             Err(e) => self.status = format!("Cannot save {}: {e}", path.display()),
         }
@@ -904,6 +1119,58 @@ mod tests {
         let _ = studio.update(Message::CloseTab(Tab::Doc(0)));
         assert_eq!((studio.docs.len(), studio.file_name()), (1, "Untitled".to_string()));
         let _ = studio.update(Message::CloseTab(Tab::Doc(7)));
+        let _ = view::view(&studio);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_files_pane_browses_and_manages_a_folder() {
+        let dir = scratch("tree");
+        let sub = dir.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.join("a.scm"), "(define a 1)").unwrap();
+        std::fs::write(sub.join("b.scm"), "(define b 2)").unwrap();
+        let mut studio = Studio::new();
+        assert!(studio.root.is_none() && studio.entries.is_empty());
+        let _ = studio.update(Message::OpenedFolder(Some(dir.clone())));
+        assert_eq!(studio.side, Side::Files);
+        let names = |studio: &Studio| studio.entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&studio), ["sub", "a.scm"]);
+        let _ = studio.update(Message::PickEntry(sub.clone()));
+        assert_eq!(names(&studio), ["sub", "b.scm", "a.scm"]);
+        let _ = studio.update(Message::PickEntry(sub.join("b.scm")));
+        assert_eq!((studio.file_name(), studio.docs.len()), ("b.scm".to_string(), 1));
+        let _ = studio.update(Message::StartNaming(NamingKind::File));
+        assert_eq!(studio.naming.as_ref().map(|n| n.parent.clone()), Some(sub.clone()));
+        let _ = studio.update(Message::Naming("c.scm".into()));
+        let _ = studio.update(Message::ConfirmNaming);
+        assert!(sub.join("c.scm").is_file());
+        assert_eq!((studio.file_name(), studio.docs.len()), ("c.scm".to_string(), 2));
+        let _ = studio.update(Message::StartNaming(NamingKind::Rename(sub.join("c.scm"))));
+        assert_eq!(studio.naming.as_ref().map(|n| n.text.clone()), Some("c.scm".to_string()));
+        let _ = studio.update(Message::Naming("d.scm".into()));
+        let _ = studio.update(Message::ConfirmNaming);
+        assert!(sub.join("d.scm").is_file() && !sub.join("c.scm").exists());
+        assert_eq!(studio.file_name(), "d.scm");
+        let _ = studio.update(Message::StartNaming(NamingKind::Folder));
+        let _ = studio.update(Message::Naming("deep".into()));
+        let _ = studio.update(Message::ConfirmNaming);
+        assert!(sub.join("deep").is_dir());
+        let _ = studio.update(Message::StartNaming(NamingKind::File));
+        let _ = studio.update(Message::Naming(" ".into()));
+        let _ = studio.update(Message::ConfirmNaming);
+        assert!(studio.status.starts_with("Names cannot"), "{}", studio.status);
+        let _ = studio.update(Message::StartNaming(NamingKind::File));
+        let _ = studio.update(Message::Naming("a.scm".into()));
+        let _ = studio.update(Message::CancelNaming);
+        assert!(studio.naming.is_none() && !sub.join("deep").join("a.scm").exists());
+        let _ = studio.update(Message::DeleteDecided(sub.join("d.scm"), false));
+        assert!(sub.join("d.scm").exists());
+        let _ = studio.update(Message::DeleteDecided(sub.join("d.scm"), true));
+        assert!(!sub.join("d.scm").exists());
+        assert_eq!(names(&studio), ["sub", "deep", "b.scm", "a.scm"]);
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::ShowSide(Side::Environment));
         let _ = view::view(&studio);
         std::fs::remove_dir_all(&dir).unwrap();
     }
