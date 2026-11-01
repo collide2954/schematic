@@ -107,6 +107,7 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         } else {
             item(Menu::View, "Maximize editor", "", Some(Message::Maximize(PaneKind::Editor)))
         }),
+        item(Menu::View, "Attach all windows", "", (!studio.detached.is_empty()).then_some(Message::AttachAll)),
         gap(check(item(Menu::View, "Word wrap", "", Some(Message::ToggleWrap)), studio.wrap)),
         item(Menu::View, "Larger code", "Ctrl+=", Some(Message::ZoomIn)),
         item(Menu::View, "Smaller code", "Ctrl+-", Some(Message::ZoomOut)),

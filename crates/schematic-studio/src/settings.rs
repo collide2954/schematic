@@ -25,6 +25,7 @@ pub struct Settings {
     pub backups: bool,
     pub window: Option<(f32, f32)>,
     pub layout: Option<Layout>,
+    pub detached: Vec<PaneKind>,
     pub open: Vec<PathBuf>,
     pub current: usize,
     pub recent: Vec<PathBuf>,
@@ -44,6 +45,7 @@ impl Default for Settings {
             backups: true,
             window: None,
             layout: None,
+            detached: Vec::new(),
             open: Vec::new(),
             current: 0,
             recent: Vec::new(),
@@ -187,6 +189,9 @@ pub fn render(settings: &Settings) -> String {
     if let Some(layout) = &settings.layout {
         pairs.push((keyword("layout"), layout_value(layout)));
     }
+    if !settings.detached.is_empty() {
+        pairs.push((keyword("detached"), Value::vector(settings.detached.iter().map(|kind| keyword(pane_name(*kind))))));
+    }
     if let Some(root) = &settings.root {
         pairs.push((keyword("root"), path_value(root)));
     }
@@ -244,6 +249,10 @@ pub fn parse(text: &str) -> Settings {
         backups: flag("backups", true),
         window,
         layout: get("layout").and_then(layout_from),
+        detached: match get("detached") {
+            Some(Value::Vector(kinds)) => kinds.iter().filter_map(|k| if let Value::Keyword(k) = k { pane_kind(&k.name()) } else { None }).collect(),
+            _ => Vec::new(),
+        },
         open: path_list(get("open")),
         current: number(get("current")).unwrap_or(0.0).max(0.0) as usize,
         recent: path_list(get("recent")),
@@ -319,6 +328,7 @@ mod tests {
             backups: true,
             window: Some((1400.0, 900.0)),
             layout: Some(layout),
+            detached: vec![PaneKind::Console, PaneKind::Plots],
             open: vec![PathBuf::from("C:\\work\\a.scm"), PathBuf::from("b.scm")],
             current: 1,
             recent: vec![PathBuf::from("b.scm")],
@@ -328,6 +338,7 @@ mod tests {
         };
         let text = render(&settings);
         assert!(text.starts_with("{:theme :warm\n :scale 1.25"), "{text}");
+        assert!(text.contains(":detached [:console :plots]"), "{text}");
         assert_eq!(parse(&text), settings);
         assert_eq!(parse("garbage"), Settings::default());
         assert_eq!(parse("{:theme :neon :scale 9 :zoom 0.1 :window [10 10]}"), Settings { scale: 1.6, zoom: 0.7, ..Settings::default() });

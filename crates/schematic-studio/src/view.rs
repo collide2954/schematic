@@ -8,7 +8,7 @@ use iced::widget::{
 };
 use std::path::{Path, PathBuf};
 
-use iced::{Alignment, Color, Element, Font, Length, Padding, Pixels, Theme};
+use iced::{Alignment, Color, Element, Font, Length, Padding, Pixels, Theme, window};
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
@@ -38,36 +38,61 @@ fn single(name: &str, detail: Option<String>) -> Vec<TabItem> {
     vec![TabItem { label: name.to_string(), detail, active: true, select: None, close: None }]
 }
 
+pub fn window(studio: &Studio, id: window::Id) -> Element<'_, Message> {
+    match studio.detached.iter().find(|(w, _)| *w == id) {
+        Some((_, kind)) => detached_pane(studio, *kind),
+        None => view(studio),
+    }
+}
+
+type PaneParts<'a> = (Vec<TabItem>, Option<Element<'a, Message>>, Element<'a, Message>);
+
+fn pane_parts(studio: &Studio, kind: PaneKind) -> PaneParts<'_> {
+    match kind {
+        PaneKind::Editor => (editor_tabs(studio), Some(editor_controls(studio)), workspace(studio)),
+        PaneKind::Console => (single("Console", Some(studio.namespace.clone())), Some(console_controls(studio)), console(studio)),
+        PaneKind::Environment => match studio.side {
+            Side::Environment => (side_tabs(studio), None, environment(studio)),
+            Side::Files => (side_tabs(studio), None, files(studio)),
+            Side::Project => (side_tabs(studio), None, project(studio)),
+            Side::Outline => (side_tabs(studio), None, outline(studio)),
+            Side::Watch => (side_tabs(studio), Some(watch_controls(studio)), watch(studio)),
+            Side::Git => (side_tabs(studio), None, git_tab(studio)),
+        },
+        PaneKind::Viewer => {
+            let grid = studio.grid.as_ref();
+            (single("Data", grid.map(|g| g.name.clone())), None, viewer(studio))
+        }
+        PaneKind::Plots => {
+            let plot = studio.plot();
+            let detail = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
+            (single("Plots", detail), None, plots(studio))
+        }
+    }
+}
+
+fn detached_pane(studio: &Studio, kind: PaneKind) -> Element<'_, Message> {
+    let (tabs, controls, body) = pane_parts(studio, kind);
+    let attach = small("Attach", studio.detached.iter().find(|(_, k)| *k == kind).map(|(id, _)| Message::AttachPane(*id)));
+    let controls: Element<'_, Message> = match controls {
+        Some(controls) => row![controls, attach].spacing(6).align_y(Alignment::Center).into(),
+        None => attach,
+    };
+    let content = column![strip(tabs, Some(controls)), container(body).width(Length::Fill).height(Length::Fill)];
+    container(content).width(Length::Fill).height(Length::Fill).style(theme::pane).into()
+}
+
 pub fn view(studio: &Studio) -> Element<'_, Message> {
     let panes = pane_grid(&studio.panes, |_, kind, _| {
-        let (tabs, controls, body): (Vec<TabItem>, Option<Element<'_, Message>>, Element<'_, Message>) = match kind {
-            PaneKind::Editor => (editor_tabs(studio), Some(editor_controls(studio)), workspace(studio)),
-            PaneKind::Console => (single("Console", Some(studio.namespace.clone())), Some(console_controls(studio)), console(studio)),
-            PaneKind::Environment => match studio.side {
-                Side::Environment => (side_tabs(studio), None, environment(studio)),
-                Side::Files => (side_tabs(studio), None, files(studio)),
-                Side::Project => (side_tabs(studio), None, project(studio)),
-                Side::Outline => (side_tabs(studio), None, outline(studio)),
-                Side::Watch => (side_tabs(studio), Some(watch_controls(studio)), watch(studio)),
-                Side::Git => (side_tabs(studio), None, git_tab(studio)),
-            },
-            PaneKind::Viewer => {
-                let grid = studio.grid.as_ref();
-                (single("Data", grid.map(|g| g.name.clone())), None, viewer(studio))
-            }
-            PaneKind::Plots => {
-                let plot = studio.plot();
-                let detail = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
-                (single("Plots", detail), None, plots(studio))
-            }
-        };
+        let (tabs, controls, body) = pane_parts(studio, *kind);
         let maximized = studio.panes.maximized().is_some();
+        let detach = tip(glyph_button(Glyph::Detach, Some(Message::DetachPane(*kind))), "Detach");
         let fold = tip(
             glyph_button(if maximized { Glyph::Shrink } else { Glyph::Expand }, Some(if maximized { Message::RestorePanes } else { Message::Maximize(*kind) })),
             if maximized { "Restore" } else { "Maximize" },
         );
         let hide = tip(glyph_button(Glyph::Minus, Some(Message::TogglePane(*kind))), "Hide");
-        let pane_buttons = row![fold, hide].spacing(0);
+        let pane_buttons = row![detach, fold, hide].spacing(0);
         let controls: Element<'_, Message> = match controls {
             Some(controls) => row![controls, pane_buttons].spacing(6).align_y(Alignment::Center).into(),
             None => pane_buttons.into(),
@@ -185,7 +210,7 @@ fn line<'a>() -> Element<'a, Message> {
 }
 
 fn strip<'a>(tabs: Vec<TabItem>, controls: Option<Element<'a, Message>>) -> Element<'a, Message> {
-    let mut bar = Row::new().height(30).align_y(Alignment::Center);
+    let mut labels = Row::new().height(30).align_y(Alignment::Center);
     for tab in tabs {
         let mut label = row![text(tab.label).size(theme::UI).font(fonts::UI_MEDIUM)].spacing(8).align_y(Alignment::Center);
         if let Some(detail) = tab.detail {
@@ -202,9 +227,11 @@ fn strip<'a>(tabs: Vec<TabItem>, controls: Option<Element<'a, Message>>) -> Elem
             let cross = button(icon(Glyph::Close, Ink::Muted)).padding([0, 4]).style(theme::ghost).on_press(close);
             inner = inner.push(container(cross).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 0.0 }));
         }
-        bar = bar.push(container(inner).height(Length::Fill).style(theme::tab_shell(tab.active)));
+        labels = labels.push(container(inner).height(Length::Fill).style(theme::tab_shell(tab.active)));
     }
-    bar = bar.push(space::horizontal());
+    let hidden = Scrollbar::new().width(0).scroller_width(0).margin(0);
+    let tabs = scrollable(labels).direction(Direction::Horizontal(hidden)).width(Length::Fill).height(30).style(theme::scroll);
+    let mut bar = Row::new().height(30).align_y(Alignment::Center).push(tabs);
     if let Some(controls) = controls {
         bar = bar.push(container(controls).padding([0, 6]));
     }

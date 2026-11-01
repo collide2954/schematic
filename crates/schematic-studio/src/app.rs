@@ -516,6 +516,8 @@ pub struct Studio {
     pub git: Git,
     pub diff: Option<Diff>,
     pub ticks: u64,
+    pub main_window: Option<window::Id>,
+    pub detached: Vec<(window::Id, PaneKind)>,
     pub worker: Option<Sender<Request>>,
     pub interrupt: Option<Arc<AtomicBool>>,
     pub running: bool,
@@ -625,7 +627,7 @@ pub enum Message {
     OpenSettings,
     ToggleRestore,
     ToggleBackups,
-    WindowResized(f32, f32),
+    WindowResized(window::Id, f32, f32),
     Dropped(PathBuf),
     OpenPath(PathBuf),
     SortBy(String),
@@ -689,6 +691,10 @@ pub enum Message {
     GitPull,
     GitPush,
     GitInit,
+    DetachPane(PaneKind),
+    AttachPane(window::Id),
+    AttachAll,
+    CloseRequested(window::Id),
 }
 
 pub fn console_find_id() -> Id {
@@ -712,25 +718,52 @@ pub fn find_id() -> Id {
 }
 
 pub fn run() -> iced::Result {
-    let saved = settings::load();
-    let (width, height) = saved.window.unwrap_or((1280.0, 820.0));
-    let settings = window::Settings {
-        size: Size::new(width, height),
-        min_size: Some(Size::new(880.0, 560.0)),
-        exit_on_close_request: false,
-        ..window::Settings::default()
-    };
-    let mut app = iced::application(Studio::boot, Studio::update, view::view)
+    let mut app = iced::daemon(Studio::boot, Studio::update, view::window)
         .title(Studio::title)
         .subscription(Studio::subscription)
         .theme(Studio::theme)
-        .scale_factor(|studio: &Studio| studio.scale)
-        .default_font(fonts::UI)
-        .window(settings);
+        .scale_factor(|studio: &Studio, _: window::Id| studio.scale)
+        .default_font(fonts::UI);
     for file in fonts::FILES {
         app = app.font(file);
     }
     app.run()
+}
+
+fn main_window_settings(size: Option<(f32, f32)>) -> window::Settings {
+    let (width, height) = size.unwrap_or((1280.0, 820.0));
+    window::Settings {
+        size: Size::new(width, height),
+        min_size: Some(Size::new(880.0, 560.0)),
+        exit_on_close_request: false,
+        ..window::Settings::default()
+    }
+}
+
+fn pane_window_settings(kind: PaneKind) -> window::Settings {
+    let (width, height) = match kind {
+        PaneKind::Editor => (900.0, 640.0),
+        PaneKind::Console => (720.0, 420.0),
+        _ => (640.0, 480.0),
+    };
+    window::Settings {
+        size: Size::new(width, height),
+        min_size: Some(Size::new(320.0, 240.0)),
+        exit_on_close_request: false,
+        ..window::Settings::default()
+    }
+}
+
+impl PaneKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            PaneKind::Editor => "Editor",
+            PaneKind::Console => "Console",
+            PaneKind::Environment => "Environment",
+            PaneKind::Viewer => "Data",
+            PaneKind::Plots => "Plots",
+        }
+    }
 }
 
 pub fn console_id() -> Id {
@@ -884,7 +917,7 @@ pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifie
     })
 }
 
-fn events(event: iced::Event, status: iced::event::Status, _window: window::Id) -> Option<Message> {
+fn events(event: iced::Event, status: iced::event::Status, window: window::Id) -> Option<Message> {
     match event {
         iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
             let shortcut = shortcut_of(&key, modifiers)?;
@@ -894,9 +927,9 @@ fn events(event: iced::Event, status: iced::event::Status, _window: window::Id) 
             }
             Some(Message::Shortcut(shortcut))
         }
-        iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(size.width, size.height)),
+        iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(window, size.width, size.height)),
         iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Dropped(path)),
-        iced::Event::Window(window::Event::CloseRequested) => Some(Message::Quit),
+        iced::Event::Window(window::Event::CloseRequested) => Some(Message::CloseRequested(window)),
         _ => None,
     }
 }
@@ -1127,6 +1160,8 @@ impl Studio {
             git: Git::default(),
             diff: None,
             ticks: 0,
+            main_window: None,
+            detached: Vec::new(),
             worker: None,
             interrupt: None,
             running: false,
@@ -1160,9 +1195,43 @@ impl Studio {
             studio.start_open = true;
             studio.tab = Tab::Start;
         }
+        let (main, open) = window::open(main_window_settings(settings.window));
+        studio.main_window = Some(main);
+        tasks.push(open.discard());
+        for kind in settings.detached {
+            tasks.push(studio.detach(kind));
+        }
         studio.persistent = true;
         studio.saved = Some(studio.snapshot_settings());
         (studio, Task::batch(tasks))
+    }
+
+    fn detach(&mut self, kind: PaneKind) -> Task<Message> {
+        if let Some((id, _)) = self.detached.iter().find(|(_, k)| *k == kind) {
+            return window::gain_focus(*id);
+        }
+        if let Some(pane) = self.pane_of(kind) {
+            if self.panes.iter().count() == 1 {
+                self.status = "The last pane stays in the window".to_string();
+                return Task::none();
+            }
+            if self.panes.maximized() == Some(pane) {
+                self.panes.restore();
+            }
+            self.panes.close(pane);
+        }
+        let (id, open) = window::open(pane_window_settings(kind));
+        self.detached.push((id, kind));
+        open.discard()
+    }
+
+    fn attach(&mut self, id: window::Id) -> Task<Message> {
+        let Some(at) = self.detached.iter().position(|(w, _)| *w == id) else { return Task::none() };
+        let (_, kind) = self.detached.remove(at);
+        if self.pane_of(kind).is_none() {
+            self.toggle_pane(kind);
+        }
+        window::close(id)
     }
 
     pub fn line_height(&self) -> f32 {
@@ -1189,6 +1258,7 @@ impl Studio {
             backups: self.backups,
             window: self.window_size,
             layout: settings::layout_of(&self.panes),
+            detached: self.detached.iter().map(|(_, kind)| *kind).collect(),
             open,
             current,
             recent: self.recent.clone(),
@@ -1372,11 +1442,14 @@ impl Studio {
         self.doc().name()
     }
 
-    pub fn title(&self) -> String {
-        format!("{} - Schematic Studio", self.doc().label().replace(" •", "*"))
+    pub fn title(&self, id: window::Id) -> String {
+        match self.detached.iter().find(|(w, _)| *w == id) {
+            Some((_, kind)) => format!("{} - Schematic Studio", kind.label()),
+            None => format!("{} - Schematic Studio", self.doc().label().replace(" •", "*")),
+        }
     }
 
-    fn theme(&self) -> Theme {
+    fn theme(&self, _id: window::Id) -> Theme {
         self.theme.clone()
     }
 
@@ -1861,9 +1934,24 @@ impl Studio {
                 self.backups = !self.backups;
                 Task::none()
             }
-            Message::WindowResized(width, height) => {
-                self.window_size = Some((width, height));
+            Message::WindowResized(id, width, height) => {
+                if Some(id) == self.main_window {
+                    self.window_size = Some((width, height));
+                }
                 Task::none()
+            }
+            Message::DetachPane(kind) => self.detach(kind),
+            Message::AttachPane(id) => self.attach(id),
+            Message::AttachAll => {
+                let ids: Vec<window::Id> = self.detached.iter().map(|(id, _)| *id).collect();
+                let tasks: Vec<Task<Message>> = ids.into_iter().map(|id| self.attach(id)).collect();
+                Task::batch(tasks)
+            }
+            Message::CloseRequested(id) => {
+                if self.main_window.is_none_or(|main| main == id) {
+                    return self.update(Message::Quit);
+                }
+                self.attach(id)
             }
             Message::Dropped(path) => {
                 if path.is_dir() {
@@ -3542,10 +3630,10 @@ mod tests {
         assert_eq!(studio.doc().content.text(), "(define a 1)\n");
         assert_eq!(studio.doc().path.as_deref(), Some(source.as_path()));
         assert!(!studio.doc().dirty);
-        assert_eq!(studio.title(), "in.scm - Schematic Studio");
+        assert_eq!(studio.title(window::Id::unique()), "in.scm - Schematic Studio");
         let _ = studio.update(Message::Edit(text_editor::Action::Edit(text_editor::Edit::Insert(';'))));
         assert!(studio.doc().dirty);
-        assert_eq!(studio.title(), "in.scm* - Schematic Studio");
+        assert_eq!(studio.title(window::Id::unique()), "in.scm* - Schematic Studio");
         let target = dir.join("out.scm");
         let _ = studio.update(Message::SaveTo(Some(target.clone())));
         assert_eq!(std::fs::read_to_string(&target).unwrap(), ";(define a 1)\n");
@@ -3907,7 +3995,9 @@ mod tests {
         assert_eq!(studio.tab, Tab::Settings);
         let _ = studio.update(Message::CloseTab(Tab::Settings));
         assert!(!studio.settings_open && studio.tab == Tab::Doc(0));
-        let _ = studio.update(Message::WindowResized(1000.0, 700.0));
+        let main = window::Id::unique();
+        studio.main_window = Some(main);
+        let _ = studio.update(Message::WindowResized(main, 1000.0, 700.0));
         assert_eq!(studio.snapshot_settings().window, Some((1000.0, 700.0)));
         assert!(commands::commands(&studio).iter().any(|c| c.name == "Preferences…"));
     }
@@ -4095,5 +4185,37 @@ mod tests {
         let _ = studio.update(Message::GitLoaded(None));
         assert!(studio.git.root.is_none() && studio.git.status.is_none());
         let _ = view::view(&studio);
+    }
+
+    #[test]
+    fn panes_detach_into_windows_and_come_back() {
+        let mut studio = Studio::new();
+        let main = window::Id::unique();
+        studio.main_window = Some(main);
+        let _ = studio.update(Message::DetachPane(PaneKind::Plots));
+        assert!(studio.pane_of(PaneKind::Plots).is_none());
+        assert_eq!(studio.detached.len(), 1);
+        let id = studio.detached[0].0;
+        assert_eq!(studio.title(id), "Plots - Schematic Studio");
+        assert_eq!(studio.title(main), "Untitled - Schematic Studio");
+        let _ = view::window(&studio, id);
+        let _ = view::window(&studio, main);
+        assert_eq!(studio.snapshot_settings().detached, [PaneKind::Plots]);
+        let _ = studio.update(Message::DetachPane(PaneKind::Plots));
+        assert_eq!(studio.detached.len(), 1, "a detached pane is focused, not opened twice");
+        let _ = studio.update(Message::WindowResized(id, 300.0, 200.0));
+        assert_eq!(studio.window_size, None, "only the main window's size is kept");
+        let _ = studio.update(Message::CloseRequested(id));
+        assert!(studio.detached.is_empty() && studio.pane_of(PaneKind::Plots).is_some());
+        for kind in [PaneKind::Console, PaneKind::Environment, PaneKind::Viewer, PaneKind::Plots] {
+            let _ = studio.update(Message::DetachPane(kind));
+        }
+        assert_eq!((studio.detached.len(), studio.panes.iter().count()), (4, 1));
+        let _ = studio.update(Message::DetachPane(PaneKind::Editor));
+        assert_eq!(studio.detached.len(), 4, "the last pane stays");
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::AttachAll);
+        assert!(studio.detached.is_empty() && studio.panes.iter().count() == 5);
+        assert!(commands::commands(&studio).iter().any(|c| c.name == "Attach all windows" && c.message.is_none()));
     }
 }

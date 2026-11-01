@@ -18,6 +18,7 @@ pub enum Glyph {
     Shrink,
     Minus,
     Plus,
+    Detach,
     Close,
     Copy,
     Bars,
@@ -128,6 +129,11 @@ impl<Message> Program<Message> for Icon {
                 frame.stroke(&Path::line(Point::new(3.5, 8.0), Point::new(12.5, 8.0)), stroke());
                 frame.stroke(&Path::line(Point::new(8.0, 3.5), Point::new(8.0, 12.5)), stroke());
             }
+            Glyph::Detach => {
+                frame.stroke(&polyline(&[(7.0, 3.5), (3.0, 3.5), (3.0, 13.0), (12.5, 13.0), (12.5, 9.0)]), stroke());
+                frame.stroke(&Path::line(Point::new(7.0, 9.0), Point::new(13.0, 3.0)), stroke());
+                frame.stroke(&polyline(&[(9.5, 3.0), (13.0, 3.0), (13.0, 6.5)]), stroke());
+            }
             Glyph::Close => {
                 frame.stroke(&Path::line(Point::new(4.0, 4.0), Point::new(12.0, 12.0)), stroke());
                 frame.stroke(&Path::line(Point::new(12.0, 4.0), Point::new(4.0, 12.0)), stroke());
@@ -168,6 +174,7 @@ mod tests {
             Glyph::Shrink,
             Glyph::Minus,
             Glyph::Plus,
+            Glyph::Detach,
             Glyph::Close,
             Glyph::Copy,
             Glyph::Bars,
