@@ -1148,7 +1148,7 @@ fn axis_options_shape_the_scales() {
     let grouped = eval("(to-svg (bar-chart [\"a\"] [1234567] {:y-format \"{:,}\"}))");
     assert!(grouped.contains(">1,000,000<"), "{grouped}");
     let percent = eval("(to-svg (bar-chart [\"a\" \"b\"] [0.4 0.9] {:y-format \"{:.0%}\"}))");
-    assert!(percent.contains(">50%<"), "{percent}");
+    assert!(percent.contains(">20%<") && percent.contains(">100%<"), "{percent}");
     let dated = eval("(to-svg (line-chart [#2024-01-01 #2024-02-01 #2024-03-01] [1 2 3] {:x-format \"MMM d\"}))");
     assert!(dated.contains(">Jan ") || dated.contains(">Feb "), "{dated}");
     let lines = eval("(to-svg (line-chart [1 2 3] [1 2 3] {:hline 2 :vline [1.5 2.5]}))");
@@ -1157,6 +1157,22 @@ fn axis_options_shape_the_scales() {
     assert!(labelled.contains(">7<") && labelled.contains(">13<"), "{labelled}");
     assert_eq!(eval("(bar-chart [\"a\"] [1] {:y-range [1]})"), "error: bar-chart expects :y-range to be [low high]");
     assert_eq!(eval("(bar-chart [\"a\"] [1] {:y-scale :loud})"), "error: bar-chart expects :linear or :log for :y-scale, got :loud");
+}
+
+#[test]
+fn facets_split_a_chart_into_small_multiples() {
+    let s = "(define s (table {:city [\"Oslo\" \"Oslo\" \"Rome\" \"Rome\"] :year [2020 2021 2020 2021] :units [12 30 7 9]}))";
+    let text = eval(&format!("{s} (str (bar-chart s :year :units {{:facet :city}}))"));
+    assert!(text.contains("── Oslo ──") && text.contains("── Rome ──"), "{text}");
+    let svg = eval(&format!("{s} (to-svg (bar-chart s :year :units {{:facet :city :title \"Units\"}}))"));
+    assert_eq!(svg.matches("<rect").count(), 4, "{svg}");
+    assert!(svg.contains(">Oslo<") && svg.contains(">Rome<") && svg.contains(">Units<"), "{svg}");
+    assert_eq!(svg.matches(">30<").count(), 2, "{svg}");
+    let histogram = eval(&format!("{s} (str (histogram s :units {{:facet :city :bins 2}}))"));
+    assert!(histogram.contains("── Rome ──") && histogram.matches("7–18.5").count() == 2, "{histogram}");
+    let lines = eval(&format!("{s} (to-svg (line-chart s :year :units {{:facet :city}}))"));
+    assert_eq!(lines.matches("<polyline").count(), 2, "{lines}");
+    assert_eq!(eval("(bar-chart [\"a\"] [1] {:facet :x})"), "error: bar-chart expects a table for :facet");
 }
 
 #[test]

@@ -47,6 +47,41 @@ struct Options {
     stack: bool,
     horizontal: bool,
     donut: bool,
+    labels: bool,
+    x_range: Option<(f64, f64)>,
+    y_range: Option<(f64, f64)>,
+    x_log: bool,
+    y_log: bool,
+    x_format: Option<String>,
+    y_format: Option<String>,
+    hlines: Vec<f64>,
+    vlines: Vec<f64>,
+}
+
+fn axis_number(name: &str, key: &str, value: &Value) -> Result<f64, Error> {
+    match value {
+        Value::Int(i) => Ok(*i as f64),
+        Value::Float(x) => Ok(*x),
+        Value::Date(d) => Ok(*d as f64),
+        other => Err(expects(name, &format!("numbers or dates for :{key}"), other)),
+    }
+}
+
+impl Options {
+    fn apply(&self, plot: &mut Plot) {
+        plot.stacked = self.stack;
+        plot.horizontal = self.horizontal;
+        plot.donut = self.donut;
+        plot.labels = self.labels;
+        plot.x_range = self.x_range;
+        plot.y_range = self.y_range;
+        plot.x_log = self.x_log;
+        plot.y_log = self.y_log;
+        plot.x_format = self.x_format.clone();
+        plot.y_format = self.y_format.clone();
+        plot.hlines = self.hlines.clone();
+        plot.vlines = self.vlines.clone();
+    }
 }
 
 fn options(name: &str, value: Option<&Value>) -> Result<Options, Error> {
@@ -67,12 +102,47 @@ fn options(name: &str, value: Option<&Value>) -> Result<Options, Error> {
             Some(other) => Err(expects(name, &format!("true or false for :{key}"), other)),
         }
     };
+    let range = |key: &str| -> Result<Option<(f64, f64)>, Error> {
+        let Some(value) = map.get(&Value::keyword(key)) else { return Ok(None) };
+        if matches!(value, Value::Nil) {
+            return Ok(None);
+        }
+        let bounds: Vec<Value> = items(name, value).ok().map(Iterator::collect).unwrap_or_default();
+        let [low, high] = bounds.as_slice() else {
+            return Err(Error::new("value-error", format!("{name} expects :{key} to be [low high]")));
+        };
+        Ok(Some((axis_number(name, key, low)?, axis_number(name, key, high)?)))
+    };
+    let scale = |key: &str| -> Result<bool, Error> {
+        match map.get(&Value::keyword(key)) {
+            None | Some(Value::Nil) => Ok(false),
+            Some(Value::Keyword(k)) if &*k.name() == "linear" => Ok(false),
+            Some(Value::Keyword(k)) if &*k.name() == "log" => Ok(true),
+            Some(other) => Err(expects(name, &format!(":linear or :log for :{key}"), other)),
+        }
+    };
+    let lines = |key: &str| -> Result<Vec<f64>, Error> {
+        match map.get(&Value::keyword(key)) {
+            None | Some(Value::Nil) => Ok(Vec::new()),
+            Some(single @ (Value::Int(_) | Value::Float(_) | Value::Date(_))) => Ok(vec![axis_number(name, key, single)?]),
+            Some(many) => items(name, many)?.map(|v| axis_number(name, key, &v)).collect(),
+        }
+    };
     options.title = text("title")?;
     options.x_label = text("x-label")?;
     options.y_label = text("y-label")?;
     options.stack = flag("stack")?;
     options.horizontal = flag("horizontal")?;
     options.donut = flag("donut")?;
+    options.labels = flag("labels")?;
+    options.x_range = range("x-range")?;
+    options.y_range = range("y-range")?;
+    options.x_log = scale("x-scale")?;
+    options.y_log = scale("y-scale")?;
+    options.x_format = text("x-format")?;
+    options.y_format = text("y-format")?;
+    options.hlines = lines("hline")?;
+    options.vlines = lines("vline")?;
     options.by = match map.get(&Value::keyword("by")) {
         None | Some(Value::Nil) => None,
         Some(Value::Keyword(column)) => Some(*column),
@@ -140,12 +210,10 @@ fn chart(name: &str, kind: Kind, args: &[Value]) -> Result<Value, Error> {
         let message = format!("{name} expects x and y of the same length, got {} and {}", xs.len(), ys.len());
         return Err(Error::new("value-error", message));
     }
-    plot.title = options.title.or(plot.title);
-    plot.x_label = options.x_label.or(plot.x_label);
-    plot.y_label = options.y_label.or(plot.y_label);
-    plot.stacked = options.stack;
-    plot.horizontal = options.horizontal;
-    plot.donut = options.donut;
+    options.apply(&mut plot);
+    plot.title = options.title.clone().or(plot.title);
+    plot.x_label = options.x_label.clone().or(plot.x_label);
+    plot.y_label = options.y_label.clone().or(plot.y_label);
     let mut groups: Vec<(Option<String>, Vec<usize>)> = Vec::new();
     for i in 0..xs.len() {
         let key = by.as_ref().map(|keys| Shown(&keys[i]).to_string());
@@ -194,6 +262,12 @@ fn chart(name: &str, kind: Kind, args: &[Value]) -> Result<Value, Error> {
         plot.series.push(series);
     }
     plot.dates = dates == Some(true);
+    for series in &plot.series {
+        let bad = |values: &[f64], log: bool| log.then(|| values.iter().copied().find(|v| *v <= 0.0)).flatten();
+        if let Some(v) = bad(&series.ys, plot.y_log).or_else(|| bad(&series.xs, plot.x_log && !categorical)) {
+            return Err(Error::new("value-error", format!("{name} expects positive values on a log scale, got {}", plot::number(v))));
+        }
+    }
     if kind == Kind::Pie {
         let mut totals = vec![0.0; plot.categories.len()];
         for series in &plot.series {
@@ -220,9 +294,10 @@ fn histogram(args: &[Value]) -> Result<Value, Error> {
     };
     let options = options("histogram", rest.first())?;
     let mut plot = plot::histogram(&numbers("histogram", &values)?, options.bins.unwrap_or(10));
-    plot.title = options.title;
-    plot.x_label = options.x_label.or(label);
-    plot.y_label = options.y_label.or(plot.y_label);
+    options.apply(&mut plot);
+    plot.title = options.title.clone();
+    plot.x_label = options.x_label.clone().or(label);
+    plot.y_label = options.y_label.clone().or(plot.y_label);
     Ok(Value::Plot(Rc::new(plot)))
 }
 
@@ -266,9 +341,10 @@ fn box_plot(args: &[Value]) -> Result<Value, Error> {
         }
     };
     let options = options(name, rest.first())?;
-    plot.title = options.title;
-    plot.x_label = options.x_label.or(plot.x_label);
-    plot.y_label = options.y_label.or(plot.y_label);
+    options.apply(&mut plot);
+    plot.title = options.title.clone();
+    plot.x_label = options.x_label.clone().or(plot.x_label);
+    plot.y_label = options.y_label.clone().or(plot.y_label);
     plot.categories = plot.boxes.iter().map(|b| b.label.clone()).collect();
     Ok(Value::Plot(Rc::new(plot)))
 }

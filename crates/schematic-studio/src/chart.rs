@@ -52,7 +52,7 @@ impl Program<Message> for Chart<'_> {
                     let path = Path::line(Point::new(*x1, *y1), Point::new(*x2, *y2));
                     let mut stroke = Stroke::default().with_color(color(paint)).with_width(*width);
                     if *dashed {
-                        stroke = stroke.with_line_dash(LineDash { segments: &[4.0, 3.0], offset: 0 });
+                        stroke.line_dash = LineDash { segments: &[4.0, 3.0], offset: 0 };
                     }
                     frame.stroke(&path, stroke);
                 }

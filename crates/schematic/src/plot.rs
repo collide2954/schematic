@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::fmt::Write;
 
+use crate::value::Value;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Bar,
@@ -198,6 +200,7 @@ struct Axis {
     hi: f64,
     ticks: Vec<f64>,
     step: f64,
+    log: bool,
 }
 
 impl Axis {
@@ -211,7 +214,7 @@ impl Axis {
             hi = lo + 1.0;
         }
         let (ticks, step) = ticks(lo, hi, count);
-        Axis { lo: ticks[0], hi: *ticks.last().unwrap(), ticks, step }
+        Axis { lo: ticks[0], hi: *ticks.last().unwrap(), ticks, step, log: false }
     }
 
     fn hugging(lo: f64, hi: f64, count: usize) -> Axis {
@@ -224,11 +227,67 @@ impl Axis {
         lo -= pad;
         hi += pad;
         let ticks = ticks.into_iter().filter(|t| *t >= lo && *t <= hi).collect();
-        Axis { lo, hi, ticks, step }
+        Axis { lo, hi, ticks, step, log: false }
+    }
+
+    fn fixed(lo: f64, hi: f64, count: usize, log: bool) -> Axis {
+        if log {
+            return Axis::log(lo, hi);
+        }
+        let (lo, hi) = if hi > lo { (lo, hi) } else { (lo, lo + 1.0) };
+        let (ticks, step) = ticks(lo, hi, count);
+        let within = ticks.into_iter().filter(|t| *t >= lo - step * 1e-9 && *t <= hi + step * 1e-9).collect();
+        Axis { lo, hi, ticks: within, step, log: false }
+    }
+
+    fn log(lo: f64, hi: f64) -> Axis {
+        let lo = if lo.is_finite() { lo.max(f64::MIN_POSITIVE) } else { 1.0 };
+        let hi = if hi.is_finite() && hi > lo { hi } else { lo * 10.0 };
+        let multiples: &[f64] = if (hi / lo).log10() < 2.0 { &[1.0, 2.0, 5.0] } else { &[1.0] };
+        let mut ticks = Vec::new();
+        for exponent in (lo.log10().floor() as i32)..=(hi.log10().ceil() as i32) {
+            for multiple in multiples {
+                let tick = multiple * 10f64.powi(exponent);
+                if tick >= lo * 0.999 && tick <= hi * 1.001 {
+                    ticks.push(tick);
+                }
+            }
+        }
+        Axis { lo, hi, ticks, step: 1.0, log: true }
     }
 
     fn place(&self, value: f64, from: f32, to: f32) -> f32 {
-        from + ((value - self.lo) / (self.hi - self.lo)) as f32 * (to - from)
+        let fraction = if self.log {
+            (value.max(f64::MIN_POSITIVE).log10() - self.lo.log10()) / (self.hi.log10() - self.lo.log10())
+        } else {
+            (value - self.lo) / (self.hi - self.lo)
+        };
+        from + fraction as f32 * (to - from)
+    }
+
+    fn holds(&self, value: f64) -> bool {
+        value >= self.lo && value <= self.hi
+    }
+
+    fn label(&self, value: f64, dates: bool, format: Option<&str>) -> String {
+        if let Some(pattern) = format {
+            if dates {
+                return crate::date::format(value.round() as i32, pattern);
+            }
+            if let Some(text) = format_tick(value, Some(pattern)) {
+                return text;
+            }
+        }
+        if self.log { number(value) } else { tick_label(value, self.step, dates) }
+    }
+}
+
+pub fn format_tick(value: f64, spec: Option<&str>) -> Option<String> {
+    let spec = spec?;
+    let argument = if value.fract() == 0.0 && value.abs() < 1e15 { Value::Int(value as i64) } else { Value::Float(value) };
+    match crate::builtins::strings::format_values(&Value::string(spec), &[argument]) {
+        Ok(Value::Str(text)) => Some(text.to_string()),
+        _ => None,
     }
 }
 
@@ -511,10 +570,16 @@ impl Plot {
         let bars = matches!(self.kind, Kind::Bar | Kind::Histogram | Kind::Area);
         let (vlo, vhi) = self.value_extent();
         let value_count = (((if self.horizontal { plot_w } else { plot_h }) / 40.0) as usize).clamp(2, 6);
-        let value_axis = Axis::numeric(vlo, vhi, value_count, bars);
+        let value_axis = match (self.y_range, self.y_log) {
+            (Some((lo, hi)), log) => Axis::fixed(lo, hi, value_count, log),
+            (None, true) => Axis::log(vlo, vhi),
+            (None, false) => Axis::numeric(vlo, vhi, value_count, bars),
+        };
+        let baseline = if value_axis.log { value_axis.lo } else { 0.0 };
         let value_at = |v: f64| if self.horizontal { value_axis.place(v, x0, x1) } else { value_axis.place(v, y1, y0) };
+        let value_text = |v: f64| format_tick(v, self.y_format.as_deref()).unwrap_or_else(|| number(v));
         for tick in &value_axis.ticks {
-            let label = tick_label(*tick, value_axis.step, false);
+            let label = value_axis.label(*tick, false, self.y_format.as_deref());
             if self.horizontal {
                 let x = value_at(*tick);
                 shapes.push(Shape::Line { x1: x, y1: y0, x2: x, y2: y1, paint: Paint::Grid, width: 1.0, dashed: false });
@@ -526,7 +591,7 @@ impl Plot {
             }
         }
         match self.kind {
-            Kind::Bar => self.bar_shapes(&mut shapes, (x0, x1, y0, y1), &value_at),
+            Kind::Bar => self.bar_shapes(&mut shapes, (x0, x1, y0, y1), baseline, &value_at, &value_text),
             Kind::Box => self.box_shapes(&mut shapes, (x0, x1, y0, y1), &value_at),
             Kind::Histogram => {
                 if let Some(series) = self.series.first() {
@@ -534,11 +599,15 @@ impl Plot {
                     let xhi = series.xs.last().copied().unwrap_or(0.0) + self.step;
                     let span = (xhi - xlo).max(f64::EPSILON);
                     let sx = |x: f64| x0 + ((x - xlo) / span) as f32 * plot_w;
-                    let base = value_at(0.0);
-                    for (x, y) in series.xs.iter().zip(&series.ys) {
+                    let base = value_at(baseline);
+                    for (i, (x, y)) in series.xs.iter().zip(&series.ys).enumerate() {
                         let (left, right) = (sx(*x), sx(x + self.step));
-                        let tip = format!("{}: {}", self.categories.get(series.xs.iter().position(|v| v == x).unwrap_or(0)).cloned().unwrap_or_default(), number(*y));
-                        shapes.push(Shape::Rect { x: left + 0.5, y: value_at(*y), w: (right - left - 1.0).max(1.0), h: base - value_at(*y), paint: Paint::Series(0), tip: Some(tip) });
+                        let tip = format!("{}: {}", self.categories.get(i).cloned().unwrap_or_default(), number(*y));
+                        let top = value_at(y.max(baseline));
+                        shapes.push(Shape::Rect { x: left + 0.5, y: top, w: (right - left - 1.0).max(1.0), h: base - top, paint: Paint::Series(0), tip: Some(tip) });
+                        if self.labels {
+                            shapes.push(Self::text_shape((left + right) / 2.0, top - 8.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
+                        }
                     }
                     let mut edges: Vec<f64> = series.xs.clone();
                     edges.push(xhi);
@@ -552,15 +621,23 @@ impl Plot {
                 let xs: Vec<f64> = self.series.iter().flat_map(|s| s.xs.iter().copied()).collect();
                 let (xmin, xmax) = xs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
                 let count = ((plot_w / if self.dates { 90.0 } else { 60.0 }) as usize).clamp(2, 6);
-                let x_axis = Axis::hugging(xmin, xmax, count);
+                let x_axis = match (self.x_range, self.x_log) {
+                    (Some((lo, hi)), log) => Axis::fixed(lo, hi, count, log),
+                    (None, true) => Axis::log(xmin, xmax),
+                    (None, false) => Axis::hugging(xmin, xmax, count),
+                };
                 let sx = |x: f64| x_axis.place(x, x0, x1);
                 for tick in &x_axis.ticks {
-                    shapes.push(Self::text_shape(sx(*tick), y1 + 14.0, tick_label(*tick, x_axis.step, self.dates), 11.0, Anchor::Middle, Paint::Muted));
+                    let label = x_axis.label(*tick, self.dates, self.x_format.as_deref());
+                    shapes.push(Self::text_shape(sx(*tick), y1 + 14.0, label, 11.0, Anchor::Middle, Paint::Muted));
+                }
+                for v in self.vlines.iter().filter(|v| x_axis.holds(**v)) {
+                    shapes.push(Shape::Line { x1: sx(*v), y1: y0, x2: sx(*v), y2: y1, paint: Paint::Axis, width: 1.0, dashed: true });
                 }
                 let stack = self.kind == Kind::Area && multi;
                 let mut base: BTreeMap<u64, f64> = BTreeMap::new();
                 for (si, series) in self.series.iter().enumerate() {
-                    let floors: Vec<f64> = series.xs.iter().map(|x| if stack { base.get(&x.to_bits()).copied().unwrap_or(0.0) } else { 0.0 }).collect();
+                    let floors: Vec<f64> = series.xs.iter().map(|x| if stack { base.get(&x.to_bits()).copied().unwrap_or(0.0) } else { baseline }).collect();
                     let tops: Vec<f64> = series.ys.iter().zip(&floors).map(|(y, f)| y + f).collect();
                     let points: Vec<(f32, f32)> = series.xs.iter().zip(&tops).map(|(x, y)| (sx(*x), value_at(*y))).collect();
                     if self.kind == Kind::Area && !points.is_empty() {
@@ -580,6 +657,11 @@ impl Plot {
                             shapes.push(Shape::Circle { x: *px, y: *py, r, paint: Paint::Series(si), tip });
                         }
                     }
+                    if self.labels {
+                        for (y, (px, py)) in series.ys.iter().zip(&points) {
+                            shapes.push(Self::text_shape(*px, py - 9.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
+                        }
+                    }
                     if stack {
                         for (x, top) in series.xs.iter().zip(&tops) {
                             base.insert(x.to_bits(), *top);
@@ -588,6 +670,14 @@ impl Plot {
                 }
             }
             Kind::Pie => {}
+        }
+        for v in self.hlines.iter().filter(|v| value_axis.holds(**v)) {
+            let line = if self.horizontal {
+                Shape::Line { x1: value_at(*v), y1: y0, x2: value_at(*v), y2: y1, paint: Paint::Axis, width: 1.0, dashed: true }
+            } else {
+                Shape::Line { x1: x0, y1: value_at(*v), x2: x1, y2: value_at(*v), paint: Paint::Axis, width: 1.0, dashed: true }
+            };
+            shapes.push(line);
         }
         shapes.push(Shape::Line { x1: x0, y1: y0, x2: x0, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
         shapes.push(Shape::Line { x1: x0, y1: y1, x2: x1, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
@@ -606,12 +696,19 @@ impl Plot {
         Scene { width, height, shapes }
     }
 
-    fn bar_shapes(&self, shapes: &mut Vec<Shape>, (x0, x1, y0, y1): (f32, f32, f32, f32), value_at: &dyn Fn(f64) -> f32) {
+    fn bar_shapes(
+        &self,
+        shapes: &mut Vec<Shape>,
+        (x0, x1, y0, y1): (f32, f32, f32, f32),
+        baseline: f64,
+        value_at: &dyn Fn(f64) -> f32,
+        value_text: &dyn Fn(f64) -> String,
+    ) {
         let n = self.categories.len().max(1);
         let group = if self.horizontal { (y1 - y0) / n as f32 } else { (x1 - x0) / n as f32 };
         let slots = if self.stacked { 1 } else { self.series.len().max(1) };
         let slot = group * 0.72 / slots as f32;
-        let mut positive = vec![0.0f64; n];
+        let mut positive = vec![baseline; n];
         let mut negative = vec![0.0f64; n];
         for (si, series) in self.series.iter().enumerate() {
             for (x, y) in series.xs.iter().zip(&series.ys) {
@@ -627,7 +724,7 @@ impl Plot {
                         (negative[c], to)
                     }
                 } else {
-                    (0.0, *y)
+                    (baseline, y.max(baseline).max(*y))
                 };
                 let offset = group * 0.14 + if self.stacked { 0.0 } else { si as f32 * slot };
                 let category = self.categories.get(c).cloned().unwrap_or_default();
@@ -636,10 +733,19 @@ impl Plot {
                     _ => format!("{category}: {}", number(*y)),
                 });
                 let (a, b) = (value_at(from), value_at(to));
+                let thickness = slot.max(1.0) - 1.0;
                 if self.horizontal {
-                    shapes.push(Shape::Rect { x: a.min(b), y: y0 + c as f32 * group + offset, w: (a - b).abs(), h: slot.max(1.0) - 1.0, paint: Paint::Series(si), tip });
+                    let row = y0 + c as f32 * group + offset;
+                    shapes.push(Shape::Rect { x: a.min(b), y: row, w: (a - b).abs(), h: thickness, paint: Paint::Series(si), tip });
+                    if self.labels {
+                        shapes.push(Self::text_shape(a.max(b) + 5.0, row + thickness / 2.0, value_text(*y), 10.5, Anchor::Start, Paint::Muted));
+                    }
                 } else {
-                    shapes.push(Shape::Rect { x: x0 + c as f32 * group + offset, y: a.min(b), w: slot.max(1.0) - 1.0, h: (a - b).abs(), paint: Paint::Series(si), tip });
+                    let column = x0 + c as f32 * group + offset;
+                    shapes.push(Shape::Rect { x: column, y: a.min(b), w: thickness, h: (a - b).abs(), paint: Paint::Series(si), tip });
+                    if self.labels {
+                        shapes.push(Self::text_shape(column + thickness / 2.0, a.min(b) - 8.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
+                    }
                 }
             }
         }

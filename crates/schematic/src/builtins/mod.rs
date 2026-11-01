@@ -13,7 +13,7 @@ mod io;
 pub mod math;
 mod plots;
 mod stats;
-mod strings;
+pub mod strings;
 mod tables;
 
 pub fn install(globals: &mut Globals) {
