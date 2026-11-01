@@ -1,0 +1,13 @@
+[package]
+name = "schematic-web"
+description = "Schematic compiled to WebAssembly for the website playground"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+schematic = { path = "../schematic" }

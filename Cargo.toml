@@ -11,3 +11,9 @@ repository = "https://github.com/collide2954/schematic"
 [profile.release]
 lto = "fat"
 codegen-units = 1
+
+[profile.web]
+inherits = "release"
+opt-level = "s"
+panic = "abort"
+strip = true
