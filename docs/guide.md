@@ -31,12 +31,20 @@ about any name with `(doc name)`, which prints its entry from the reference,
 and find names with `(apropos "chart")`.
 
 If you prefer a window, Schematic Studio (`cargo run --release -p
-schematic-studio`) puts an editor, a console, an environment pane, and a
-data viewer side by side. Ctrl+Enter in the editor runs the form under the
-cursor and moves to the next one, so you can step through a script, the
-console remembers earlier inputs for the up and down arrows, Ctrl+Space
-completes names, and F1 opens this guide and the reference in a Help tab at
-the name under the cursor.
+schematic-studio`) puts an editor, a console, an environment pane, a data
+viewer, and a plots pane side by side, each of which can be hidden or
+maximized. Ctrl+Enter in the editor runs the form under the cursor and
+moves to the next one, so you can step through a script; the console
+remembers earlier inputs for the up and down arrows; Ctrl+Space completes
+names; and F1 opens this guide and the reference in a Help tab at the name
+under the cursor. The editor indents new lines the Lisp way, closes
+brackets and quotes as you type, undoes with Ctrl+Z, comments lines with
+Ctrl+/, reindents with Ctrl+Shift+F, finds and replaces with Ctrl+F and
+Ctrl+H, and grows the selection to the enclosing form with Ctrl+Shift+Up.
+An Outline tab lists the file's definitions, the menus at the top hold
+every action with its shortcut, and Ctrl+Shift+P opens a command palette
+that runs any of them by name; typing a colon and a number there jumps to
+that line.
 
 ## Expressions
 

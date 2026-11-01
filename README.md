@@ -91,13 +91,17 @@ cargo test
 ## Schematic Studio
 
 Schematic Studio is a desktop workbench in the spirit of RStudio, built with
-Iced. Five resizable panes meet at hairlines: a script editor with tabs, line
-numbers, syntax highlighting, bracket matching, and completion; a console
-with highlighting, history, and completion; an environment table that groups
-everything you have defined into data, values, and functions, sharing its
-pane with a Files tab that browses a folder and creates, renames, and deletes
-files; a data grid with numbers right-aligned; and a plots pane that walks
+Iced. Five resizable panes meet at hairlines, and each can be hidden or
+maximized: a script editor with tabs, line numbers, syntax highlighting,
+bracket matching, completion, undo, Lisp-aware indentation, bracket and
+quote pairing, comment toggling, reindenting, find and replace, and
+selection expansion; a console with highlighting, history, and completion;
+an environment table that groups everything you have defined into data,
+values, and functions, sharing its pane with Files, Project, and Outline
+tabs; a data grid with numbers right-aligned; and a plots pane that walks
 through the session's charts, shows values on hover, and saves them as SVG.
+File, Edit, View, Run, and Help menus hold every action with its shortcut,
+and Ctrl+Shift+P opens a command palette that runs any of them by name.
 A Help tab renders the guide and the reference with search, F1 looks up
 the name under the cursor, and a Project tab creates a project in the open
 folder, adds and removes packages, and restores them. The type checker runs
