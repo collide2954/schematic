@@ -298,9 +298,11 @@ fn build(
     Ok(plot)
 }
 
+type Inputs = (Vec<Value>, Vec<Value>, Option<Vec<Value>>, Option<Vec<Value>>, Options);
+
 fn chart(name: &str, kind: Kind, args: &[Value]) -> Result<Value, Error> {
     let mut base = Plot::new(kind);
-    let (xs, ys, by, facet, options): (Vec<Value>, Vec<Value>, Option<Vec<Value>>, Option<Vec<Value>>, Options) = match &args[0] {
+    let (xs, ys, by, facet, options): Inputs = match &args[0] {
         Value::Table(table) => {
             let (x_name, xs) = column_values(name, table, args.get(1).unwrap_or(&Value::Nil))?;
             let y_key = args.get(2).ok_or_else(|| Error::new("value-error", format!("{name} expects an x and a y column")))?;

@@ -81,20 +81,18 @@ fn typed_sum(array: &Array) -> Option<(Value, usize)> {
 }
 
 fn sum(args: &[Value]) -> Result<Value, Error> {
-    if let Value::Array(a) = &args[0] {
-        if let Some((total, _)) = typed_sum(a) {
+    if let Value::Array(a) = &args[0]
+        && let Some((total, _)) = typed_sum(a) {
             return Ok(total);
         }
-    }
     numbers("sum", &args[0])?.iter().try_fold(Value::Int(0), |acc, x| binary(Intrinsic::Add, &acc, x))
 }
 
 fn mean(args: &[Value]) -> Result<Value, Error> {
-    if let Value::Array(a) = &args[0] {
-        if let Some((total, count)) = typed_sum(a) {
+    if let Value::Array(a) = &args[0]
+        && let Some((total, count)) = typed_sum(a) {
             return Ok(if count == 0 { Value::Nil } else { Value::Float(as_f64(&total) / count as f64) });
         }
-    }
     let xs = floats("mean", &args[0])?;
     if xs.is_empty() {
         return Ok(Value::Nil);

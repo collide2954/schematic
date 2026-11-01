@@ -97,14 +97,13 @@ impl<'a> Expander<'a> {
 
     fn flatten_body_form(&mut self, form: &Value, out: &mut Vec<Value>) -> Result<(), Error> {
         let expanded = self.expand_head(form)?;
-        if let Value::List(l) = &expanded {
-            if l.first().and_then(|h| self.special(h)).is_some_and(|s| &*s.name() == "begin") {
+        if let Value::List(l) = &expanded
+            && l.first().and_then(|h| self.special(h)).is_some_and(|s| &*s.name() == "begin") {
                 for inner in l.rest().iter() {
                     self.flatten_body_form(inner, out)?;
                 }
                 return Ok(());
             }
-        }
         out.push(expanded);
         Ok(())
     }

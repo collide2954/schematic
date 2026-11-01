@@ -46,9 +46,11 @@ pub enum Event {
     Environment(Vec<Binding>),
     Namespace(String),
     Grid(Grid),
-    Plot(Plot),
+    Plot(Box<Plot>),
     Finished,
 }
+
+type Row = Box<dyn Fn(usize) -> Vec<String>>;
 
 impl PartialEq for Event {
     fn eq(&self, other: &Event) -> bool {
@@ -108,7 +110,7 @@ pub fn run(mut interp: Interpreter, requests: Receiver<Request>, mut emit: impl 
                 emit(Event::Finished);
             }
             Request::Inspect { name, offset, limit } => match interp.global(&name) {
-                Some(Value::Plot(plot)) => emit(Event::Plot((**plot).clone())),
+                Some(Value::Plot(plot)) => emit(Event::Plot(Box::new((**plot).clone()))),
                 Some(value) => emit(Event::Grid(grid(&name, value, offset, limit))),
                 None => emit(Event::Error(format!("{name} is not defined"))),
             },
@@ -123,7 +125,7 @@ fn execute(interp: &mut Interpreter, source: &str, show_results: bool, emit: &mu
     };
     for form in &forms {
         match interp.eval(form) {
-            Ok(Value::Plot(plot)) => emit(Event::Plot((*plot).clone())),
+            Ok(Value::Plot(plot)) => emit(Event::Plot(Box::new((*plot).clone()))),
             Ok(Value::Nil) => {}
             Ok(value) if show_results => emit(Event::Result(value.to_string())),
             Ok(_) => {}
@@ -187,7 +189,7 @@ fn is_number(value: &Value) -> bool {
 }
 
 fn grid(name: &str, value: &Value, offset: usize, limit: usize) -> Grid {
-    let (columns, numeric, total, row): (Vec<String>, Vec<bool>, usize, Box<dyn Fn(usize) -> Vec<String>>) = match value {
+    let (columns, numeric, total, row): (Vec<String>, Vec<bool>, usize, Row) = match value {
         Value::Table(t) => {
             let mut columns = vec!["#".to_string()];
             columns.extend(t.names().iter().map(|n| n.to_string()));

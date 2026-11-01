@@ -202,9 +202,9 @@ mod tests {
 
     #[test]
     fn unclosed_forms_run_to_the_end() {
-        assert_eq!(top_level_forms("(define (f x)\n  (+ x"), [0..20]);
+        assert_eq!(top_level_forms("(define (f x)\n  (+ x"), vec![0..20; 1]);
         assert_eq!(top_level_forms("   \n; only a comment\n"), []);
-        assert_eq!(top_level_forms("\"open string"), [0..12]);
+        assert_eq!(top_level_forms("\"open string"), vec![0..12; 1]);
     }
 
     #[test]

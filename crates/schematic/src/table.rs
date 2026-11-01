@@ -29,8 +29,8 @@ impl Table {
 
     pub fn set_column(&mut self, name: Symbol, column: Rc<Array>) -> Result<(), Error> {
         let existing = self.names.iter().position(|n| *n == name);
-        if let Some((i, other)) = self.columns.iter().enumerate().find(|(i, _)| Some(*i) != existing) {
-            if other.len() != column.len() {
+        if let Some((i, other)) = self.columns.iter().enumerate().find(|(i, _)| Some(*i) != existing)
+            && other.len() != column.len() {
                 let message = format!(
                     "table columns must have the same length: :{} has {} rows but :{name} has {}",
                     self.names[i],
@@ -39,7 +39,6 @@ impl Table {
                 );
                 return Err(Error::new("value-error", message));
             }
-        }
         match existing {
             Some(i) => self.columns[i] = column,
             None => {

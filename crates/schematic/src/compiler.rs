@@ -378,11 +378,10 @@ impl<'a> Compiler<'a> {
     }
 
     fn emit(&mut self, op: Op) {
-        if let Op::Binary(kind) = op {
-            if let Some(fused) = self.fuse_binary(kind) {
+        if let Op::Binary(kind) = op
+            && let Some(fused) = self.fuse_binary(kind) {
                 return self.emit(fused);
             }
-        }
         let f = self.current();
         f.depth = (f.depth as isize + op.stack_effect()) as usize;
         f.proto.code.push(op);
@@ -727,8 +726,8 @@ impl<'a> Compiler<'a> {
 
     fn expand_body_form(&mut self, form: &Value, out: &mut Vec<Value>) -> Result<(), Error> {
         let expanded = self.expand_head(form)?;
-        if let Value::List(l) = &expanded {
-            if let Some(head) = l.first() {
+        if let Value::List(l) = &expanded
+            && let Some(head) = l.first() {
                 let special = self.is_special(head).map(|s| s.name());
                 if special.as_deref() == Some("begin") {
                     for inner in l.rest().iter() {
@@ -742,7 +741,6 @@ impl<'a> Compiler<'a> {
                     return self.expand_body_form(&rewritten, out);
                 }
             }
-        }
         out.push(expanded);
         Ok(())
     }
@@ -756,11 +754,10 @@ impl<'a> Compiler<'a> {
         let body = &body;
         let mut defined: Vec<Symbol> = Vec::new();
         for form in body.iter() {
-            if let Some(name) = self.internal_define_name(form) {
-                if !defined.contains(&name) {
+            if let Some(name) = self.internal_define_name(form)
+                && !defined.contains(&name) {
                     defined.push(name);
                 }
-            }
         }
         if defined.is_empty() {
             return self.compile_sequence(body, tail);
@@ -1146,11 +1143,10 @@ impl<'a> Compiler<'a> {
             },
             _ => None,
         };
-        if let Some(name) = defined {
-            if self.functions.len() == 1 && !self.functions[0].locals.iter().any(|l| l.name == name) {
+        if let Some(name) = defined
+            && self.functions.len() == 1 && !self.functions[0].locals.iter().any(|l| l.name == name) {
                 self.globals.define_slot(name.root());
             }
-        }
         let name = match target {
             Value::Symbol(name) => {
                 if body.len() > 1 {

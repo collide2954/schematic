@@ -379,11 +379,10 @@ fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messag
     let current = studio.current;
     let completing = studio.completion.as_ref().is_some_and(|c| c.source == Source::Editor);
     move |press| {
-        if completing {
-            if let Some(message) = completion_binding(&press) {
+        if completing
+            && let Some(message) = completion_binding(&press) {
                 return Some(Binding::Custom(message));
             }
-        }
         let command = press.modifiers.command();
         let shift = press.modifiers.shift();
         let global = match &press.key {
@@ -416,11 +415,10 @@ fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messa
         if !matches!(press.status, Status::Focused { .. }) {
             return None;
         }
-        if completing {
-            if let Some(message) = completion_binding(&press) {
+        if completing
+            && let Some(message) = completion_binding(&press) {
                 return Some(Binding::Custom(message));
             }
-        }
         let plain = !press.modifiers.shift() && !press.modifiers.command();
         match &press.key {
             Key::Named(key::Named::Enter) if plain => Some(Binding::Custom(Message::Submit)),

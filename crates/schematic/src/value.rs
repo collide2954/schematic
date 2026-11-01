@@ -15,7 +15,9 @@ use crate::vector::Vector;
 use crate::vm::{Closure, Native};
 
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub enum Value {
+    #[default]
     Nil,
     Bool(bool),
     Int(i64),
@@ -38,11 +40,6 @@ pub enum Value {
     Escape(u64),
 }
 
-impl Default for Value {
-    fn default() -> Value {
-        Value::Nil
-    }
-}
 
 impl Value {
     pub fn list(items: impl IntoIterator<Item = Value>) -> Value {
@@ -106,7 +103,7 @@ impl Value {
 }
 
 fn float_as_int(x: f64) -> Option<i64> {
-    if x.fract() == 0.0 && x >= -9.223372036854776e18 && x < 9.223372036854776e18 {
+    if x.fract() == 0.0 && (-9.223372036854776e18..9.223372036854776e18).contains(&x) {
         Some(x as i64)
     } else {
         None

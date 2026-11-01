@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn reads_floats() {
-        assert_eq!(read("3.14"), Value::Float(3.14));
+        assert_eq!(read("3.25"), Value::Float(3.25));
         assert_eq!(read("-0.5"), Value::Float(-0.5));
         assert_eq!(read("1e3"), Value::Float(1000.0));
         assert_eq!(read("2.5e-2"), Value::Float(0.025));

@@ -104,8 +104,7 @@ pub fn blocks(markdown: &str) -> Vec<Block> {
         } else if let Some(item) = list_item(line) {
             flush(&mut paragraph, &mut out);
             let mut items = vec![item.to_string()];
-            loop {
-                let Some(next) = lines.peek() else { break };
+            while let Some(&next) = lines.peek() {
                 if let Some(item) = list_item(next) {
                     items.push(item.to_string());
                 } else if next.starts_with("  ") && !next.trim().is_empty() {
@@ -172,13 +171,12 @@ pub fn inlines(text: &str) -> Vec<Inline> {
                 rest = &rest[end + 1..];
                 continue;
             }
-        } else if let Some(after) = rest.strip_prefix('*').filter(|after| !after.starts_with(' ')) {
-            if let Some(end) = after.find('*') {
+        } else if let Some(after) = rest.strip_prefix('*').filter(|after| !after.starts_with(' '))
+            && let Some(end) = after.find('*') {
                 take(&mut out, &mut plain, Inline::Italic(after[..end].to_string()));
                 rest = &after[end + 1..];
                 continue;
             }
-        }
         let c = rest.chars().next().expect("a character");
         plain.push(c);
         rest = &rest[c.len_utf8()..];

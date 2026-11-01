@@ -69,6 +69,8 @@ pub extern "C" fn alloc(len: usize) -> *mut u8 {
     pointer
 }
 
+/// # Safety
+/// `pointer` and `len` must come from `alloc`, which hands the bytes over to this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn eval(pointer: *mut u8, len: usize) -> usize {
     let source = unsafe { String::from_raw_parts(pointer, len, len) };

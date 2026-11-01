@@ -137,7 +137,7 @@ mod tests {
         assert_eq!((found[0].kind, found[0].detail.as_str()), (CandidateKind::Binding, "plot"));
         assert_eq!(found.iter().find(|c| c.name == "bar-chart").map(|c| c.kind), Some(CandidateKind::Local));
         assert!(found.len() <= LIMIT);
-        let keywords = candidates(":c", &[t.clone()], &locals);
+        let keywords = candidates(":c", std::slice::from_ref(&t), &locals);
         assert_eq!(keywords.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), [":city", ":count"]);
         assert_eq!((keywords[0].kind, keywords[0].detail.as_str()), (CandidateKind::Keyword, "column of t"));
         let broad = candidates("", &[t, bars], &locals);

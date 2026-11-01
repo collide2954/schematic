@@ -450,11 +450,10 @@ impl Studio {
         if let Some(path) = std::env::args().nth(1) {
             studio.load(PathBuf::from(path));
         }
-        if studio.root.is_none() {
-            if let Ok(dir) = std::env::current_dir() {
+        if studio.root.is_none()
+            && let Ok(dir) = std::env::current_dir() {
                 studio.set_root(dir);
             }
-        }
         studio
     }
 
@@ -477,11 +476,10 @@ impl Studio {
     fn refresh_project(&mut self) {
         let start = self.root.clone().or_else(|| self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf));
         self.project = start.as_deref().and_then(project::describe);
-        if let Some(project) = &self.project {
-            if self.picked_package.as_ref().is_some_and(|name| !project.dependencies.iter().any(|d| &d.name == name)) {
+        if let Some(project) = &self.project
+            && self.picked_package.as_ref().is_some_and(|name| !project.dependencies.iter().any(|d| &d.name == name)) {
                 self.picked_package = None;
             }
-        }
     }
 
     fn finish_project(&mut self, result: Result<(ProjectInfo, String), String>) {
@@ -938,7 +936,7 @@ impl Studio {
                 Task::none()
             }
             Event::Plot(plot) => {
-                self.plots.push(plot);
+                self.plots.push(*plot);
                 self.plot_at = self.plots.len() - 1;
                 Task::none()
             }
@@ -1183,11 +1181,10 @@ impl Studio {
         match std::fs::read_to_string(&path) {
             Ok(source) => {
                 self.status = format!("Opened {}", path.display());
-                if self.root.is_none() {
-                    if let Some(parent) = path.parent() {
+                if self.root.is_none()
+                    && let Some(parent) = path.parent() {
                         self.set_root(parent.to_path_buf());
                     }
-                }
                 if self.project.is_none() {
                     self.project = path.parent().and_then(project::describe);
                 }
@@ -1216,6 +1213,12 @@ impl Studio {
             }
             Err(e) => self.status = format!("Cannot save {}: {e}", path.display()),
         }
+    }
+}
+
+impl Default for Studio {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1555,8 +1558,8 @@ mod tests {
         let mut studio = Studio::new();
         let title = |studio: &Studio| studio.plot().and_then(|p| p.title.clone());
         assert_eq!(title(&studio), None);
-        let _ = studio.update(Message::Worker(Event::Plot(chart("one"))));
-        let _ = studio.update(Message::Worker(Event::Plot(chart("two"))));
+        let _ = studio.update(Message::Worker(Event::Plot(Box::new(chart("one")))));
+        let _ = studio.update(Message::Worker(Event::Plot(Box::new(chart("two")))));
         assert_eq!(title(&studio).as_deref(), Some("two"));
         let _ = studio.update(Message::PlotBack);
         assert_eq!(title(&studio).as_deref(), Some("one"));
@@ -1573,7 +1576,7 @@ mod tests {
     fn plots_arrive_in_their_own_pane() {
         let mut studio = Studio::new();
         assert!(studio.panes.iter().any(|(_, kind)| *kind == PaneKind::Plots));
-        let _ = studio.update(Message::Worker(Event::Plot(chart("T"))));
+        let _ = studio.update(Message::Worker(Event::Plot(Box::new(chart("T")))));
         assert_eq!(studio.plot().map(|p| p.title.clone()), Some(Some("T".to_string())));
         let _ = view::view(&studio);
         let dir = scratch("plot");

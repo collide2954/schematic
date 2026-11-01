@@ -245,7 +245,7 @@ fn conj_owned(args: &mut [Value]) -> Result<Value, Error> {
 }
 
 fn hash_map(args: &[Value]) -> Result<Value, Error> {
-    if args.len() % 2 != 0 {
+    if !args.len().is_multiple_of(2) {
         let message = format!("hash-map expects an even number of arguments, got {}", args.len());
         return Err(Error::new("arity-error", message));
     }
@@ -523,7 +523,7 @@ pub fn assoc(args: &[Value]) -> Result<Value, Error> {
 }
 
 fn assoc_owned(args: &mut [Value]) -> Result<Value, Error> {
-    if (args.len() - 1) % 2 != 0 {
+    if !(args.len() - 1).is_multiple_of(2) {
         let message = format!("assoc expects an even number of key and value arguments, got {}", args.len() - 1);
         return Err(Error::new("arity-error", message));
     }

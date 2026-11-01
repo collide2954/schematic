@@ -41,11 +41,10 @@ impl Error {
     }
 
     pub fn message(&self) -> String {
-        if let Value::Map(m) = &self.payload {
-            if let Some(Value::Str(s)) = m.get(&Value::keyword("message")) {
+        if let Value::Map(m) = &self.payload
+            && let Some(Value::Str(s)) = m.get(&Value::keyword("message")) {
                 return s.to_string();
             }
-        }
         self.payload.to_string()
     }
 }

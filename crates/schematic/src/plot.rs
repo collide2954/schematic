@@ -104,7 +104,7 @@ pub fn number(x: f64) -> String {
 }
 
 pub fn ticks(lo: f64, hi: f64, count: usize) -> (Vec<f64>, f64) {
-    if !(hi > lo) || !lo.is_finite() || !hi.is_finite() {
+    if hi.partial_cmp(&lo) != Some(std::cmp::Ordering::Greater) || !lo.is_finite() || !hi.is_finite() {
         return (vec![lo], 1.0);
     }
     let raw = (hi - lo) / count.max(1) as f64;
@@ -552,7 +552,7 @@ impl Plot {
             if i > 0 {
                 out.push('\n');
             }
-            let mut cells = vec![' '; GRID_W];
+            let mut cells = [' '; GRID_W];
             for cell in cells.iter_mut().take(col(b.high) + 1).skip(col(b.low)) {
                 *cell = '-';
             }
@@ -829,7 +829,7 @@ impl Plot {
             shapes.push(line);
         }
         shapes.push(Shape::Line { x1: x0, y1: y0, x2: x0, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
-        shapes.push(Shape::Line { x1: x0, y1: y1, x2: x1, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
+        shapes.push(Shape::Line { x1: x0, y1, x2: x1, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
         if multi {
             let mut right = x1;
             for (si, series) in self.series.iter().enumerate().rev() {
