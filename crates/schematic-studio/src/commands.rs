@@ -115,7 +115,7 @@ pub fn matching(studio: &Studio, query: &str) -> Vec<Command> {
         }];
     }
     let query = query.trim();
-    let mut found: Vec<Command> = commands(studio).into_iter().filter(|c| c.message.is_some() && subsequence(query, c.name)).collect();
+    let mut found: Vec<Command> = commands(studio).into_iter().filter(|c| subsequence(query, c.name)).collect();
     if !query.is_empty() {
         let lowered = query.to_lowercase();
         found.sort_by_key(|c| {
@@ -139,7 +139,8 @@ mod tests {
         let names: Vec<&str> = matching(&studio, "sa").iter().map(|c| c.name).collect();
         assert_eq!(&names[..2], ["Save", "Save as…"]);
         assert!(names.contains(&"Files tab") && !names.contains(&"Expand selection"));
-        assert_eq!(matching(&studio, "").len(), commands(&studio).iter().filter(|c| c.message.is_some()).count());
+        assert_eq!(matching(&studio, "").len(), commands(&studio).len());
+        assert!(matching(&studio, "run file")[0].message.is_none(), "disabled commands stay listed");
         assert!(matches!(matching(&studio, ":12")[0].message, Some(Message::JumpToLine(12))));
         assert_eq!(matching(&studio, ":x")[0].name, "Type a line number");
         assert!(matching(&studio, ":x")[0].message.is_none());

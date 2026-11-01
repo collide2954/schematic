@@ -152,8 +152,9 @@ fn palette_layer<'a>(studio: &'a Studio, palette: &'a Palette) -> Element<'a, Me
         .width(Length::Fill);
     let mut list = Column::new().width(Length::Fill);
     for (index, command) in found.iter().enumerate().take(12) {
+        let label: TextStyle = if command.message.is_some() { theme::strong } else { theme::faint };
         let content = row![
-            text(command.name).size(13).style(theme::strong),
+            text(command.name).size(13).style(label),
             space::horizontal(),
             text(command.keys).size(11.5).style(theme::faint),
         ]
