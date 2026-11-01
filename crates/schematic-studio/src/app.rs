@@ -82,7 +82,8 @@ pub struct Studio {
     pub draft: String,
     pub bindings: Vec<Binding>,
     pub grid: Option<Grid>,
-    pub plot: Option<Plot>,
+    pub plots: Vec<Plot>,
+    pub plot_at: usize,
     pub worker: Option<Sender<Request>>,
     pub interrupt: Option<Arc<AtomicBool>>,
     pub running: bool,
@@ -113,6 +114,8 @@ pub enum Message {
     Page(i64),
     SavePlot,
     SavePlotTo(Option<PathBuf>),
+    PlotBack,
+    PlotForward,
     PaneResized(pane_grid::ResizeEvent),
     PaneDragged(pane_grid::DragEvent),
     ToggleTheme,
@@ -216,7 +219,8 @@ impl Studio {
             draft: String::new(),
             bindings: Vec::new(),
             grid: None,
-            plot: None,
+            plots: Vec::new(),
+            plot_at: 0,
             worker: None,
             interrupt: None,
             running: false,
@@ -260,6 +264,10 @@ impl Studio {
                 (!members.is_empty()).then_some((group, members))
             })
             .collect()
+    }
+
+    pub fn plot(&self) -> Option<&Plot> {
+        self.plots.get(self.plot_at)
     }
 
     pub fn cursor(&self) -> (usize, usize) {
@@ -353,12 +361,20 @@ impl Studio {
             }
             Message::SavePlot => Task::perform(save_svg(), Message::SavePlotTo),
             Message::SavePlotTo(path) => {
-                if let (Some(path), Some(plot)) = (path, &self.plot) {
+                if let (Some(path), Some(plot)) = (path, self.plot()) {
                     self.status = match std::fs::write(&path, plot.svg()) {
                         Ok(()) => format!("Saved {}", path.display()),
                         Err(e) => format!("Cannot save {}: {e}", path.display()),
                     };
                 }
+                Task::none()
+            }
+            Message::PlotBack => {
+                self.plot_at = self.plot_at.saturating_sub(1);
+                Task::none()
+            }
+            Message::PlotForward => {
+                self.plot_at = (self.plot_at + 1).min(self.plots.len().saturating_sub(1));
                 Task::none()
             }
             Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
@@ -400,7 +416,8 @@ impl Studio {
                 Task::none()
             }
             Event::Plot(plot) => {
-                self.plot = Some(plot);
+                self.plots.push(plot);
+                self.plot_at = self.plots.len() - 1;
                 Task::none()
             }
             Event::Finished => {
@@ -687,14 +704,38 @@ mod tests {
         assert_eq!(studio.input.text(), "(dra");
     }
 
+    fn chart(title: &str) -> Plot {
+        let source = format!("(bar-chart [\"a\" \"b\"] [1 2] {{:title \"{title}\"}})");
+        let value = schematic::Interpreter::new().eval_str(&source).unwrap();
+        let schematic::Value::Plot(plot) = value else { panic!("{value}") };
+        (*plot).clone()
+    }
+
+    #[test]
+    fn plots_keep_a_history_you_can_walk() {
+        let mut studio = Studio::new();
+        let title = |studio: &Studio| studio.plot().and_then(|p| p.title.clone());
+        assert_eq!(title(&studio), None);
+        let _ = studio.update(Message::Worker(Event::Plot(chart("one"))));
+        let _ = studio.update(Message::Worker(Event::Plot(chart("two"))));
+        assert_eq!(title(&studio).as_deref(), Some("two"));
+        let _ = studio.update(Message::PlotBack);
+        assert_eq!(title(&studio).as_deref(), Some("one"));
+        let _ = studio.update(Message::PlotBack);
+        assert_eq!(title(&studio).as_deref(), Some("one"));
+        let _ = studio.update(Message::PlotForward);
+        assert_eq!(title(&studio).as_deref(), Some("two"));
+        let _ = studio.update(Message::PlotForward);
+        assert_eq!((studio.plots.len(), studio.plot_at), (2, 1));
+        let _ = view::view(&studio);
+    }
+
     #[test]
     fn plots_arrive_in_their_own_pane() {
         let mut studio = Studio::new();
         assert!(studio.panes.iter().any(|(_, kind)| *kind == PaneKind::Plots));
-        let value = schematic::Interpreter::new().eval_str("(bar-chart [\"a\" \"b\"] [1 2] {:title \"T\"})").unwrap();
-        let schematic::Value::Plot(plot) = value else { panic!("{value}") };
-        let _ = studio.update(Message::Worker(Event::Plot((*plot).clone())));
-        assert_eq!(studio.plot.as_ref().map(|p| p.title.clone()), Some(Some("T".to_string())));
+        let _ = studio.update(Message::Worker(Event::Plot(chart("T"))));
+        assert_eq!(studio.plot().map(|p| p.title.clone()), Some(Some("T".to_string())));
         let _ = view::view(&studio);
         let dir = std::env::temp_dir().join(format!("studio-plot-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

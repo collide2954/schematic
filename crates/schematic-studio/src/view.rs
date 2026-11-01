@@ -28,10 +28,9 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
                     ("Data", grid.map(|g| g.name.clone()), grid.map(pager), viewer(studio))
                 }
                 PaneKind::Plots => {
-                    let plot = studio.plot.as_ref();
+                    let plot = studio.plot();
                     let detail = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
-                    let save = small("Save as SVG", plot.map(|_| Message::SavePlot));
-                    ("Plots", detail, Some(save), plots(studio))
+                    ("Plots", detail, Some(plot_controls(studio)), plots(studio))
                 }
             };
         let bar = pane_grid::TitleBar::new(strip(name, detail, controls)).style(theme::strip);
@@ -314,8 +313,21 @@ fn viewer(studio: &Studio) -> Element<'_, Message> {
     scrollable(body).direction(both).width(Length::Fill).height(Length::Fill).style(theme::scroll).into()
 }
 
+fn plot_controls(studio: &Studio) -> Element<'_, Message> {
+    let count = studio.plots.len();
+    let save = small("Save as SVG", studio.plot().map(|_| Message::SavePlot));
+    if count < 2 {
+        return save;
+    }
+    let position = text(format!("{} of {count}", studio.plot_at + 1)).size(12).style(theme::muted);
+    let back = button(text("‹").size(15)).padding([0, 8]).style(theme::ghost).on_press_maybe((studio.plot_at > 0).then_some(Message::PlotBack));
+    let forward = button(text("›").size(15)).padding([0, 8]).style(theme::ghost);
+    let forward = forward.on_press_maybe((studio.plot_at + 1 < count).then_some(Message::PlotForward));
+    row![position, back, forward, save].spacing(4).align_y(Alignment::Center).into()
+}
+
 fn plots(studio: &Studio) -> Element<'_, Message> {
-    match &studio.plot {
+    match studio.plot() {
         Some(plot) => canvas(Chart { plot }).width(Length::Fill).height(Length::Fill).into(),
         None => hint("Charts appear here. Try (bar-chart t :city :total) or (histogram (:amount t))."),
     }
