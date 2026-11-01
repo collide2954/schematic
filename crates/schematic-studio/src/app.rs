@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,6 +17,7 @@ use crate::commands::{self, Menu};
 use crate::completion::{self, Candidate};
 use crate::highlight::Marks;
 use crate::chart::PlotView;
+use crate::notebook::{self, CellText, Kind, Output};
 use crate::settings::{self, Settings};
 use crate::project::{self, ProjectInfo};
 use crate::worker::{self, Binding, Event, Grid, Request, Watched};
@@ -246,12 +247,85 @@ pub struct Document {
     pub found: Vec<(usize, usize)>,
     pub modified: Option<std::time::SystemTime>,
     pub stale: bool,
+    pub notebook: Option<Notebook>,
+}
+
+pub struct Cell {
+    pub id: u64,
+    pub kind: Kind,
+    pub content: text_editor::Content,
+    pub marks: Marks,
+    pub editing: bool,
+    pub outputs: Vec<Output>,
+    pub running: bool,
+    pub elapsed: Option<u128>,
+}
+
+impl Cell {
+    pub fn new(text: CellText, outputs: Vec<Output>) -> Cell {
+        let content = text_editor::Content::with_text(&text.source);
+        let marks = if text.kind == Kind::Code { marks_of(&content) } else { Marks::default() };
+        Cell { id: DOCUMENT_IDS.fetch_add(1, Ordering::Relaxed), kind: text.kind, content, marks, editing: false, outputs, running: false, elapsed: None }
+    }
+
+    pub fn text(&self) -> CellText {
+        CellText { kind: self.kind, source: self.content.text().trim_end_matches('\n').to_string() }
+    }
+}
+
+pub struct Notebook {
+    pub cells: Vec<Cell>,
+    pub focused: usize,
+}
+
+impl Notebook {
+    pub fn from_text(text: &str, mut outputs: Vec<Vec<Output>>) -> Notebook {
+        let mut texts = notebook::parse(text);
+        if texts.is_empty() {
+            texts = notebook::fresh();
+        }
+        outputs.resize(texts.len(), Vec::new());
+        let cells = texts.into_iter().zip(outputs).map(|(text, outputs)| Cell::new(text, outputs)).collect();
+        Notebook { cells, focused: 0 }
+    }
+
+    pub fn texts(&self) -> Vec<CellText> {
+        self.cells.iter().map(Cell::text).collect()
+    }
+
+    pub fn outputs(&self) -> Vec<Vec<Output>> {
+        self.cells.iter().map(|c| c.outputs.clone()).collect()
+    }
+
+    pub fn source(&self) -> String {
+        notebook::render(&self.texts())
+    }
 }
 
 static DOCUMENT_IDS: AtomicU64 = AtomicU64::new(1);
 
 fn modified_at(path: &Path) -> Option<std::time::SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+pub fn csv_name(path: &Path) -> String {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let mut name = String::new();
+    for c in stem.chars() {
+        if c.is_ascii_alphanumeric() {
+            name.push(c);
+        } else if !name.is_empty() && !name.ends_with('-') {
+            name.push('-');
+        }
+    }
+    let name = name.trim_end_matches('-');
+    if name.is_empty() {
+        "data".to_string()
+    } else if name.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("data-{name}")
+    } else {
+        name.to_string()
+    }
 }
 
 impl Document {
@@ -273,6 +347,20 @@ impl Document {
             found: Vec::new(),
             modified,
             stale: false,
+            notebook: None,
+        }
+    }
+
+    pub fn with_notebook(path: Option<PathBuf>, source: &str, outputs: Vec<Vec<Output>>) -> Document {
+        let mut doc = Document::new(path, text_editor::Content::with_text(source));
+        doc.notebook = Some(Notebook::from_text(source, outputs));
+        doc
+    }
+
+    fn sync_notebook(&mut self) {
+        if let Some(nb) = &self.notebook {
+            self.content = text_editor::Content::with_text(&nb.source());
+            self.dirty = true;
         }
     }
 
@@ -401,6 +489,10 @@ pub struct Studio {
     pub plots: Vec<Plot>,
     pub plot_at: usize,
     pub plot_view: PlotView,
+    pub tags: HashMap<u64, (u64, u64)>,
+    pub next_tag: u64,
+    pub active_run: Option<u64>,
+    pub runs: usize,
     pub worker: Option<Sender<Request>>,
     pub interrupt: Option<Arc<AtomicBool>>,
     pub running: bool,
@@ -540,6 +632,24 @@ pub enum Message {
     PlotReset,
     PlotSelect(usize),
     CopyPlot,
+    NewNotebook,
+    CellEdit(usize, Action),
+    RunCell(usize),
+    RunCellAndAdvance(usize),
+    RunAllCells,
+    AddCell(usize, Kind),
+    DeleteCell(usize),
+    MoveCell(usize, i32),
+    ToggleCellKind(usize),
+    EditText(usize),
+    DoneText(usize),
+    ClearOutputs,
+    ExportNotebook,
+    ExportNotebookTo(Option<PathBuf>),
+    ImportCsv,
+    ImportCsvFrom(Option<PathBuf>),
+    DescribeBinding(String),
+    WatchBinding(String),
 }
 
 pub fn console_find_id() -> Id {
@@ -682,6 +792,7 @@ pub enum Shortcut {
     SaveAs,
     Open,
     New,
+    NewNotebook,
     Close,
     Palette,
     GoToLine,
@@ -699,6 +810,7 @@ pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifie
     let shift = modifiers.shift();
     let letter = |wanted: &str| matches!(key, Key::Character(c) if c.eq_ignore_ascii_case(wanted));
     Some(match key {
+        _ if command && shift && letter("n") => Shortcut::NewNotebook,
         Key::Named(Named::Escape) => Shortcut::Escape,
         Key::Named(Named::ArrowUp) if !command && !shift => Shortcut::Up,
         Key::Named(Named::ArrowDown) if !command && !shift => Shortcut::Down,
@@ -781,6 +893,25 @@ async fn save_svg() -> Option<PathBuf> {
 
 async fn pick_folder() -> Option<PathBuf> {
     let handle = rfd::AsyncFileDialog::new().set_title("Open a folder").pick_folder().await?;
+    Some(handle.path().to_path_buf())
+}
+
+async fn pick_csv() -> Option<PathBuf> {
+    let handle = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).set_title("Import a CSV file").pick_file().await?;
+    Some(handle.path().to_path_buf())
+}
+
+async fn export_notebook(current: Option<PathBuf>) -> Option<PathBuf> {
+    let stem = current.as_deref().and_then(Path::file_stem).map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "notebook".to_string());
+    let mut dialog = rfd::AsyncFileDialog::new()
+        .add_filter("HTML page", &["html"])
+        .add_filter("Markdown", &["md"])
+        .set_file_name(format!("{stem}.html"))
+        .set_title("Export the notebook as");
+    if let Some(dir) = current.as_deref().and_then(Path::parent) {
+        dialog = dialog.set_directory(dir);
+    }
+    let handle = dialog.save_file().await?;
     Some(handle.path().to_path_buf())
 }
 
@@ -940,6 +1071,10 @@ impl Studio {
             plots: Vec::new(),
             plot_at: 0,
             plot_view: PlotView::default(),
+            tags: HashMap::new(),
+            next_tag: 0,
+            active_run: None,
+            runs: 0,
             worker: None,
             interrupt: None,
             running: false,
@@ -1226,10 +1361,13 @@ impl Studio {
     fn reload(&mut self, i: usize) -> bool {
         let Some(path) = self.docs.get(i).and_then(|d| d.path.clone()) else { return false };
         let Ok(source) = std::fs::read_to_string(&path) else { return false };
+        let source = source.replace("\r\n", "\n");
+        let outputs = notebook::is_notebook(&source).then(|| std::fs::read_to_string(notebook::sidecar(&path)).map(|text| notebook::parse_outputs(&text)).unwrap_or_default());
         let doc = &mut self.docs[i];
         let cursor = doc.content.cursor();
-        doc.content = text_editor::Content::with_text(&source.replace("\r\n", "\n"));
+        doc.content = text_editor::Content::with_text(&source);
         doc.content.move_to(cursor);
+        doc.notebook = outputs.map(|outputs| Notebook::from_text(&source, outputs));
         doc.dirty = false;
         doc.stale = false;
         doc.modified = modified_at(&path);
@@ -1689,6 +1827,159 @@ impl Studio {
                 }
                 None => Task::none(),
             },
+            Message::NewNotebook => {
+                let cells = notebook::fresh();
+                self.docs.push(Document::with_notebook(None, &notebook::render(&cells), Vec::new()));
+                self.select(self.docs.len() - 1)
+            }
+            Message::CellEdit(i, action) => {
+                let edit = action.is_edit();
+                let doc = self.doc_mut();
+                let Some(nb) = &mut doc.notebook else { return Task::none() };
+                let Some(cell) = nb.cells.get_mut(i) else { return Task::none() };
+                nb.focused = i;
+                cell.content.perform(action);
+                if cell.kind == Kind::Code {
+                    cell.marks = marks_of(&cell.content);
+                }
+                if edit {
+                    doc.sync_notebook();
+                    return self.schedule_check();
+                }
+                Task::none()
+            }
+            Message::RunCell(i) => self.run_cell(i),
+            Message::RunCellAndAdvance(i) => {
+                let task = self.run_cell(i);
+                let doc = self.doc_mut();
+                let mut pushed = false;
+                if let Some(nb) = &mut doc.notebook {
+                    if i + 1 >= nb.cells.len() {
+                        nb.cells.push(Cell::new(CellText { kind: Kind::Code, source: String::new() }, Vec::new()));
+                        pushed = true;
+                    }
+                    nb.focused = (i + 1).min(nb.cells.len() - 1);
+                }
+                if pushed {
+                    doc.sync_notebook();
+                }
+                task
+            }
+            Message::RunAllCells => {
+                let indexes: Vec<usize> = match &self.doc().notebook {
+                    Some(nb) => nb.cells.iter().enumerate().filter(|(_, c)| c.kind == Kind::Code).map(|(i, _)| i).collect(),
+                    None => Vec::new(),
+                };
+                let tasks: Vec<Task<Message>> = indexes.into_iter().map(|i| self.run_cell(i)).collect();
+                Task::batch(tasks)
+            }
+            Message::AddCell(at, kind) => {
+                let doc = self.doc_mut();
+                let Some(nb) = &mut doc.notebook else { return Task::none() };
+                let at = at.min(nb.cells.len());
+                let mut cell = Cell::new(CellText { kind, source: String::new() }, Vec::new());
+                cell.editing = kind == Kind::Text;
+                nb.cells.insert(at, cell);
+                nb.focused = at;
+                doc.sync_notebook();
+                Task::none()
+            }
+            Message::DeleteCell(i) => {
+                let doc = self.doc_mut();
+                let Some(nb) = &mut doc.notebook else { return Task::none() };
+                if nb.cells.len() > 1 && i < nb.cells.len() {
+                    nb.cells.remove(i);
+                    nb.focused = nb.focused.min(nb.cells.len() - 1);
+                    doc.sync_notebook();
+                }
+                Task::none()
+            }
+            Message::MoveCell(i, delta) => {
+                let doc = self.doc_mut();
+                let Some(nb) = &mut doc.notebook else { return Task::none() };
+                let target = i as i64 + i64::from(delta);
+                if i < nb.cells.len() && target >= 0 && (target as usize) < nb.cells.len() {
+                    nb.cells.swap(i, target as usize);
+                    nb.focused = target as usize;
+                    doc.sync_notebook();
+                }
+                Task::none()
+            }
+            Message::ToggleCellKind(i) => {
+                let doc = self.doc_mut();
+                let Some(nb) = &mut doc.notebook else { return Task::none() };
+                if let Some(cell) = nb.cells.get_mut(i) {
+                    cell.kind = if cell.kind == Kind::Code { Kind::Text } else { Kind::Code };
+                    cell.editing = false;
+                    cell.outputs.clear();
+                    cell.marks = if cell.kind == Kind::Code { marks_of(&cell.content) } else { Marks::default() };
+                    doc.sync_notebook();
+                }
+                Task::none()
+            }
+            Message::EditText(i) => {
+                if let Some(nb) = &mut self.doc_mut().notebook
+                    && let Some(cell) = nb.cells.get_mut(i) {
+                        cell.editing = true;
+                        nb.focused = i;
+                    }
+                Task::none()
+            }
+            Message::DoneText(i) => {
+                if let Some(cell) = self.doc_mut().notebook.as_mut().and_then(|nb| nb.cells.get_mut(i)) {
+                    cell.editing = false;
+                }
+                Task::none()
+            }
+            Message::ClearOutputs => {
+                let doc = self.doc_mut();
+                if let Some(nb) = &mut doc.notebook {
+                    for cell in &mut nb.cells {
+                        cell.outputs.clear();
+                        cell.elapsed = None;
+                    }
+                    doc.dirty = true;
+                }
+                Task::none()
+            }
+            Message::ExportNotebook => Task::perform(export_notebook(self.doc().path.clone()), Message::ExportNotebookTo),
+            Message::ExportNotebookTo(path) => {
+                let (Some(path), Some(nb)) = (path, &self.doc().notebook) else { return Task::none() };
+                let (cells, outputs) = (nb.texts(), nb.outputs());
+                let title = self.doc().path.as_deref().and_then(Path::file_stem).map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Notebook".to_string());
+                let markdown = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("md"));
+                let text = if markdown { notebook::to_markdown(&cells, &outputs) } else { notebook::to_html(&title, &cells, &outputs) };
+                self.status = match std::fs::write(&path, text) {
+                    Ok(()) => format!("Exported {}", path.display()),
+                    Err(e) => format!("Cannot export {}: {e}", path.display()),
+                };
+                Task::none()
+            }
+            Message::ImportCsv => Task::perform(pick_csv(), Message::ImportCsvFrom),
+            Message::ImportCsvFrom(path) => {
+                let Some(path) = path else { return Task::none() };
+                let name = csv_name(&path);
+                let shown = path.to_string_lossy().replace('\\', "/").replace('"', "\\\"");
+                let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.note(&format!("Importing {file} as {name}"));
+                let run = self.run(format!("(define {name} (read-csv \"{shown}\"))"), false);
+                let inspect = self.inspect(name, 0);
+                self.side = Side::Environment;
+                Task::batch([run, inspect])
+            }
+            Message::DescribeBinding(name) => {
+                let source = format!("(describe {name})");
+                let echo = self.echo(&source);
+                Task::batch([echo, self.run(source, true)])
+            }
+            Message::WatchBinding(name) => {
+                if !self.watches.contains(&name) {
+                    self.watches.push(name);
+                    self.send_watches();
+                }
+                self.side = Side::Watch;
+                Task::none()
+            }
             Message::NewProject => Task::perform(pick_folder(), Message::NewProjectIn),
             Message::NewProjectIn(parent) => {
                 let Some(parent) = parent else { return Task::none() };
@@ -1956,6 +2247,7 @@ impl Studio {
                 Task::none()
             }
             Message::RunForm => self.run_form(),
+            Message::RunFile if self.doc().notebook.is_some() => self.update(Message::RunAllCells),
             Message::RunFile => {
                 let source = self.doc().content.text();
                 self.note(&format!("Running {}", self.file_name()));
@@ -2036,11 +2328,36 @@ impl Studio {
                 self.status = "Ready".to_string();
                 Task::none()
             }
-            Event::Output(text) => self.push(LineKind::Output, text),
-            Event::Result(text) => self.push(LineKind::Result, text),
+            Event::Started(tag) => {
+                self.active_run = Some(tag);
+                Task::none()
+            }
+            Event::Output(text) => match self.active_cell() {
+                Some(cell) => {
+                    match cell.outputs.last_mut() {
+                        Some(Output::Printed(last)) => last.push_str(&text),
+                        _ => cell.outputs.push(Output::Printed(text)),
+                    }
+                    Task::none()
+                }
+                None => self.push(LineKind::Output, text),
+            },
+            Event::Result(text) => match self.active_cell() {
+                Some(cell) => {
+                    cell.outputs.push(Output::Result(text));
+                    Task::none()
+                }
+                None => self.push(LineKind::Result, text),
+            },
             Event::Error(text) => {
                 self.status = format!("Error: {text}");
-                self.push(LineKind::Error, text)
+                match self.active_cell() {
+                    Some(cell) => {
+                        cell.outputs.push(Output::Error(text));
+                        Task::none()
+                    }
+                    None => self.push(LineKind::Error, text),
+                }
             }
             Event::Environment(bindings) => {
                 self.bindings = bindings;
@@ -2062,6 +2379,9 @@ impl Studio {
                 Task::none()
             }
             Event::Plot(plot) => {
+                if let Some(cell) = self.active_cell() {
+                    cell.outputs.push(Output::Chart(plot.clone()));
+                }
                 self.plots.push(*plot);
                 self.plot_at = self.plots.len() - 1;
                 self.plot_view = PlotView::default();
@@ -2082,15 +2402,29 @@ impl Studio {
             Event::Restarted(flag) => {
                 self.interrupt = Some(flag);
                 self.namespace = "user".to_string();
+                self.tags.clear();
+                self.active_run = None;
+                self.runs = 0;
+                self.running = false;
+                for cell in self.docs.iter_mut().filter_map(|d| d.notebook.as_mut()).flat_map(|nb| nb.cells.iter_mut()) {
+                    cell.running = false;
+                }
                 self.status = "Ready".to_string();
                 self.note("Interpreter restarted.");
                 operation::snap_to(console_id(), RelativeOffset::END)
             }
             Event::Finished(elapsed) => {
-                self.running = false;
+                self.runs = self.runs.saturating_sub(1);
+                self.running = self.runs > 0;
+                if let Some(tag) = self.active_run.take()
+                    && let Some((doc_id, cell_id)) = self.tags.remove(&tag)
+                    && let Some(cell) = self.cell_mut(doc_id, cell_id) {
+                        cell.running = false;
+                        cell.elapsed = Some(elapsed);
+                    }
                 self.last_run = Some(elapsed);
                 if !self.status.starts_with("Error") {
-                    self.status = format!("Ready · {}", duration(elapsed));
+                    self.status = if self.running { "Running".to_string() } else { format!("Ready · {}", duration(elapsed)) };
                 }
                 Task::none()
             }
@@ -2110,16 +2444,54 @@ impl Studio {
     }
 
     fn run(&mut self, source: String, show_results: bool) -> Task<Message> {
-        let Some(worker) = &self.worker else {
+        self.run_tagged(source, show_results, None)
+    }
+
+    fn run_tagged(&mut self, source: String, show_results: bool, cell: Option<(u64, u64)>) -> Task<Message> {
+        let Some(worker) = self.worker.clone() else {
             self.status = "The interpreter is still starting".to_string();
             return Task::none();
         };
+        self.next_tag += 1;
+        let tag = self.next_tag;
+        if let Some(cell) = cell {
+            self.tags.insert(tag, cell);
+        }
+        self.runs += 1;
         self.running = true;
         self.status = "Running".to_string();
         let load_path = self.load_path();
         let watches = self.watches.clone();
-        let _ = worker.send(Request::Run { source, show_results, load_path, watches });
+        let _ = worker.send(Request::Run { tag, source, show_results, load_path, watches });
         Task::none()
+    }
+
+    fn cell_mut(&mut self, doc_id: u64, cell_id: u64) -> Option<&mut Cell> {
+        self.docs.iter_mut().find(|d| d.id == doc_id)?.notebook.as_mut()?.cells.iter_mut().find(|c| c.id == cell_id)
+    }
+
+    fn active_cell(&mut self) -> Option<&mut Cell> {
+        let (doc_id, cell_id) = *self.tags.get(&self.active_run?)?;
+        self.cell_mut(doc_id, cell_id)
+    }
+
+    fn run_cell(&mut self, i: usize) -> Task<Message> {
+        if self.worker.is_none() {
+            self.status = "The interpreter is still starting".to_string();
+            return Task::none();
+        }
+        let doc_id = self.doc().id;
+        let Some(nb) = &mut self.doc_mut().notebook else { return Task::none() };
+        let Some(cell) = nb.cells.get_mut(i) else { return Task::none() };
+        if cell.kind != Kind::Code {
+            return Task::none();
+        }
+        cell.outputs.clear();
+        cell.running = true;
+        cell.elapsed = None;
+        let (cell_id, source) = (cell.id, cell.content.text());
+        nb.focused = i;
+        self.run_tagged(source, true, Some((doc_id, cell_id)))
     }
 
     fn evaluate(&mut self, source: String, label: String) -> Task<Message> {
@@ -2255,6 +2627,10 @@ impl Studio {
     }
 
     fn run_form(&mut self) -> Task<Message> {
+        if let Some(nb) = &self.doc().notebook {
+            let focused = nb.focused;
+            return self.run_cell(focused);
+        }
         if let Some(selection) = self.doc().content.selection() {
             let echo = self.echo(&selection);
             return Task::batch([echo, self.run(selection, true)]);
@@ -2347,6 +2723,7 @@ impl Studio {
             Shortcut::SaveAs => self.update(Message::SaveAs),
             Shortcut::Open => self.update(Message::Open),
             Shortcut::New => self.update(Message::NewFile),
+            Shortcut::NewNotebook => self.update(Message::NewNotebook),
             Shortcut::Close => self.update(Message::CloseTab(Tab::Doc(self.current))),
             Shortcut::Pane(1) => operation::focus(editor_text_id()),
             Shortcut::Pane(2) => operation::focus(console_text_id()),
@@ -2574,8 +2951,13 @@ impl Studio {
                 if self.project.is_none() {
                     self.project = path.parent().and_then(project::describe);
                 }
-                let content = text_editor::Content::with_text(&source.replace("\r\n", "\n"));
-                let doc = Document::new(Some(path), content);
+                let source = source.replace("\r\n", "\n");
+                let doc = if notebook::is_notebook(&source) {
+                    let outputs = std::fs::read_to_string(notebook::sidecar(&path)).map(|text| notebook::parse_outputs(&text)).unwrap_or_default();
+                    Document::with_notebook(Some(path), &source, outputs)
+                } else {
+                    Document::new(Some(path), text_editor::Content::with_text(&source))
+                };
                 if self.doc().blank() {
                     self.docs[self.current] = doc;
                 } else {
@@ -2601,6 +2983,15 @@ impl Studio {
                 doc.stale = false;
                 doc.modified = modified_at(&path);
                 doc.path = Some(path.clone());
+                if let Some(nb) = &doc.notebook {
+                    let outputs = nb.outputs();
+                    let sidecar = notebook::sidecar(&path);
+                    if outputs.iter().any(|o| !o.is_empty()) {
+                        let _ = std::fs::write(&sidecar, notebook::render_outputs(&outputs));
+                    } else if sidecar.exists() {
+                        let _ = std::fs::remove_file(&sidecar);
+                    }
+                }
                 self.status = format!("Saved {}", path.display());
                 settings::remember(&mut self.recent, &path);
                 self.refresh_files();
@@ -3386,5 +3777,75 @@ mod tests {
         assert_eq!((studio.plot_at, studio.plot_view), (1, PlotView::default()));
         let _ = studio.update(Message::CopyPlot);
         assert_eq!(studio.status, "Copied the chart as SVG");
+    }
+
+    #[test]
+    fn notebooks_split_into_cells_and_route_runs_to_them() {
+        let dir = scratch("notebook");
+        let path = dir.join("book.scm");
+        std::fs::write(&path, ";; %% text\n;; # Hello\n\n;; %%\n(+ 1 2)\n\n;; %%\n(println \"hi\")\n").unwrap();
+        std::fs::write(notebook::sidecar(&path), "[[] [{:kind :result :text \"3\"}] []]\n").unwrap();
+        let mut studio = Studio::new();
+        let _ = studio.update(Message::Opened(Some(path.clone())));
+        let nb = studio.doc().notebook.as_ref().unwrap();
+        assert_eq!(nb.cells.len(), 3);
+        assert_eq!((nb.cells[0].kind, nb.cells[1].kind), (Kind::Text, Kind::Code));
+        assert_eq!(nb.cells[1].outputs, vec![Output::Result("3".into())]);
+        let (doc_id, cell_id) = (studio.doc().id, nb.cells[2].id);
+        let _ = view::view(&studio);
+        studio.tags.insert(9, (doc_id, cell_id));
+        studio.runs = 1;
+        let _ = studio.update(Message::Worker(Event::Started(9)));
+        let _ = studio.update(Message::Worker(Event::Output("hi".into())));
+        let _ = studio.update(Message::Worker(Event::Output("\n".into())));
+        let _ = studio.update(Message::Worker(Event::Result("done".into())));
+        let _ = studio.update(Message::Worker(Event::Finished(5)));
+        let cell = &studio.doc().notebook.as_ref().unwrap().cells[2];
+        assert_eq!(cell.outputs, vec![Output::Printed("hi\n".into()), Output::Result("done".into())]);
+        assert_eq!((cell.running, cell.elapsed), (false, Some(5)));
+        assert!(studio.console.is_empty() && !studio.running && studio.tags.is_empty());
+        let _ = studio.update(Message::Worker(Event::Output("plain".into())));
+        assert_eq!(studio.console.last().map(|l| l.text.clone()), Some("plain".into()));
+        let _ = studio.update(Message::CellEdit(1, text_editor::Action::Move(text_editor::Motion::DocumentEnd)));
+        let _ = studio.update(Message::CellEdit(1, text_editor::Action::Edit(text_editor::Edit::Insert('!'))));
+        assert!(studio.doc().dirty && studio.doc().content.text().contains("(+ 1 2)!"));
+        let _ = studio.update(Message::AddCell(1, Kind::Text));
+        let _ = studio.update(Message::MoveCell(1, 1));
+        let _ = studio.update(Message::DeleteCell(2));
+        let kinds: Vec<Kind> = studio.doc().notebook.as_ref().unwrap().cells.iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, [Kind::Text, Kind::Code, Kind::Code]);
+        let _ = studio.update(Message::Save);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.starts_with(";; %% text\n;; # Hello\n\n;; %%\n(+ 1 2)!\n"), "{saved}");
+        let out = std::fs::read_to_string(notebook::sidecar(&path)).unwrap();
+        assert!(out.contains(":text \"hi\\n\"") && out.contains(":text \"done\""), "{out}");
+        let html = dir.join("book.html");
+        let _ = studio.update(Message::ExportNotebookTo(Some(html.clone())));
+        assert!(std::fs::read_to_string(&html).unwrap().contains("<h1>Hello</h1>"));
+        let md = dir.join("book.md");
+        let _ = studio.update(Message::ExportNotebookTo(Some(md.clone())));
+        assert!(std::fs::read_to_string(&md).unwrap().starts_with("# Hello\n\n```scheme\n(+ 1 2)!\n```"));
+        let _ = studio.update(Message::ClearOutputs);
+        assert!(studio.doc().notebook.as_ref().unwrap().cells.iter().all(|c| c.outputs.is_empty()) && studio.doc().dirty);
+        let _ = studio.update(Message::Save);
+        assert!(!notebook::sidecar(&path).exists(), "an empty sidecar is removed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn new_notebooks_start_with_a_title_and_an_empty_cell() {
+        let mut studio = Studio::new();
+        let _ = studio.update(Message::NewNotebook);
+        assert_eq!(studio.doc().notebook.as_ref().map(|nb| nb.cells.len()), Some(2));
+        assert_eq!(studio.doc().content.text().trim_end(), ";; %% text\n;; # Untitled\n\n;; %%");
+        let _ = studio.update(Message::RunCellAndAdvance(1));
+        assert!(studio.status.contains("still starting"));
+        let _ = studio.update(Message::ToggleCellKind(0));
+        assert_eq!(studio.doc().notebook.as_ref().unwrap().cells[0].kind, Kind::Code);
+        let _ = view::view(&studio);
+        assert!(commands::commands(&studio).iter().any(|c| c.name == "Run all cells"));
+        assert_eq!(csv_name(Path::new("C:/x/Sales Data 2024.csv")), "sales-data-2024");
+        assert_eq!(csv_name(Path::new("2024.csv")), "data-2024");
+        assert_eq!(csv_name(Path::new("---.csv")), "data");
     }
 }

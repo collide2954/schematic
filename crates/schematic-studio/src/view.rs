@@ -12,9 +12,10 @@ use iced::{Alignment, Color, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
-    EDITOR_PAD, Find, LineKind, Message, NamingKind, PAGE, Page, Palette, PaneKind, Side, Source, Studio, Tab, console_find_id,
-    console_id, console_text_id, editor_id, editor_text_id, find_id, naming_id, palette_id,
+    Cell, EDITOR_PAD, Find, LineKind, Message, NamingKind, Notebook, PAGE, Page, Palette, PaneKind, Side, Source, Studio, Tab,
+    console_find_id, console_id, console_text_id, duration, editor_id, editor_text_id, find_id, naming_id, palette_id,
 };
+use crate::notebook::{Kind, Output};
 use crate::chart::{Chart, PlotView, Thumb};
 use crate::commands::{self, Menu};
 use crate::worker::Watched;
@@ -285,7 +286,11 @@ fn editor_tabs(studio: &Studio) -> Vec<TabItem> {
     }
     tabs.extend(studio.docs.iter().enumerate().map(|(i, doc)| TabItem {
         label: doc.label(),
-        detail: doc.stale.then(|| "changed on disk".to_string()),
+        detail: if doc.stale {
+            Some("changed on disk".to_string())
+        } else {
+            doc.notebook.as_ref().map(|_| "notebook".to_string())
+        },
         active: studio.tab == Tab::Doc(i),
         select: Some(Message::SelectTab(Tab::Doc(i))),
         close: Some(Message::CloseTab(Tab::Doc(i))),
@@ -694,10 +699,150 @@ fn workspace(studio: &Studio) -> Element<'_, Message> {
         (Tab::Help, Some(_)) => help(studio),
         (Tab::Settings, _) if studio.settings_open => settings_page(studio),
         (Tab::Start, _) if studio.start_open => start_page(studio),
-        _ => match &studio.find {
-            Some(find) => column![find_bar(studio, find), line(), editor(studio)].into(),
-            None => editor(studio),
+        _ => match (&studio.doc().notebook, &studio.find) {
+            (Some(notebook), _) => notebook_view(studio, notebook),
+            (None, Some(find)) => column![find_bar(studio, find), line(), editor(studio)].into(),
+            (None, None) => editor(studio),
         },
+    }
+}
+
+fn notebook_view<'a>(studio: &'a Studio, notebook: &'a Notebook) -> Element<'a, Message> {
+    let ready = studio.worker.is_some();
+    let count = notebook.cells.len();
+    let header = row![
+        small("Run all", ready.then_some(Message::RunAllCells)),
+        small("Clear outputs", Some(Message::ClearOutputs)),
+        small("+ Code", Some(Message::AddCell(count, Kind::Code))),
+        small("+ Text", Some(Message::AddCell(count, Kind::Text))),
+        space::horizontal(),
+        small("Export…", Some(Message::ExportNotebook)),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .padding(HEADER);
+    let cells = notebook.cells.iter().enumerate().map(|(i, cell)| cell_view(studio, cell, i, i == notebook.focused, count));
+    let list = Column::with_children(cells).spacing(10).padding(Padding { top: 10.0, right: 16.0, bottom: 24.0, left: 16.0 }).width(Length::Fill);
+    column![header, line(), scrollable(list).width(Length::Fill).height(Length::Fill).style(theme::scroll)].into()
+}
+
+fn cell_view<'a>(studio: &'a Studio, cell: &'a Cell, i: usize, focused: bool, count: usize) -> Element<'a, Message> {
+    let ready = studio.worker.is_some();
+    let code = cell.kind == Kind::Code;
+    let mut tools = Row::new().spacing(2).align_y(Alignment::Center);
+    tools = tools.push(text(if code { "Code" } else { "Text" }).size(theme::FINE).style(theme::faint)).push(space::horizontal());
+    if cell.running {
+        tools = tools.push(text("running").size(theme::FINE).style(theme::accent));
+    } else if let Some(ms) = cell.elapsed {
+        tools = tools.push(text(duration(ms)).size(theme::FINE).style(theme::faint));
+    }
+    tools = if code {
+        tools.push(tip(glyph_button(Glyph::Play, (ready && !cell.running).then_some(Message::RunCell(i))), "Run"))
+    } else {
+        tools.push(small(if cell.editing { "Done" } else { "Edit" }, Some(if cell.editing { Message::DoneText(i) } else { Message::EditText(i) })))
+    };
+    tools = tools
+        .push(small(if code { "Make text" } else { "Make code" }, Some(Message::ToggleCellKind(i))))
+        .push(glyph_button(Glyph::Up, (i > 0).then_some(Message::MoveCell(i, -1))))
+        .push(glyph_button(Glyph::Down, (i + 1 < count).then_some(Message::MoveCell(i, 1))))
+        .push(glyph_button(Glyph::Close, (count > 1).then_some(Message::DeleteCell(i))))
+        .push(small("+", Some(Message::AddCell(i + 1, Kind::Code))));
+    let body: Element<'a, Message> = match (cell.kind, cell.editing) {
+        (Kind::Code, _) => text_editor(&cell.content)
+            .on_action(move |action| Message::CellEdit(i, action))
+            .font(fonts::MONO)
+            .size(studio.code_size())
+            .line_height(LineHeight::Absolute(Pixels(studio.line_height())))
+            .padding(Padding { top: 6.0, right: 10.0, bottom: 6.0, left: 10.0 })
+            .height(Length::Shrink)
+            .wrapping(if studio.wrap { text::Wrapping::Word } else { text::Wrapping::None })
+            .style(theme::editor)
+            .highlight_with::<highlight::Schematic>(cell.marks.clone(), highlight::format)
+            .key_binding(cell_binding(cell, i))
+            .into(),
+        (Kind::Text, true) => text_editor(&cell.content)
+            .on_action(move |action| Message::CellEdit(i, action))
+            .size(theme::UI)
+            .padding(Padding { top: 6.0, right: 10.0, bottom: 6.0, left: 10.0 })
+            .height(Length::Shrink)
+            .wrapping(text::Wrapping::Word)
+            .style(theme::editor)
+            .key_binding(text_cell_binding(i))
+            .into(),
+        (Kind::Text, false) => {
+            let source = cell.content.text();
+            let blocks: Vec<Element<'a, Message>> = docs::blocks(&source).into_iter().map(|block| render(block, &studio.theme)).collect();
+            let rendered: Element<'a, Message> = if blocks.is_empty() {
+                text("Empty").size(theme::META).style(theme::faint).into()
+            } else {
+                Column::with_children(blocks).spacing(6).into()
+            };
+            mouse_area(container(rendered).width(Length::Fill).padding([4, 2])).on_press(Message::EditText(i)).into()
+        }
+    };
+    let mut column = column![tools, body].spacing(6);
+    for output in &cell.outputs {
+        column = column.push(output_view(studio, output));
+    }
+    container(column).padding(Padding { top: 4.0, right: 10.0, bottom: 8.0, left: 10.0 }).width(Length::Fill).style(theme::notebook_cell(focused)).into()
+}
+
+fn output_view<'a>(studio: &'a Studio, output: &'a Output) -> Element<'a, Message> {
+    let size = studio.console_size();
+    match output {
+        Output::Printed(shown) => text(shown.trim_end_matches('\n')).font(fonts::MONO).size(size).style(theme::strong).into(),
+        Output::Result(shown) => code(shown, &studio.theme, size),
+        Output::Error(shown) => text(shown).font(fonts::MONO).size(size).style(theme::alarm).into(),
+        Output::Chart(plot) => canvas(Chart { plot, view: PlotView::default() }).width(Length::Fill).height(260).into(),
+        Output::Picture { description, .. } => text(format!("{description} (run to draw)")).size(theme::META).style(theme::faint).into(),
+    }
+}
+
+fn cell_binding(cell: &Cell, i: usize) -> impl Fn(KeyPress) -> Option<Binding<Message>> + '_ {
+    move |press| {
+        let command = press.modifiers.command();
+        let shift = press.modifiers.shift();
+        if matches!(press.key, Key::Named(key::Named::Enter)) {
+            if command && shift {
+                return Some(Binding::Custom(Message::RunAllCells));
+            }
+            if command {
+                return Some(Binding::Custom(Message::RunCell(i)));
+            }
+            if shift {
+                return Some(Binding::Custom(Message::RunCellAndAdvance(i)));
+            }
+        }
+        if !matches!(press.status, Status::Focused { .. }) {
+            return Binding::from_key_press(press);
+        }
+        if matches!(press.key, Key::Named(key::Named::Tab)) {
+            return Some(Binding::Sequence(vec![Binding::Insert(' '), Binding::Insert(' ')]));
+        }
+        let plain_enter = matches!(press.key, Key::Named(key::Named::Enter)) && !command && !shift;
+        if plain_enter || matches!(press.key, Key::Character(_) | Key::Named(key::Named::Backspace)) {
+            let text = cell.content.text();
+            let position = cell.content.cursor().position;
+            let offset = forms::offset_of(&text, position.line, position.column);
+            if plain_enter {
+                let indent = forms::indent_for(&text, offset);
+                let mut steps = vec![Binding::Enter];
+                steps.extend(std::iter::repeat_n(Binding::Insert(' '), indent));
+                return Some(Binding::Sequence(steps));
+            }
+            if let Some(binding) = pairing(&press, &text, offset) {
+                return Some(binding);
+            }
+        }
+        Binding::from_key_press(press)
+    }
+}
+
+fn text_cell_binding(i: usize) -> impl Fn(KeyPress) -> Option<Binding<Message>> {
+    move |press| match &press.key {
+        Key::Named(key::Named::Escape) => Some(Binding::Custom(Message::DoneText(i))),
+        Key::Named(key::Named::Enter) if press.modifiers.command() => Some(Binding::Custom(Message::DoneText(i))),
+        _ => Binding::from_key_press(press),
     }
 }
 
@@ -1123,6 +1268,21 @@ fn environment(studio: &Studio) -> Element<'_, Message> {
     }
     let selected = studio.grid.as_ref().map(|g| g.name.as_str());
     let heading = |label: &'static str| text(label).size(theme::FINE).font(fonts::UI_MEDIUM).style(theme::muted);
+    let mut list = Column::new().width(Length::Fill);
+    if let Some(binding) = selected.and_then(|name| studio.bindings.iter().find(|b| b.name == name)) {
+        let table = binding.kind == "table";
+        let actions = row![
+            text(&binding.name).font(fonts::MONO).size(theme::UI).style(theme::strong),
+            space::horizontal(),
+            small("Describe", (table && studio.worker.is_some()).then_some(Message::DescribeBinding(binding.name.clone()))),
+            small("Watch", Some(Message::WatchBinding(binding.name.clone()))),
+            small("Copy name", Some(Message::CopyText(binding.name.clone()))),
+        ]
+        .spacing(4)
+        .align_y(Alignment::Center)
+        .padding(HEADER);
+        list = list.push(actions).push(line());
+    }
     let header = row![
         heading("Name").width(Length::FillPortion(2)),
         heading("Type").width(72),
@@ -1130,7 +1290,7 @@ fn environment(studio: &Studio) -> Element<'_, Message> {
     ]
     .spacing(10)
     .padding(theme::HEAD);
-    let mut list = Column::new().push(header).push(line()).width(Length::Fill);
+    list = list.push(header).push(line());
     for (group, members) in groups {
         let label = text(group.label()).size(theme::FINE).font(fonts::UI_SEMIBOLD).style(theme::muted);
         list = list.push(container(label).padding(Padding { top: 9.0, right: 12.0, bottom: 2.0, left: 12.0 }));

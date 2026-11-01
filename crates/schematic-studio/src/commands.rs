@@ -54,11 +54,15 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
     let shown = |kind: PaneKind| studio.panes.iter().any(|(_, k)| *k == kind);
     let maximized = studio.panes.maximized().is_some();
     let theme_name = theme::name_of(&studio.theme);
+    let notebook = doc.notebook.as_ref();
+    let cell = notebook.map(|nb| nb.focused);
     let mut list = vec![
         item(Menu::File, "New file", "Ctrl+N", Some(Message::NewFile)),
+        item(Menu::File, "New notebook", "Ctrl+Shift+N", Some(Message::NewNotebook)),
         item(Menu::File, "New project…", "", Some(Message::NewProject)),
         item(Menu::File, "Open file…", "Ctrl+O", Some(Message::Open)),
         item(Menu::File, "Open folder…", "", Some(Message::OpenFolder)),
+        item(Menu::File, "Import CSV…", "", ready.then_some(Message::ImportCsv)),
     ];
     for (i, path) in studio.recent.iter().filter(|p| p.is_file()).take(5).enumerate() {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -71,6 +75,7 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         item(Menu::File, "Save as…", "Ctrl+Shift+S", Some(Message::SaveAs)),
         gap(item(Menu::File, "Close tab", "Ctrl+W", Some(Message::CloseTab(Tab::Doc(studio.current))))),
         gap(item(Menu::File, "Export table as CSV…", "", studio.table_shown().then_some(Message::ExportCsv))),
+        item(Menu::File, "Export notebook…", "", notebook.map(|_| Message::ExportNotebook)),
         item(Menu::File, "Save transcript…", "", (!studio.console.is_empty()).then_some(Message::SaveTranscript)),
         item(Menu::File, "Load transcript…", "", Some(Message::LoadTranscript)),
         gap(item(Menu::File, "Quit", "", Some(Message::Quit))),
@@ -109,8 +114,11 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         check(item(Menu::View, "Project tab", "Ctrl+5", Some(Message::ShowSide(Side::Project))), studio.side == Side::Project),
         check(item(Menu::View, "Outline tab", "Ctrl+6", Some(Message::ShowSide(Side::Outline))), studio.side == Side::Outline),
         check(item(Menu::View, "Watch tab", "Ctrl+7", Some(Message::ShowSide(Side::Watch))), studio.side == Side::Watch),
-        item(Menu::Run, "Run form at cursor", "Ctrl+Enter", ready.then_some(Message::RunForm)),
-        item(Menu::Run, "Run file", "Ctrl+Shift+Enter", ready.then_some(Message::RunFile)),
+        item(Menu::Run, "Run form at cursor", "Ctrl+Enter", (ready && notebook.is_none()).then_some(Message::RunForm)),
+        item(Menu::Run, "Run file", "Ctrl+Shift+Enter", (ready && notebook.is_none()).then_some(Message::RunFile)),
+        item(Menu::Run, "Run cell", "Ctrl+Enter", cell.filter(|_| ready).map(Message::RunCell)),
+        item(Menu::Run, "Run all cells", "Ctrl+Shift+Enter", (ready && notebook.is_some()).then_some(Message::RunAllCells)),
+        item(Menu::Run, "Clear outputs", "", notebook.map(|_| Message::ClearOutputs)),
         item(Menu::Run, "Stop", "", studio.running.then_some(Message::Stop)),
         gap(item(Menu::Run, "Add a watch…", "", Some(Message::StartNaming(crate::app::NamingKind::Watch)))),
         item(Menu::Run, "Restart the interpreter", "", ready.then_some(Message::Restart)),

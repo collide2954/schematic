@@ -333,6 +333,14 @@ pub fn cell(selected: bool) -> impl Fn(&Theme) -> container::Style {
     move |theme| if selected { filled(fade(tones(theme).accent, 0.12)) } else { container::Style::default() }
 }
 
+pub fn notebook_cell(focused: bool) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let t = tones(theme);
+        let color = if focused { t.accent } else { t.line };
+        container::Style { border: Border { color, width: 1.0, radius: 4.0.into() }, ..filled(t.surface) }
+    }
+}
+
 pub fn code_block(theme: &Theme) -> container::Style {
     container::Style { border: rounded(4.0), ..filled(tones(theme).raised) }
 }
