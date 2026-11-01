@@ -43,6 +43,7 @@ struct Options {
     x_label: Option<String>,
     y_label: Option<String>,
     by: Option<Symbol>,
+    facet: Option<Symbol>,
     bins: Option<usize>,
     stack: bool,
     horizontal: bool,
@@ -81,6 +82,9 @@ impl Options {
         plot.y_format = self.y_format.clone();
         plot.hlines = self.hlines.clone();
         plot.vlines = self.vlines.clone();
+        plot.title = self.title.clone().or_else(|| plot.title.take());
+        plot.x_label = self.x_label.clone().or_else(|| plot.x_label.take());
+        plot.y_label = self.y_label.clone().or_else(|| plot.y_label.take());
     }
 }
 
@@ -100,6 +104,13 @@ fn options(name: &str, value: Option<&Value>) -> Result<Options, Error> {
             None | Some(Value::Nil) | Some(Value::Bool(false)) => Ok(false),
             Some(Value::Bool(true)) => Ok(true),
             Some(other) => Err(expects(name, &format!("true or false for :{key}"), other)),
+        }
+    };
+    let column = |key: &str| -> Result<Option<Symbol>, Error> {
+        match map.get(&Value::keyword(key)) {
+            None | Some(Value::Nil) => Ok(None),
+            Some(Value::Keyword(column)) => Ok(Some(*column)),
+            Some(other) => Err(expects(name, &format!("a column keyword for :{key}"), other)),
         }
     };
     let range = |key: &str| -> Result<Option<(f64, f64)>, Error> {
@@ -131,6 +142,8 @@ fn options(name: &str, value: Option<&Value>) -> Result<Options, Error> {
     options.title = text("title")?;
     options.x_label = text("x-label")?;
     options.y_label = text("y-label")?;
+    options.by = column("by")?;
+    options.facet = column("facet")?;
     options.stack = flag("stack")?;
     options.horizontal = flag("horizontal")?;
     options.donut = flag("donut")?;
@@ -143,11 +156,6 @@ fn options(name: &str, value: Option<&Value>) -> Result<Options, Error> {
     options.y_format = text("y-format")?;
     options.hlines = lines("hline")?;
     options.vlines = lines("vline")?;
-    options.by = match map.get(&Value::keyword("by")) {
-        None | Some(Value::Nil) => None,
-        Some(Value::Keyword(column)) => Some(*column),
-        Some(other) => return Err(expects(name, "a column keyword for :by", other)),
-    };
     options.bins = match map.get(&Value::keyword("bins")) {
         None | Some(Value::Nil) => None,
         Some(Value::Int(n)) if *n > 0 => Some(*n as usize),
@@ -183,40 +191,47 @@ fn numbers(name: &str, values: &[Value]) -> Result<Vec<f64>, Error> {
     Ok(out)
 }
 
-fn chart(name: &str, kind: Kind, args: &[Value]) -> Result<Value, Error> {
-    let mut plot = Plot::new(kind);
-    let (xs, ys, by, options): (Vec<Value>, Vec<Value>, Option<Vec<Value>>, Options) = match &args[0] {
-        Value::Table(table) => {
-            let (x_name, xs) = column_values(name, table, args.get(1).unwrap_or(&Value::Nil))?;
-            let y_key = args.get(2).ok_or_else(|| Error::new("value-error", format!("{name} expects an x and a y column")))?;
-            let (y_name, ys) = column_values(name, table, y_key)?;
-            let options = options(name, args.get(3))?;
-            let by = match options.by {
-                Some(column) => Some(column_values(name, table, &Value::Keyword(column))?.1),
-                None => None,
-            };
-            plot.x_label = Some(x_name.name().to_string());
-            plot.y_label = Some(y_name.name().to_string());
-            (xs, ys, by, options)
+fn facet_groups(keys: &[Value]) -> Vec<(String, Vec<usize>)> {
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (i, key) in keys.iter().enumerate() {
+        let label = Shown(key).to_string();
+        match groups.iter_mut().find(|(l, _)| *l == label) {
+            Some((_, rows)) => rows.push(i),
+            None => groups.push((label, vec![i])),
         }
-        Value::Vector(_) | Value::List(_) | Value::Array(_) => {
-            let xs: Vec<Value> = items(name, &args[0])?.collect();
-            let ys: Vec<Value> = items(name, &args[1])?.collect();
-            (xs, ys, None, options(name, args.get(2))?)
-        }
-        other => return Err(expects(name, "a table or a collection", other)),
-    };
-    if xs.len() != ys.len() {
-        let message = format!("{name} expects x and y of the same length, got {} and {}", xs.len(), ys.len());
-        return Err(Error::new("value-error", message));
     }
-    options.apply(&mut plot);
-    plot.title = options.title.clone().or(plot.title);
-    plot.x_label = options.x_label.clone().or(plot.x_label);
-    plot.y_label = options.y_label.clone().or(plot.y_label);
+    groups
+}
+
+fn share_axes(parent: &mut Plot) {
+    let (value, x) = plot::shared_ranges(&parent.panels);
+    for panel in &mut parent.panels {
+        panel.y_range.get_or_insert(value);
+        if panel.x_range.is_none() {
+            panel.x_range = x;
+        }
+    }
+}
+
+fn pick(values: &[Value], rows: &[usize]) -> Vec<Value> {
+    rows.iter().map(|i| values[*i].clone()).collect()
+}
+
+fn build(
+    name: &str,
+    kind: Kind,
+    mut plot: Plot,
+    xs: &[Value],
+    ys: &[Value],
+    by: Option<&[Value]>,
+    seed: Option<&[String]>,
+) -> Result<Plot, Error> {
+    if let Some(seed) = seed {
+        plot.categories = seed.to_vec();
+    }
     let mut groups: Vec<(Option<String>, Vec<usize>)> = Vec::new();
     for i in 0..xs.len() {
-        let key = by.as_ref().map(|keys| Shown(&keys[i]).to_string());
+        let key = by.map(|keys| Shown(&keys[i]).to_string());
         match groups.iter_mut().find(|(k, _)| *k == key) {
             Some((_, rows)) => rows.push(i),
             None => groups.push((key, vec![i])),
@@ -280,25 +295,91 @@ fn chart(name: &str, kind: Kind, args: &[Value]) -> Result<Value, Error> {
         }
         plot.series = vec![Series { name: None, xs: (0..totals.len()).map(|i| i as f64).collect(), ys: totals }];
     }
-    Ok(Value::Plot(Rc::new(plot)))
+    Ok(plot)
+}
+
+fn chart(name: &str, kind: Kind, args: &[Value]) -> Result<Value, Error> {
+    let mut base = Plot::new(kind);
+    let (xs, ys, by, facet, options): (Vec<Value>, Vec<Value>, Option<Vec<Value>>, Option<Vec<Value>>, Options) = match &args[0] {
+        Value::Table(table) => {
+            let (x_name, xs) = column_values(name, table, args.get(1).unwrap_or(&Value::Nil))?;
+            let y_key = args.get(2).ok_or_else(|| Error::new("value-error", format!("{name} expects an x and a y column")))?;
+            let (y_name, ys) = column_values(name, table, y_key)?;
+            let options = options(name, args.get(3))?;
+            let keys = |column: Option<Symbol>| column.map(|c| column_values(name, table, &Value::Keyword(c)).map(|(_, v)| v)).transpose();
+            let (by, facet) = (keys(options.by)?, keys(options.facet)?);
+            base.x_label = Some(x_name.name().to_string());
+            base.y_label = Some(y_name.name().to_string());
+            (xs, ys, by, facet, options)
+        }
+        Value::Vector(_) | Value::List(_) | Value::Array(_) => {
+            let options = options(name, args.get(2))?;
+            if options.facet.is_some() {
+                return Err(Error::new("value-error", format!("{name} expects a table for :facet")));
+            }
+            let xs: Vec<Value> = items(name, &args[0])?.collect();
+            let ys: Vec<Value> = items(name, &args[1])?.collect();
+            (xs, ys, None, None, options)
+        }
+        other => return Err(expects(name, "a table or a collection", other)),
+    };
+    if xs.len() != ys.len() {
+        let message = format!("{name} expects x and y of the same length, got {} and {}", xs.len(), ys.len());
+        return Err(Error::new("value-error", message));
+    }
+    options.apply(&mut base);
+    let Some(facet) = facet else {
+        return Ok(Value::Plot(Rc::new(build(name, kind, base, &xs, &ys, by.as_deref(), None)?)));
+    };
+    let full = build(name, kind, base.clone(), &xs, &ys, by.as_deref(), None)?;
+    let mut parent = base;
+    parent.categories = full.categories.clone();
+    for (label, rows) in facet_groups(&facet) {
+        let sub_by = by.as_ref().map(|keys| pick(keys, &rows));
+        let mut panel = build(name, kind, parent.clone(), &pick(&xs, &rows), &pick(&ys, &rows), sub_by.as_deref(), Some(&full.categories))?;
+        panel.title = Some(label);
+        parent.panels.push(panel);
+    }
+    share_axes(&mut parent);
+    Ok(Value::Plot(Rc::new(parent)))
 }
 
 fn histogram(args: &[Value]) -> Result<Value, Error> {
-    let (values, label, rest): (Vec<Value>, Option<String>, &[Value]) = match &args[0] {
+    let name = "histogram";
+    let (values, label, rest, table): (Vec<Value>, Option<String>, &[Value], Option<&Table>) = match &args[0] {
         Value::Table(table) => {
             let key = args.get(1).ok_or_else(|| Error::new("value-error", "histogram expects a column"))?;
-            let (name, values) = column_values("histogram", table, key)?;
-            (values, Some(name.name().to_string()), &args[2..])
+            let (column, values) = column_values(name, table, key)?;
+            (values, Some(column.name().to_string()), &args[2..], Some(table))
         }
-        other => (items("histogram", other)?.collect(), None, &args[1..]),
+        other => (items(name, other)?.collect(), None, &args[1..], None),
     };
-    let options = options("histogram", rest.first())?;
-    let mut plot = plot::histogram(&numbers("histogram", &values)?, options.bins.unwrap_or(10));
-    options.apply(&mut plot);
-    plot.title = options.title.clone();
-    plot.x_label = options.x_label.clone().or(label);
-    plot.y_label = options.y_label.clone().or(plot.y_label);
-    Ok(Value::Plot(Rc::new(plot)))
+    let options = options(name, rest.first())?;
+    let bins = options.bins.unwrap_or(10);
+    let finish = |mut plot: Plot| {
+        plot.x_label = label.clone();
+        options.apply(&mut plot);
+        plot
+    };
+    let facet = match (options.facet, table) {
+        (Some(column), Some(table)) => Some(column_values(name, table, &Value::Keyword(column))?.1),
+        (Some(_), None) => return Err(Error::new("value-error", format!("{name} expects a table for :facet"))),
+        (None, _) => None,
+    };
+    let Some(facet) = facet else {
+        return Ok(Value::Plot(Rc::new(finish(plot::histogram(&numbers(name, &values)?, bins)))));
+    };
+    let full = plot::histogram(&numbers(name, &values)?, bins);
+    let (min, width) = (full.series[0].xs.first().copied().unwrap_or(0.0), full.step);
+    let mut parent = finish(Plot::new(Kind::Histogram));
+    for (title, rows) in facet_groups(&facet) {
+        let mut panel = plot::histogram_in(&numbers(name, &pick(&values, &rows))?, min, width, bins);
+        panel = finish(panel);
+        panel.title = Some(title);
+        parent.panels.push(panel);
+    }
+    share_axes(&mut parent);
+    Ok(Value::Plot(Rc::new(parent)))
 }
 
 fn box_plot(args: &[Value]) -> Result<Value, Error> {
@@ -319,16 +400,8 @@ fn box_plot(args: &[Value]) -> Result<Value, Error> {
                 Some(group) => {
                     let (group_name, groups) = column_values(name, table, group)?;
                     plot.x_label = Some(group_name.name().to_string());
-                    let mut buckets: Vec<(String, Vec<Value>)> = Vec::new();
-                    for (key, value) in groups.iter().zip(&values) {
-                        let label = Shown(key).to_string();
-                        match buckets.iter_mut().find(|(l, _)| *l == label) {
-                            Some((_, bucket)) => bucket.push(value.clone()),
-                            None => buckets.push((label, vec![value.clone()])),
-                        }
-                    }
-                    for (label, bucket) in buckets {
-                        plot.boxes.push(BoxStats::of(&label, &numbers(name, &bucket)?));
+                    for (label, rows) in facet_groups(&groups) {
+                        plot.boxes.push(BoxStats::of(&label, &numbers(name, &pick(&values, &rows))?));
                     }
                 }
             }
@@ -340,11 +413,7 @@ fn box_plot(args: &[Value]) -> Result<Value, Error> {
             &args[1..]
         }
     };
-    let options = options(name, rest.first())?;
-    options.apply(&mut plot);
-    plot.title = options.title.clone();
-    plot.x_label = options.x_label.clone().or(plot.x_label);
-    plot.y_label = options.y_label.clone().or(plot.y_label);
+    options(name, rest.first())?.apply(&mut plot);
     plot.categories = plot.boxes.iter().map(|b| b.label.clone()).collect();
     Ok(Value::Plot(Rc::new(plot)))
 }

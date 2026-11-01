@@ -176,6 +176,10 @@ pub fn histogram(values: &[f64], bins: usize) -> Plot {
     } else {
         (min, 1.0)
     };
+    histogram_in(values, min, width, bins)
+}
+
+pub fn histogram_in(values: &[f64], min: f64, width: f64, bins: usize) -> Plot {
     let mut counts = vec![0.0; bins];
     for &value in values {
         let index = ((value - min) / width).floor().max(0.0) as usize;
@@ -193,6 +197,48 @@ pub fn histogram(values: &[f64], bins: usize) -> Plot {
 
 fn plural(n: usize, word: &str) -> String {
     if n == 1 { format!("{n} {word}") } else { format!("{n} {word}s") }
+}
+
+pub fn shared_ranges(panels: &[Plot]) -> ((f64, f64), Option<(f64, f64)>) {
+    let Some(first) = panels.first() else { return ((0.0, 1.0), None) };
+    let fold = |pairs: &mut dyn Iterator<Item = (f64, f64)>| pairs.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
+    let (vlo, vhi) = fold(&mut panels.iter().map(Plot::value_extent));
+    let bars = matches!(first.kind, Kind::Bar | Kind::Histogram | Kind::Area);
+    let value = if first.y_log {
+        (vlo.max(f64::MIN_POSITIVE), vhi)
+    } else {
+        let axis = Axis::numeric(vlo, vhi, 5, bars);
+        (axis.lo, axis.hi)
+    };
+    let x = matches!(first.kind, Kind::Line | Kind::Scatter | Kind::Area).then(|| {
+        let mut extents = panels.iter().map(|p| {
+            let mut xs = p.series.iter().flat_map(|s| s.xs.iter().copied());
+            xs.next().map_or((f64::INFINITY, f64::NEG_INFINITY), |x| xs.fold((x, x), |(lo, hi), v| (lo.min(v), hi.max(v))))
+        });
+        let (lo, hi) = fold(&mut extents);
+        if first.x_log {
+            (lo, hi)
+        } else {
+            let axis = Axis::hugging(lo, hi, 5);
+            (axis.lo, axis.hi)
+        }
+    });
+    (value, x)
+}
+
+fn translate(shape: Shape, dx: f32, dy: f32) -> Shape {
+    let shift = |points: Vec<(f32, f32)>| points.into_iter().map(|(x, y)| (x + dx, y + dy)).collect();
+    match shape {
+        Shape::Rect { x, y, w, h, paint, tip } => Shape::Rect { x: x + dx, y: y + dy, w, h, paint, tip },
+        Shape::Line { x1, y1, x2, y2, paint, width, dashed } => {
+            Shape::Line { x1: x1 + dx, y1: y1 + dy, x2: x2 + dx, y2: y2 + dy, paint, width, dashed }
+        }
+        Shape::Polyline { points, paint, width } => Shape::Polyline { points: shift(points), paint, width },
+        Shape::Polygon { points, paint } => Shape::Polygon { points: shift(points), paint },
+        Shape::Circle { x, y, r, paint, tip } => Shape::Circle { x: x + dx, y: y + dy, r, paint, tip },
+        Shape::Arc { cx, cy, r, inner, start, end, paint, tip } => Shape::Arc { cx: cx + dx, cy: cy + dy, r, inner, start, end, paint, tip },
+        Shape::Text { x, y, text, size, anchor, paint, bold } => Shape::Text { x: x + dx, y: y + dy, text, size, anchor, paint, bold },
+    }
 }
 
 struct Axis {
@@ -324,6 +370,9 @@ impl Plot {
     }
 
     pub fn describe(&self) -> String {
+        if let Some(first) = self.panels.first() {
+            return format!("{} of {}", plural(self.panels.len(), "panel"), first.describe());
+        }
         let many = self.series.len() > 1;
         match self.kind {
             Kind::Bar => format!("bar chart with {}", plural(self.points(), "bar")),
@@ -348,13 +397,45 @@ impl Plot {
             out.push_str(title);
             out.push('\n');
         }
-        match self.kind {
-            Kind::Bar | Kind::Histogram => self.text_bars(&mut out),
-            Kind::Pie => self.text_pie(&mut out),
-            Kind::Box => self.text_boxes(&mut out),
-            Kind::Line | Kind::Scatter | Kind::Area => self.text_grid(&mut out),
+        if self.panels.is_empty() {
+            self.body_text(&mut out);
+            return out;
+        }
+        for (i, panel) in self.panels.iter().enumerate() {
+            if i > 0 {
+                out.push_str("\n\n");
+            }
+            let _ = writeln!(out, "── {} ──", panel.title.clone().unwrap_or_default());
+            panel.body_text(&mut out);
         }
         out
+    }
+
+    fn body_text(&self, out: &mut String) {
+        match self.kind {
+            Kind::Bar | Kind::Histogram => self.text_bars(out),
+            Kind::Pie => self.text_pie(out),
+            Kind::Box => self.text_boxes(out),
+            Kind::Line | Kind::Scatter | Kind::Area => self.text_grid(out),
+        }
+    }
+
+    fn panel_scene(&self, width: f32, height: f32) -> Scene {
+        let mut shapes = Vec::new();
+        let mut top = 0.0;
+        if let Some(title) = &self.title {
+            shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true });
+            top = 32.0;
+        }
+        let n = self.panels.len();
+        let cols = ((n as f32).sqrt().ceil() as usize).max(1);
+        let rows = n.div_ceil(cols);
+        let (cell_w, cell_h) = (width / cols as f32, (height - top) / rows as f32);
+        for (i, panel) in self.panels.iter().enumerate() {
+            let (dx, dy) = ((i % cols) as f32 * cell_w, top + (i / cols) as f32 * cell_h);
+            shapes.extend(panel.scene(cell_w, cell_h).shapes.into_iter().map(|shape| translate(shape, dx, dy)));
+        }
+        Scene { width, height, shapes }
     }
 
     fn bar_rows(&self) -> Vec<(String, f64)> {
@@ -521,7 +602,7 @@ impl Plot {
         totals.into_values().collect()
     }
 
-    fn value_extent(&self) -> (f64, f64) {
+    pub fn value_extent(&self) -> (f64, f64) {
         let fold = |values: &mut dyn Iterator<Item = f64>| values.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
         match self.kind {
             Kind::Box => {
@@ -543,6 +624,9 @@ impl Plot {
     }
 
     pub fn scene(&self, width: f32, height: f32) -> Scene {
+        if !self.panels.is_empty() {
+            return self.panel_scene(width, height);
+        }
         if self.kind == Kind::Pie {
             return self.pie_scene(width, height);
         }
