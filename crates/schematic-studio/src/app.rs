@@ -5,12 +5,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use iced::widget::scrollable::{AbsoluteOffset, RelativeOffset, Viewport};
-use iced::widget::text_editor::{Action, Motion};
+use iced::widget::text_editor::{Action, Edit, Motion, Position};
 use iced::widget::{Id, operation, pane_grid, text_editor};
 use iced::{Size, Subscription, Task, Theme, window};
 use schematic::plot::Plot;
 use schematic::reader::read_all;
 
+use crate::completion::{self, Candidate};
 use crate::highlight::Marks;
 use crate::worker::{self, Binding, Event, Grid, Request};
 use crate::{files, fonts, forms, theme, view};
@@ -112,6 +113,27 @@ pub struct Help {
     pub query: String,
 }
 
+pub struct Completion {
+    pub items: Vec<Candidate>,
+    pub selected: usize,
+    pub prefix: String,
+    pub source: Source,
+}
+
+enum Follow {
+    Open,
+    Refresh,
+    Close,
+}
+
+fn follow_completion(action: &Action) -> Follow {
+    match action {
+        Action::Edit(Edit::Insert(c)) if !completion::is_delimiter(*c) => Follow::Open,
+        Action::Edit(Edit::Backspace) => Follow::Refresh,
+        _ => Follow::Close,
+    }
+}
+
 pub struct Line {
     pub kind: LineKind,
     pub text: String,
@@ -149,6 +171,8 @@ pub struct Studio {
     pub current: usize,
     pub tab: Tab,
     pub help: Option<Help>,
+    pub completion: Option<Completion>,
+    pub editor_width: f32,
     pub editor_height: f32,
     pub side: Side,
     pub root: Option<PathBuf>,
@@ -195,6 +219,11 @@ pub enum Message {
     LookUp(Source),
     HelpQuery(String),
     HelpPage(Page),
+    Complete(Source),
+    CompleteMove(i32),
+    CompleteAccept,
+    CompletePick(usize),
+    CompleteClose,
     ShowSide(Side),
     OpenFolder,
     OpenedFolder(Option<PathBuf>),
@@ -252,6 +281,14 @@ pub fn editor_id() -> Id {
 
 pub fn naming_id() -> Id {
     Id::new("naming")
+}
+
+pub fn editor_text_id() -> Id {
+    Id::new("editor-text")
+}
+
+pub fn console_text_id() -> Id {
+    Id::new("console-text")
 }
 
 fn file_name_of(path: &Path) -> String {
@@ -358,6 +395,8 @@ impl Studio {
             current: 0,
             tab: Tab::Doc(0),
             help: None,
+            completion: None,
+            editor_width: 0.0,
             editor_height: 0.0,
             side: Side::Environment,
             root: None,
@@ -518,26 +557,52 @@ impl Studio {
         match message {
             Message::Worker(event) => self.on_event(event),
             Message::Edit(action) => {
+                let follow = follow_completion(&action);
                 let doc = self.doc_mut();
                 if action.is_edit() {
                     doc.dirty = true;
                 }
                 doc.content.perform(action);
                 doc.marks = marks_of(&doc.content);
+                self.track_completion(Source::Editor, follow);
                 self.follow_cursor()
             }
             Message::EditorScrolled(viewport) => {
                 self.doc_mut().offset = viewport.absolute_offset().y;
+                self.editor_width = viewport.bounds().width;
                 self.editor_height = viewport.bounds().height;
                 Task::none()
             }
             Message::EditorResized(size) => {
+                self.editor_width = size.width;
                 self.editor_height = size.height;
                 Task::none()
             }
             Message::Input(action) => {
+                let follow = follow_completion(&action);
                 self.input.perform(action);
                 self.input_marks = marks_of(&self.input);
+                self.track_completion(Source::Console, follow);
+                Task::none()
+            }
+            Message::Complete(source) => {
+                self.refresh_completion(source, true);
+                Task::none()
+            }
+            Message::CompleteMove(step) => {
+                if let Some(completion) = &mut self.completion {
+                    let count = completion.items.len().max(1) as i32;
+                    completion.selected = (completion.selected as i32 + step).rem_euclid(count) as usize;
+                }
+                Task::none()
+            }
+            Message::CompleteAccept => match self.completion.as_ref().map(|c| c.selected) {
+                Some(index) => self.accept_completion(index),
+                None => Task::none(),
+            },
+            Message::CompletePick(index) => self.accept_completion(index),
+            Message::CompleteClose => {
+                self.completion = None;
                 Task::none()
             }
             Message::NewFile => {
@@ -603,14 +668,12 @@ impl Studio {
                 Task::none()
             }
             Message::LookUp(source) => {
-                let (text, position) = match source {
-                    Source::Editor => (self.doc().content.text(), self.doc().content.cursor().position),
-                    Source::Console => (self.input.text(), self.input.cursor().position),
-                };
+                let (text, position) = self.text_and_cursor(source);
                 let offset = forms::offset_of(&text, position.line, position.column);
                 let query = forms::symbol_at(&text, offset).unwrap_or_default().to_string();
                 self.help = Some(Help { page: Page::Reference, query });
                 self.tab = Tab::Help;
+                self.completion = None;
                 Task::none()
             }
             Message::HelpQuery(query) => {
@@ -834,7 +897,64 @@ impl Studio {
             self.current = i;
         }
         self.tab = Tab::Doc(self.current);
+        self.completion = None;
         self.scroll_to_doc()
+    }
+
+    fn text_and_cursor(&self, source: Source) -> (String, Position) {
+        match source {
+            Source::Editor => (self.doc().content.text(), self.doc().content.cursor().position),
+            Source::Console => (self.input.text(), self.input.cursor().position),
+        }
+    }
+
+    fn track_completion(&mut self, source: Source, follow: Follow) {
+        match follow {
+            Follow::Close => self.completion = None,
+            Follow::Open => self.refresh_completion(source, false),
+            Follow::Refresh if self.completion.is_some() => self.refresh_completion(source, false),
+            Follow::Refresh => {}
+        }
+    }
+
+    fn refresh_completion(&mut self, source: Source, forced: bool) {
+        let (text, position) = self.text_and_cursor(source);
+        let offset = forms::offset_of(&text, position.line, position.column);
+        let prefix = completion::word_before(&text, offset).to_string();
+        let open = self.completion.as_ref().is_some_and(|c| c.source == source);
+        let enough = prefix.chars().count() >= 2 || (open && !prefix.is_empty());
+        if !forced && !enough {
+            self.completion = None;
+            return;
+        }
+        let items = completion::candidates(&prefix, &self.bindings, &completion::locals(&text));
+        self.completion = (!items.is_empty()).then_some(Completion { items, selected: 0, prefix, source });
+    }
+
+    fn accept_completion(&mut self, index: usize) -> Task<Message> {
+        let Some(completion) = self.completion.take() else { return Task::none() };
+        let Some(item) = completion.items.get(index) else { return Task::none() };
+        let content = match completion.source {
+            Source::Editor => &mut self.docs[self.current].content,
+            Source::Console => &mut self.input,
+        };
+        for _ in 0..completion.prefix.chars().count() {
+            content.perform(Action::Edit(Edit::Backspace));
+        }
+        content.perform(Action::Edit(Edit::Paste(Arc::new(item.name.clone()))));
+        let marks = marks_of(content);
+        match completion.source {
+            Source::Editor => {
+                let doc = self.doc_mut();
+                doc.dirty = true;
+                doc.marks = marks;
+                operation::focus(editor_text_id())
+            }
+            Source::Console => {
+                self.input_marks = marks;
+                operation::focus(console_text_id())
+            }
+        }
     }
 
     fn close(&mut self, i: usize) -> Task<Message> {
@@ -925,6 +1045,8 @@ impl Studio {
     fn submit(&mut self) -> Task<Message> {
         let line = self.input.text();
         self.input = text_editor::Content::new();
+        self.input_marks = Marks::default();
+        self.completion = None;
         self.recalled = None;
         if !self.pending.is_empty() {
             self.pending.push('\n');
@@ -1010,7 +1132,7 @@ mod tests {
         studio.console.push(Line { kind: LineKind::Input, text: "(+ 1 2)".into() });
         studio.console.push(Line { kind: LineKind::Result, text: "3".into() });
         studio.console.push(Line { kind: LineKind::Error, text: "boom".into() });
-        studio.bindings = vec![Binding { name: "t".into(), kind: "table".into(), summary: "2 rows, 1 column".into() }];
+        studio.bindings = vec![Binding { name: "t".into(), kind: "table".into(), summary: "2 rows, 1 column".into(), columns: vec!["a".into()] }];
         studio.grid = Some(Grid {
             name: "t".into(),
             columns: vec!["#".into(), "a".into()],
@@ -1176,6 +1298,58 @@ mod tests {
     }
 
     #[test]
+    fn completion_offers_names_and_inserts_the_pick() {
+        let mut studio = Studio::new();
+        studio.bindings = vec![Binding { name: "t".into(), kind: "table".into(), summary: "2 rows".into(), columns: vec!["city".into()] }];
+        let type_in = |studio: &mut Studio, text: &str| {
+            for c in text.chars() {
+                let _ = studio.update(Message::Edit(Action::Edit(Edit::Insert(c))));
+            }
+        };
+        let names = |studio: &Studio| -> Vec<String> {
+            studio.completion.as_ref().map(|c| c.items.iter().map(|i| i.name.clone()).collect()).unwrap_or_default()
+        };
+        type_in(&mut studio, "(b");
+        assert!(studio.completion.is_none(), "one letter is too little");
+        type_in(&mut studio, "a");
+        assert!(names(&studio).contains(&"bar-chart".to_string()), "{:?}", names(&studio));
+        let _ = view::view(&studio);
+        let target = names(&studio).iter().position(|n| n == "bar-chart").unwrap();
+        for _ in 0..target {
+            let _ = studio.update(Message::CompleteMove(1));
+        }
+        let _ = studio.update(Message::CompleteAccept);
+        assert_eq!(studio.doc().content.text(), "(bar-chart");
+        assert!(studio.completion.is_none() && studio.doc().dirty);
+        type_in(&mut studio, " t :c");
+        assert_eq!(names(&studio), [":city"]);
+        let _ = studio.update(Message::CompletePick(0));
+        assert_eq!(studio.doc().content.text(), "(bar-chart t :city");
+        type_in(&mut studio, " xy");
+        assert!(studio.completion.is_none());
+        let _ = studio.update(Message::Complete(Source::Editor));
+        assert!(studio.completion.is_none(), "nothing starts with xy");
+        let _ = studio.update(Message::Edit(Action::Edit(Edit::Backspace)));
+        let _ = studio.update(Message::Edit(Action::Edit(Edit::Backspace)));
+        let _ = studio.update(Message::Complete(Source::Editor));
+        assert_eq!(names(&studio), ["t", ":city", "bar-chart"]);
+        let _ = studio.update(Message::CompleteMove(-1));
+        assert_eq!(studio.completion.as_ref().map(|c| c.selected), Some(2));
+        let _ = studio.update(Message::Edit(Action::Move(Motion::Left)));
+        assert!(studio.completion.is_none());
+        studio.input = text_editor::Content::with_text("(in");
+        let _ = studio.update(Message::Input(Action::Move(Motion::DocumentEnd)));
+        let _ = studio.update(Message::Complete(Source::Console));
+        assert!(names(&studio).contains(&"inc".to_string()), "{:?}", names(&studio));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::CompleteAccept);
+        assert!(studio.input.text().starts_with("(in") && studio.input.text().len() > 3);
+        let _ = studio.update(Message::Input(Action::Edit(Edit::Insert('c'))));
+        let _ = studio.update(Message::CompleteClose);
+        assert!(studio.completion.is_none());
+    }
+
+    #[test]
     fn help_opens_on_the_name_at_the_cursor() {
         let mut studio = Studio::new();
         studio.doc_mut().content = text_editor::Content::with_text("(bar-chart t :a :b)");
@@ -1289,7 +1463,7 @@ mod tests {
     #[test]
     fn bindings_group_into_data_values_and_functions() {
         let mut studio = Studio::new();
-        let b = |name: &str, kind: &str| Binding { name: name.into(), kind: kind.into(), summary: String::new() };
+        let b = |name: &str, kind: &str| Binding { name: name.into(), kind: kind.into(), summary: String::new(), columns: Vec::new() };
         studio.bindings = vec![b("f", "function"), b("t", "table"), b("n", "integer"), b("xs", "array")];
         let groups: Vec<(Group, Vec<&str>)> =
             studio.groups().into_iter().map(|(g, bs)| (g, bs.iter().map(|b| b.name.as_str()).collect())).collect();

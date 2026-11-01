@@ -219,6 +219,16 @@ pub fn choice(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
     }
 }
 
+pub fn popup(theme: &Theme) -> container::Style {
+    let t = tones(theme);
+    let shadow = iced::Shadow {
+        color: fade(Color::BLACK, if is_dark(theme) { 0.5 } else { 0.14 }),
+        offset: iced::Vector::new(0.0, 4.0),
+        blur_radius: 12.0,
+    };
+    container::Style { border: Border { color: t.line, width: 1.0, radius: 6.0.into() }, shadow, ..filled(t.surface) }
+}
+
 pub fn code_block(theme: &Theme) -> container::Style {
     container::Style { border: rounded(4.0), ..filled(tones(theme).raised) }
 }

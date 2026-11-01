@@ -4,7 +4,7 @@ use iced::widget::text::{LineHeight, Span};
 use iced::widget::text_editor::{Binding, KeyPress, Status};
 use iced::widget::{
     Column, Row, button, canvas, column, container, lazy, pane_grid, rich_text, row, rule, scrollable, sensor, space, span,
-    table, text, text_editor, text_input, tooltip,
+    stack, table, text, text_editor, text_input, tooltip,
 };
 use std::path::Path;
 
@@ -12,8 +12,8 @@ use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
-    EDITOR_PAD, LINE_HEIGHT, LineKind, Message, NamingKind, PAGE, Page, PaneKind, Side, Source, Studio, Tab, console_id, editor_id,
-    naming_id,
+    EDITOR_PAD, LINE_HEIGHT, LineKind, Message, NamingKind, PAGE, Page, PaneKind, Side, Source, Studio, Tab, console_id,
+    console_text_id, editor_id, editor_text_id, naming_id,
 };
 use crate::chart::Chart;
 use crate::icons::{Glyph, Ink, icon};
@@ -291,13 +291,31 @@ fn files(studio: &Studio) -> Element<'_, Message> {
     scrollable(list.padding(Padding { top: 0.0, right: 0.0, bottom: 8.0, left: 0.0 })).height(Length::Fill).style(theme::scroll).into()
 }
 
+fn completion_binding(press: &KeyPress) -> Option<Message> {
+    let plain = !press.modifiers.command() && !press.modifiers.shift();
+    match &press.key {
+        Key::Named(key::Named::ArrowUp) if plain => Some(Message::CompleteMove(-1)),
+        Key::Named(key::Named::ArrowDown) if plain => Some(Message::CompleteMove(1)),
+        Key::Named(key::Named::Tab | key::Named::Enter) if plain => Some(Message::CompleteAccept),
+        Key::Named(key::Named::Escape) => Some(Message::CompleteClose),
+        _ => None,
+    }
+}
+
 fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Message>> {
     let current = studio.current;
+    let completing = studio.completion.as_ref().is_some_and(|c| c.source == Source::Editor);
     move |press| {
+        if completing {
+            if let Some(message) = completion_binding(&press) {
+                return Some(Binding::Custom(message));
+            }
+        }
         let command = press.modifiers.command();
         let shift = press.modifiers.shift();
         let global = match &press.key {
             Key::Named(key::Named::Enter) if command => Some(if shift { Message::RunFile } else { Message::RunForm }),
+            Key::Named(key::Named::Space) if command => Some(Message::Complete(Source::Editor)),
             Key::Named(key::Named::F1) => Some(Message::LookUp(Source::Editor)),
             Key::Character(c) if command && c.eq_ignore_ascii_case("s") => Some(if shift { Message::SaveAs } else { Message::Save }),
             Key::Character(c) if command && c.eq_ignore_ascii_case("o") => Some(Message::Open),
@@ -320,13 +338,20 @@ fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messa
     let first_line = cursor == 0;
     let last_line = cursor + 1 >= studio.input.line_count();
     let browsing = studio.recalled.is_some();
+    let completing = studio.completion.as_ref().is_some_and(|c| c.source == Source::Console);
     move |press| {
         if !matches!(press.status, Status::Focused { .. }) {
             return None;
         }
+        if completing {
+            if let Some(message) = completion_binding(&press) {
+                return Some(Binding::Custom(message));
+            }
+        }
         let plain = !press.modifiers.shift() && !press.modifiers.command();
         match &press.key {
             Key::Named(key::Named::Enter) if plain => Some(Binding::Custom(Message::Submit)),
+            Key::Named(key::Named::Space) if press.modifiers.command() => Some(Binding::Custom(Message::Complete(Source::Console))),
             Key::Named(key::Named::F1) => Some(Binding::Custom(Message::LookUp(Source::Console))),
             Key::Named(key::Named::ArrowUp) if plain && first_line => Some(Binding::Custom(Message::HistoryBack)),
             Key::Named(key::Named::ArrowDown) if plain && last_line && browsing => {
@@ -361,6 +386,7 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
     }))
     .padding(Padding { top: EDITOR_PAD, right: 10.0, bottom: EDITOR_PAD, left: 14.0 });
     let code = text_editor(&doc.content)
+        .id(editor_text_id())
         .on_action(Message::Edit)
         .placeholder("Open a script or start typing. Ctrl+Enter runs the form at the cursor.")
         .font(fonts::MONO)
@@ -379,7 +405,42 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
         .height(Length::Fill)
         .on_scroll(Message::EditorScrolled)
         .style(theme::scroll);
-    sensor(scroller).on_show(Message::EditorResized).on_resize(Message::EditorResized).into()
+    let view: Element<'_, Message> = sensor(scroller).on_show(Message::EditorResized).on_resize(Message::EditorResized).into();
+    let Some((popup, rows)) = popup(studio, Source::Editor) else { return view };
+    let cursor = doc.content.cursor().position;
+    let gutter = digits as f32 * 8.1 + 24.0;
+    let x = (gutter + 6.0 + cursor.column as f32 * 8.1).min((studio.editor_width - POPUP_WIDTH - 4.0).max(0.0));
+    let height = rows as f32 * 24.0 + 8.0;
+    let below = EDITOR_PAD + (cursor.line as f32 + 1.0) * LINE_HEIGHT - doc.offset + 2.0;
+    let y = if studio.editor_height > 0.0 && below + height > studio.editor_height {
+        (below - LINE_HEIGHT - height - 4.0).max(0.0)
+    } else {
+        below
+    };
+    let layer = container(popup).padding(Padding { top: y, right: 0.0, bottom: 0.0, left: x }).width(Length::Fill).height(Length::Fill);
+    stack![view, layer].into()
+}
+
+const POPUP_WIDTH: f32 = 400.0;
+
+fn popup(studio: &Studio, source: Source) -> Option<(Element<'_, Message>, usize)> {
+    let completion = studio.completion.as_ref().filter(|c| c.source == source)?;
+    let rows = completion.items.iter().enumerate().map(|(i, item)| {
+        let content = row![
+            text(&item.name).font(fonts::MONO).size(12.5).style(theme::strong),
+            text(&item.detail).size(11.5).style(theme::muted).wrapping(text::Wrapping::None),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        button(content)
+            .padding([3, 10])
+            .width(Length::Fill)
+            .style(theme::row(i == completion.selected))
+            .on_press(Message::CompletePick(i))
+            .into()
+    });
+    let list = container(Column::with_children(rows).width(Length::Fill)).width(POPUP_WIDTH).padding(4).style(theme::popup);
+    Some((list.into(), completion.items.len()))
 }
 
 fn code(source: &str, theme: &Theme, size: f32) -> Element<'static, Message> {
@@ -541,6 +602,7 @@ fn console(studio: &Studio) -> Element<'_, Message> {
         .style(theme::scroll);
     let prompt = if studio.pending.is_empty() { "›" } else { "…" };
     let input = text_editor(&studio.input)
+        .id(console_text_id())
         .on_action(Message::Input)
         .placeholder("Type an expression and press Enter")
         .font(fonts::MONO)
@@ -553,7 +615,17 @@ fn console(studio: &Studio) -> Element<'_, Message> {
         .width(14)
         .padding(Padding { top: 7.0, right: 0.0, bottom: 7.0, left: 0.0 });
     let entry = row![marker, input].spacing(8).padding([0, 12]);
-    column![history, line(), entry].into()
+    let body: Element<'_, Message> = column![history, line(), entry].into();
+    let Some((popup, _)) = popup(studio, Source::Console) else { return body };
+    let cursor = studio.input.cursor().position;
+    let x = 34.0 + cursor.column as f32 * 7.8;
+    let bottom = 16.0 + studio.input.line_count().max(1) as f32 * 18.0;
+    let layer = container(popup)
+        .padding(Padding { top: 0.0, right: 0.0, bottom, left: x })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .align_y(Alignment::End);
+    stack![body, layer].into()
 }
 
 fn environment(studio: &Studio) -> Element<'_, Message> {

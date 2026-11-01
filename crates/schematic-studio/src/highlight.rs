@@ -29,9 +29,10 @@ pub struct Marks {
     pub pair: Option<[(usize, usize); 2]>,
 }
 
-const SPECIALS: &[&str] = &[
+pub const SPECIALS: &[&str] = &[
     "define", "lambda", "let", "let*", "if", "cond", "else", "when", "unless", "begin", "set!", "and", "or", "loop",
-    "recur", "try", "catch", "finally", "call/ec", "quote", "quasiquote", "unquote", "define-syntax", "syntax-rules",
+    "recur", "match", "try", "catch", "finally", "call/ec", "quote", "quasiquote", "unquote", "define-syntax",
+    "syntax-rules",
 ];
 
 fn is_delimiter(c: char) -> bool {

@@ -23,6 +23,7 @@ pub struct Binding {
     pub name: String,
     pub kind: String,
     pub summary: String,
+    pub columns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -157,10 +158,17 @@ fn summarize(value: &Value) -> String {
     }
 }
 
+fn columns_of(value: &Value) -> Vec<String> {
+    match value {
+        Value::Table(t) => t.names().iter().map(|n| n.to_string()).collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn environment(interp: &Interpreter) -> Vec<Binding> {
     interp
         .user_globals()
-        .map(|(name, value)| Binding { name, kind: value.type_name().to_string(), summary: summarize(value) })
+        .map(|(name, value)| Binding { name, kind: value.type_name().to_string(), summary: summarize(value), columns: columns_of(value) })
         .collect()
 }
 
@@ -231,7 +239,11 @@ mod tests {
     }
 
     fn binding(name: &str, kind: &str, summary: &str) -> Binding {
-        Binding { name: name.into(), kind: kind.into(), summary: summary.into() }
+        Binding { name: name.into(), kind: kind.into(), summary: summary.into(), columns: Vec::new() }
+    }
+
+    fn table(name: &str, summary: &str, columns: &[&str]) -> Binding {
+        Binding { columns: columns.iter().map(|c| c.to_string()).collect(), ..binding(name, "table", summary) }
     }
 
     #[test]
@@ -243,7 +255,7 @@ mod tests {
                 Event::Result("t".into()),
                 Event::Output("hi\n".into()),
                 Event::Result("3".into()),
-                Event::Environment(vec![binding("t", "table", "2 rows, 1 column")]),
+                Event::Environment(vec![table("t", "2 rows, 1 column", &["a"])]),
                 Event::Finished,
             ]
         );
@@ -278,7 +290,7 @@ mod tests {
         assert_eq!(
             *bindings,
             vec![
-                binding("t", "table", "1 row, 1 column"),
+                table("t", "1 row, 1 column", &["a"]),
                 binding("xs", "array", "3 int values, 1 missing"),
                 binding("v", "vector", "3 items"),
                 binding("m", "map", "2 entries"),
