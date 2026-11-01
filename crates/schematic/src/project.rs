@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 pub use crate::fetch::Reference;
 use crate::fetch;
 use crate::hash::hash_tree;
+use crate::license;
 use crate::map::Map;
 use crate::reader::read_all;
 use crate::value::Value;
@@ -31,6 +32,8 @@ pub struct Dependency {
 pub struct Manifest {
     pub name: String,
     pub version: String,
+    pub license: Option<String>,
+    pub allowed_licenses: Vec<String>,
     pub source: String,
     pub main: Option<String>,
     pub registry: Option<String>,
@@ -47,8 +50,10 @@ pub enum Origin {
 pub struct Locked {
     pub name: String,
     pub version: Option<String>,
+    pub license: Option<String>,
     pub origin: Origin,
     pub hash: String,
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -81,9 +86,20 @@ impl Status {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageEntry {
     pub name: String,
+    pub license: Option<String>,
     pub git: String,
     pub subdir: Option<String>,
     pub versions: BTreeMap<String, Reference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageInfo {
+    pub name: String,
+    pub version: Option<String>,
+    pub license: Option<String>,
+    pub status: Status,
+    pub direct: bool,
+    pub required_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +126,25 @@ fn text_field(map: &Map, key: &str) -> Option<String> {
     match field(map, key) {
         Some(Value::Str(s)) => Some(s.to_string()),
         _ => None,
+    }
+}
+
+fn text_list(map: &Map, key: &str) -> Vec<String> {
+    match field(map, key) {
+        Some(Value::Vector(items)) => items.iter().filter_map(|item| if let Value::Str(s) = item { Some(s.to_string()) } else { None }).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn quoted_list(items: &[String]) -> String {
+    format!("[{}]", items.iter().map(|s| quoted(s)).collect::<Vec<_>>().join(" "))
+}
+
+fn license_field(map: &Map, what: &str) -> Result<Option<String>, Error> {
+    match field(map, "license") {
+        None => Ok(None),
+        Some(Value::Str(text)) if license::parse(&text.to_string()).is_some() => Ok(Some(text.to_string())),
+        Some(other) => Err(project_error(format!("{what} has an unreadable :license {other}; use an SPDX expression such as \"MIT\" or \"MIT OR Apache-2.0\""))),
     }
 }
 
@@ -179,6 +214,8 @@ impl Manifest {
         Manifest {
             name: name.to_string(),
             version: "0.1.0".to_string(),
+            license: None,
+            allowed_licenses: Vec::new(),
             source: "src".to_string(),
             main: None,
             registry: None,
@@ -189,6 +226,11 @@ impl Manifest {
     pub fn parse(text: &str) -> Result<Manifest, Error> {
         let map = one_map(text, MANIFEST)?;
         let name = text_field(&map, "name").ok_or_else(|| project_error(format!("{MANIFEST} needs a :name")))?;
+        let license = license_field(&map, MANIFEST)?;
+        let allowed_licenses = text_list(&map, "allowed-licenses");
+        if let Some(bad) = allowed_licenses.iter().find(|l| license::parse(l).is_none()) {
+            return Err(project_error(format!("{MANIFEST} has an unreadable entry {} in :allowed-licenses", quoted(bad))));
+        }
         let mut dependencies = Vec::new();
         if let Some(Value::Map(deps)) = field(&map, "dependencies") {
             for (key, value) in deps.iter() {
@@ -202,6 +244,8 @@ impl Manifest {
         Ok(Manifest {
             name,
             version: text_field(&map, "version").unwrap_or_else(|| "0.1.0".to_string()),
+            license,
+            allowed_licenses,
             source: text_field(&map, "source").unwrap_or_else(|| "src".to_string()),
             main: text_field(&map, "main"),
             registry: text_field(&map, "registry"),
@@ -211,6 +255,9 @@ impl Manifest {
 
     pub fn render(&self) -> String {
         let mut out = format!("{{:name {}\n :version {}", quoted(&self.name), quoted(&self.version));
+        if let Some(license) = &self.license {
+            out.push_str(&format!("\n :license {}", quoted(license)));
+        }
         if self.source != "src" {
             out.push_str(&format!("\n :source {}", quoted(&self.source)));
         }
@@ -219,6 +266,9 @@ impl Manifest {
         }
         if let Some(registry) = &self.registry {
             out.push_str(&format!("\n :registry {}", quoted(registry)));
+        }
+        if !self.allowed_licenses.is_empty() {
+            out.push_str(&format!("\n :allowed-licenses {}", quoted_list(&self.allowed_licenses)));
         }
         out.push_str("\n :dependencies {");
         for (i, dep) in self.dependencies.iter().enumerate() {
@@ -253,7 +303,14 @@ impl Lock {
                     (None, Some(url), Some(commit)) => Origin::Git { url, subdir: text_field(entry, "subdir"), commit },
                     _ => return Err(project_error(format!("{LOCK} entry {name} needs a :path, or a :git and :commit"))),
                 };
-                packages.push(Locked { name: name.to_string(), version: text_field(entry, "version"), origin, hash });
+                packages.push(Locked {
+                    name: name.to_string(),
+                    version: text_field(entry, "version"),
+                    license: text_field(entry, "license"),
+                    origin,
+                    hash,
+                    dependencies: text_list(entry, "dependencies"),
+                });
             }
         }
         packages.sort_by(|a, b| a.name.cmp(&b.name));
@@ -275,6 +332,9 @@ impl Lock {
             if let Some(version) = &package.version {
                 fields.push(format!(":version {}", quoted(version)));
             }
+            if let Some(license) = &package.license {
+                fields.push(format!(":license {}", quoted(license)));
+            }
             match &package.origin {
                 Origin::Git { url, subdir, commit } => {
                     fields.push(format!(":git {}", quoted(url)));
@@ -284,6 +344,9 @@ impl Lock {
                     fields.push(format!(":commit {}", quoted(commit)));
                 }
                 Origin::Path(path) => fields.push(format!(":path {}", quoted(path))),
+            }
+            if !package.dependencies.is_empty() {
+                fields.push(format!(":dependencies {}", quoted_list(&package.dependencies)));
             }
             fields.push(format!(":hash {}", quoted(&package.hash)));
             out.push_str(&fields.join(" "));
@@ -322,7 +385,13 @@ impl PackageEntry {
                 versions.insert(version.to_string(), reference);
             }
         }
-        Ok(PackageEntry { name: text_field(&map, "name").unwrap_or_else(|| name.to_string()), git, subdir: text_field(&map, "subdir"), versions })
+        Ok(PackageEntry {
+            name: text_field(&map, "name").unwrap_or_else(|| name.to_string()),
+            license: license_field(&map, &format!("the registry entry for {name}"))?,
+            git,
+            subdir: text_field(&map, "subdir"),
+            versions,
+        })
     }
 
     pub fn latest(&self) -> Option<(&String, &Reference)> {
@@ -425,36 +494,106 @@ impl Project {
         }
     }
 
+    fn path_of(&self, name: &str) -> Option<String> {
+        if let Some(dependency) = self.manifest.dependencies.iter().find(|d| d.name == name) {
+            return match &dependency.source {
+                Source::Path(path) => Some(path.clone()),
+                _ => None,
+            };
+        }
+        match self.lock.get(name).map(|l| &l.origin) {
+            Some(Origin::Path(path)) => Some(path.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn root_of(&self, name: &str) -> PathBuf {
+        match self.path_of(name) {
+            Some(path) => self.root.join(path),
+            None => self.package_dir(name),
+        }
+    }
+
+    fn manifest_at(root: &Path) -> Result<Option<Manifest>, Error> {
+        let path = root.join(MANIFEST);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let text = std::fs::read_to_string(&path).map_err(|e| project_error(format!("cannot read {}: {e}", path.display())))?;
+        Manifest::parse(&text).map(Some).map_err(|e| project_error(format!("{}: {e}", path.display())))
+    }
+
     fn source_dir(root: &Path) -> PathBuf {
-        let source = std::fs::read_to_string(root.join(MANIFEST))
-            .ok()
-            .and_then(|text| Manifest::parse(&text).ok())
-            .map_or_else(|| "src".to_string(), |m| m.source);
+        let source = Self::manifest_at(root).ok().flatten().map_or_else(|| "src".to_string(), |m| m.source);
         let dir = root.join(source);
         if dir.is_dir() { dir } else { root.to_path_buf() }
     }
 
     pub fn load_path(&self) -> Vec<PathBuf> {
         let mut dirs = vec![self.root.join(&self.manifest.source)];
-        for dependency in &self.manifest.dependencies {
-            dirs.push(Self::source_dir(&self.dependency_root(dependency)));
+        for package in self.packages() {
+            dirs.push(Self::source_dir(&self.root_of(&package.name)));
         }
         dirs
     }
 
-    pub fn status(&self) -> Vec<(String, Status)> {
-        self.manifest.dependencies.iter().map(|d| (d.name.clone(), self.status_of(d))).collect()
+    fn dependencies_of(&self, name: &str) -> Vec<String> {
+        let from_disk = || Self::manifest_at(&self.root_of(name)).ok().flatten().map(|m| m.dependencies.into_iter().map(|d| d.name).collect()).unwrap_or_default();
+        if self.path_of(name).is_some() {
+            return from_disk();
+        }
+        match self.lock.get(name) {
+            Some(locked) => locked.dependencies.clone(),
+            None => from_disk(),
+        }
     }
 
-    fn status_of(&self, dependency: &Dependency) -> Status {
-        if matches!(dependency.source, Source::Path(_)) {
+    pub fn packages(&self) -> Vec<PackageInfo> {
+        let mut order: Vec<String> = Vec::new();
+        let mut required_by: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut queue: VecDeque<(String, Option<String>)> = self.manifest.dependencies.iter().map(|d| (d.name.clone(), None)).collect();
+        while let Some((name, by)) = queue.pop_front() {
+            if let Some(by) = by {
+                required_by.entry(name.clone()).or_default().push(by);
+            }
+            if order.contains(&name) {
+                continue;
+            }
+            order.push(name.clone());
+            for sub in self.dependencies_of(&name) {
+                queue.push_back((sub, Some(name.clone())));
+            }
+        }
+        order
+            .into_iter()
+            .map(|name| {
+                let locked = self.lock.get(&name);
+                let license = locked.and_then(|l| l.license.clone()).or_else(|| Self::manifest_at(&self.root_of(&name)).ok().flatten().and_then(|m| m.license));
+                PackageInfo {
+                    version: locked.and_then(|l| l.version.clone()),
+                    license,
+                    status: self.status_named(&name),
+                    direct: self.manifest.dependencies.iter().any(|d| d.name == name),
+                    required_by: required_by.remove(&name).unwrap_or_default(),
+                    name,
+                }
+            })
+            .collect()
+    }
+
+    pub fn status(&self) -> Vec<(String, Status)> {
+        self.packages().into_iter().map(|p| (p.name, p.status)).collect()
+    }
+
+    fn status_named(&self, name: &str) -> Status {
+        if self.path_of(name).is_some() {
             return Status::Local;
         }
-        let dir = self.package_dir(&dependency.name);
+        let dir = self.package_dir(name);
         if !dir.is_dir() {
             return Status::Missing;
         }
-        match self.lock.get(&dependency.name) {
+        match self.lock.get(name) {
             None => Status::Unlocked,
             Some(locked) => match hash_tree(&dir) {
                 Ok(hash) if hash == locked.hash => Status::Vendored,
@@ -483,15 +622,16 @@ impl Project {
     }
 
     fn resolve(&self, name: &str, source: &Source, registry: &Registry) -> Result<Locked, Error> {
+        let locked = |version, license, origin, hash| Locked { name: name.to_string(), version, license, origin, hash, dependencies: Vec::new() };
         match source {
             Source::Path(path) => {
                 let dir = self.root.join(path);
                 let hash = hash_tree(&dir).map_err(|_| project_error(format!("{name}: no folder at {}", dir.display())))?;
-                Ok(Locked { name: name.to_string(), version: None, origin: Origin::Path(path.clone()), hash })
+                Ok(locked(None, None, Origin::Path(path.clone()), hash))
             }
             Source::Git { url, reference, subdir } => {
                 let (commit, hash) = self.vendor(name, url, reference, subdir.as_deref())?;
-                Ok(Locked { name: name.to_string(), version: None, origin: Origin::Git { url: url.clone(), subdir: subdir.clone(), commit }, hash })
+                Ok(locked(None, None, Origin::Git { url: url.clone(), subdir: subdir.clone(), commit }, hash))
             }
             Source::Registry { version } => {
                 let entry = registry.package(name)?;
@@ -510,21 +650,124 @@ impl Project {
                 };
                 let (commit, hash) = self.vendor(name, &entry.git, &reference, entry.subdir.as_deref())?;
                 let origin = Origin::Git { url: entry.git.clone(), subdir: entry.subdir.clone(), commit };
-                Ok(Locked { name: name.to_string(), version: Some(version), origin, hash })
+                Ok(locked(Some(version), entry.license.clone(), origin, hash))
+            }
+        }
+    }
+
+    fn settle_one(&mut self, dependency: &Dependency, locked_only: bool, registry: &Registry, fresh: bool) -> Result<Locked, Error> {
+        let name = dependency.name.as_str();
+        if matches!(dependency.source, Source::Path(_)) {
+            return self.resolve(name, &dependency.source, registry);
+        }
+        let pin = self.lock.get(name).filter(|p| pinned(&dependency.source, p)).cloned();
+        match pin {
+            Some(pin) if !fresh && self.status_named(name) == Status::Vendored => Ok(pin),
+            Some(pin) if !fresh => {
+                let Origin::Git { url, subdir, commit } = &pin.origin else { return self.resolve(name, &dependency.source, registry) };
+                let (_, hash) = self.vendor(name, url, &Reference::Commit(commit.clone()), subdir.as_deref())?;
+                if hash != pin.hash {
+                    return Err(project_error(format!("{name} at commit {commit} hashes to {hash}, but {LOCK} expects {}", pin.hash)));
+                }
+                Ok(pin)
+            }
+            _ if locked_only => Err(project_error(format!("{name} is not pinned in {LOCK}; run restore without --locked to resolve it"))),
+            _ => self.resolve(name, &dependency.source, registry),
+        }
+    }
+
+    fn check_license(&self, name: &str, locked: &Locked) -> Result<(), Error> {
+        let allowed = &self.manifest.allowed_licenses;
+        if allowed.is_empty() {
+            return Ok(());
+        }
+        let problem = match &locked.license {
+            None => format!("{name} declares no license, and {MANIFEST} allows only {}", allowed.join(", ")),
+            Some(license) if license::permits(license, allowed) => return Ok(()),
+            Some(license) => format!("{name} is licensed {license}, and {MANIFEST} allows only {}", allowed.join(", ")),
+        };
+        if !matches!(locked.origin, Origin::Path(_)) {
+            fetch::remove_tree(&self.package_dir(name));
+        }
+        Err(project_error(problem))
+    }
+
+    fn settle(&mut self, locked_only: bool, registry: &Registry, fresh: Option<&str>) -> Result<(), Error> {
+        let mut queue: VecDeque<(Dependency, Option<String>)> = self.manifest.dependencies.iter().cloned().map(|d| (d, None)).collect();
+        let direct: BTreeSet<String> = self.manifest.dependencies.iter().map(|d| d.name.clone()).collect();
+        let mut chosen: BTreeMap<String, Source> = BTreeMap::new();
+        let mut used_registry = false;
+        while let Some((dependency, by)) = queue.pop_front() {
+            let name = dependency.name.clone();
+            if let Some(existing) = chosen.get(&name) {
+                if *existing == dependency.source || direct.contains(&name) {
+                    continue;
+                }
+                match (existing, &dependency.source) {
+                    (Source::Registry { version: Some(a) }, Source::Registry { version: Some(b) }) if version_key(b) > version_key(a) => {}
+                    (Source::Registry { .. }, Source::Registry { .. }) => continue,
+                    (a, b) => {
+                        let by = by.map(|by| format!(" by {by}")).unwrap_or_default();
+                        return Err(project_error(format!("{name} is wanted from two places: {} and, {by}, {}", a.render(), b.render())));
+                    }
+                }
+            }
+            let fresh_here = fresh == Some(name.as_str()) || chosen.contains_key(&name);
+            chosen.insert(name.clone(), dependency.source.clone());
+            used_registry |= matches!(dependency.source, Source::Registry { .. });
+            let mut locked = self.settle_one(&dependency, locked_only, registry, fresh_here)?;
+            locked.dependencies.clear();
+            if let Some(manifest) = Self::manifest_at(&self.dependency_root(&dependency))? {
+                if manifest.license.is_some() {
+                    locked.license = manifest.license;
+                }
+                for mut sub in manifest.dependencies {
+                    if let Source::Path(inner) = &sub.source {
+                        match &dependency.source {
+                            Source::Path(outer) => sub.source = Source::Path(format!("{}/{inner}", outer.trim_end_matches('/'))),
+                            _ => return Err(project_error(format!("{name} depends on {} through a local path, which a package cannot do", sub.name))),
+                        }
+                    }
+                    locked.dependencies.push(sub.name.clone());
+                    queue.push_back((sub, Some(name.clone())));
+                }
+            }
+            self.check_license(&name, &locked)?;
+            self.lock.upsert(locked);
+        }
+        self.prune(&chosen.into_keys().collect());
+        if used_registry {
+            self.lock.registry = Some(registry.base.clone());
+        }
+        self.save()
+    }
+
+    fn prune(&mut self, keep: &BTreeSet<String>) {
+        self.lock.packages.retain(|p| keep.contains(&p.name));
+        if let Ok(entries) = std::fs::read_dir(self.root.join(PACKAGES)) {
+            for entry in entries.flatten() {
+                if !keep.contains(&*entry.file_name().to_string_lossy()) {
+                    fetch::remove_tree(&entry.path());
+                }
             }
         }
     }
 
     pub fn add(&mut self, name: &str, source: Source, registry: &Registry) -> Result<Locked, Error> {
-        let locked = self.resolve(name, &source, registry)?;
-        let source = match (&source, &locked.version) {
-            (Source::Registry { .. }, Some(version)) => Source::Registry { version: Some(version.clone()) },
-            _ => source,
-        };
-        self.manifest.upsert(Dependency { name: name.to_string(), source });
-        self.lock.registry = Some(registry.base.clone());
-        self.lock.upsert(locked.clone());
-        self.save()?;
+        let (manifest, lock) = (self.manifest.clone(), self.lock.clone());
+        self.manifest.upsert(Dependency { name: name.to_string(), source: source.clone() });
+        if let Err(e) = self.settle(false, registry, Some(name)) {
+            self.manifest = manifest;
+            self.lock = lock;
+            self.prune(&self.packages().into_iter().map(|p| p.name).collect());
+            let _ = self.save();
+            return Err(e);
+        }
+        let locked = self.lock.get(name).cloned().ok_or_else(|| project_error(format!("{name} was not resolved")))?;
+        if let (Source::Registry { .. }, Some(version)) = (&source, &locked.version) {
+            self.manifest.upsert(Dependency { name: name.to_string(), source: Source::Registry { version: Some(version.clone()) } });
+            self.save()?;
+        }
         Ok(locked)
     }
 
@@ -533,39 +776,23 @@ impl Project {
             return Err(project_error(format!("{name} is not a dependency of {}", self.manifest.name)));
         }
         self.manifest.dependencies.retain(|d| d.name != name);
-        self.lock.packages.retain(|p| p.name != name);
-        fetch::remove_tree(&self.package_dir(name));
+        self.prune(&self.packages().into_iter().map(|p| p.name).collect());
         self.save()
     }
 
     pub fn restore(&mut self, locked: bool, registry: &Registry) -> Result<Vec<(String, Status)>, Error> {
-        let dependencies = self.manifest.dependencies.clone();
-        for dependency in &dependencies {
-            let name = dependency.name.as_str();
-            match self.status_of(dependency) {
-                Status::Vendored | Status::Local => continue,
-                Status::Missing | Status::Changed | Status::Unlocked => {}
-            }
-            match self.lock.get(name).cloned() {
-                Some(pinned) => {
-                    let Origin::Git { url, subdir, commit } = &pinned.origin else { continue };
-                    let (_, hash) = self.vendor(name, url, &Reference::Commit(commit.clone()), subdir.as_deref())?;
-                    if hash != pinned.hash {
-                        return Err(project_error(format!("{name} at commit {commit} hashes to {hash}, but {LOCK} expects {}", pinned.hash)));
-                    }
-                }
-                None if locked => {
-                    return Err(project_error(format!("{name} is not pinned in {LOCK}; run restore without --locked to resolve it")));
-                }
-                None => {
-                    let resolved = self.resolve(name, &dependency.source, registry)?;
-                    self.lock.registry = Some(registry.base.clone());
-                    self.lock.upsert(resolved);
-                }
-            }
-        }
-        self.save()?;
+        self.settle(locked, registry, None)?;
         Ok(self.status())
+    }
+}
+
+fn pinned(source: &Source, locked: &Locked) -> bool {
+    match (source, &locked.origin) {
+        (Source::Path(path), Origin::Path(pinned)) => path == pinned,
+        (Source::Git { url, subdir, .. }, Origin::Git { url: pinned, subdir: pinned_subdir, .. }) => url == pinned && subdir == pinned_subdir,
+        (Source::Registry { version: Some(version) }, Origin::Git { .. }) => locked.version.as_ref() == Some(version),
+        (Source::Registry { version: None }, Origin::Git { .. }) => locked.version.is_some(),
+        _ => false,
     }
 }
 
@@ -575,10 +802,17 @@ mod tests {
 
     #[test]
     fn manifests_round_trip_through_text() {
-        let text = "{:name \"report\"\n :version \"0.2.0\"\n :main \"report.app\"\n :dependencies {\"text-tools\" \"0.1.0\"\n                \"local\" {:path \"../local\"}\n                \"fancy\" {:git \"https://x/y\" :tag \"v1\" :subdir \"pkg\"}\n                \"edge\" :latest}}\n";
+        let text = "{:name \"report\"\n :version \"0.2.0\"\n :license \"MIT OR Apache-2.0\"\n :main \"report.app\"\n :allowed-licenses [\"MIT\" \"Apache-2.0\"]\n :dependencies {\"text-tools\" \"0.1.0\"\n                \"local\" {:path \"../local\"}\n                \"fancy\" {:git \"https://x/y\" :tag \"v1\" :subdir \"pkg\"}\n                \"edge\" :latest}}\n";
         let manifest = Manifest::parse(text).unwrap();
         assert_eq!((manifest.name.as_str(), manifest.version.as_str(), manifest.source.as_str()), ("report", "0.2.0", "src"));
         assert_eq!(manifest.main.as_deref(), Some("report.app"));
+        assert_eq!(manifest.license.as_deref(), Some("MIT OR Apache-2.0"));
+        assert_eq!(manifest.allowed_licenses, ["MIT", "Apache-2.0"]);
+        assert!(manifest.render().contains("\n :license \"MIT OR Apache-2.0\"\n") && manifest.render().contains("\n :allowed-licenses [\"MIT\" \"Apache-2.0\"]\n"));
+        assert!(Manifest::parse("{:name \"x\" :license \"MIT OR\"}").unwrap_err().to_string().contains("unreadable :license"));
+        assert!(Manifest::parse("{:name \"x\" :license :mit}").unwrap_err().to_string().contains("unreadable :license"));
+        assert!(Manifest::parse("{:name \"x\" :allowed-licenses [\"MIT\" \"(\"]}").unwrap_err().to_string().contains("unreadable entry \"(\""));
+        assert_eq!(Manifest::parse("{:name \"x\"}").unwrap().license, None);
         let names: Vec<&str> = manifest.dependencies.iter().map(|d| d.name.as_str()).collect();
         assert_eq!(names, ["edge", "fancy", "local", "text-tools"]);
         assert_eq!(manifest.dependencies[1].source, Source::Git { url: "https://x/y".into(), reference: Reference::Tag("v1".into()), subdir: Some("pkg".into()) });
@@ -596,23 +830,28 @@ mod tests {
         let lock = Lock {
             registry: Some("https://example.test/registry".into()),
             packages: vec![
-                Locked { name: "local".into(), version: None, origin: Origin::Path("../local".into()), hash: "sha256:aa".into() },
+                Locked { name: "local".into(), version: None, license: None, origin: Origin::Path("../local".into()), hash: "sha256:aa".into(), dependencies: Vec::new() },
                 Locked {
                     name: "text-tools".into(),
                     version: Some("0.1.0".into()),
+                    license: Some("Apache-2.0".into()),
                     origin: Origin::Git { url: "https://x/y".into(), subdir: Some("examples/t".into()), commit: "abc".into() },
                     hash: "sha256:bb".into(),
+                    dependencies: vec!["local".into(), "words".into()],
                 },
             ],
         };
         let text = lock.render();
         assert!(text.starts_with("{:registry \"https://example.test/registry\"\n :packages {\"local\" {:path"), "{text}");
+        assert!(text.contains(":license \"Apache-2.0\" :git") && text.contains(":dependencies [\"local\" \"words\"] :hash"), "{text}");
         assert_eq!(Lock::parse(&text).unwrap(), lock);
         assert_eq!(Lock::default().render(), "{:packages {}}\n");
-        let entry = PackageEntry::parse("t", "{:git \"https://x/y\" :versions {\"0.9.0\" {:tag \"v0.9.0\"} \"0.10.0\" {:tag \"v0.10.0\"} \"0.2.1\" {:commit \"abc\"}}}").unwrap();
+        let entry = PackageEntry::parse("t", "{:git \"https://x/y\" :license \"MIT\" :versions {\"0.9.0\" {:tag \"v0.9.0\"} \"0.10.0\" {:tag \"v0.10.0\"} \"0.2.1\" {:commit \"abc\"}}}").unwrap();
         assert_eq!(entry.latest(), Some((&"0.10.0".to_string(), &Reference::Tag("v0.10.0".into()))));
         assert_eq!(entry.versions["0.2.1"], Reference::Commit("abc".into()));
+        assert_eq!(entry.license.as_deref(), Some("MIT"));
         assert!(PackageEntry::parse("t", "{:versions {}}").unwrap_err().to_string().contains("no :git"));
+        assert!(PackageEntry::parse("t", "{:git \"u\" :license \"MIT AND\"}").unwrap_err().to_string().contains("unreadable :license"));
         assert_eq!(Registry::new("https://a/b/").base, "https://a/b");
     }
 }

@@ -12,6 +12,7 @@ const USAGE: &str = "usage: schematic [file | -e expression | --version]
        schematic add <name>[@version] [--path dir | --git url [--tag t | --commit c] [--subdir d]]
        schematic remove <name>
        schematic restore [--locked]
+       schematic packages
        schematic run [file]
        schematic check [file...]";
 
@@ -29,6 +30,7 @@ fn main() {
         ["remove", name] => report(remove(name)),
         ["restore"] => report(restore(false)),
         ["restore", "--locked"] => report(restore(true)),
+        ["packages"] => report(packages()),
         ["run"] => report(run_project()),
         ["run", path] => run_file(path),
         ["check", files @ ..] => match check(files) {
@@ -156,7 +158,28 @@ fn add(args: &[&str]) -> Result<(), Error> {
         schematic::project::Origin::Git { commit, .. } => format!(" at {}", &commit[..commit.len().min(10)]),
         schematic::project::Origin::Path(path) => format!(" from {path}"),
     };
-    println!("Added {name}{version}{commit}");
+    let license = locked.license.map(|l| format!(" ({l})")).unwrap_or_default();
+    let brought: Vec<String> = project.packages().into_iter().filter(|p| !p.direct && p.required_by.iter().any(|r| r == name)).map(|p| p.name).collect();
+    let with = if brought.is_empty() { String::new() } else { format!(", with {}", brought.join(", ")) };
+    println!("Added {name}{version}{commit}{license}{with}");
+    Ok(())
+}
+
+fn print_packages(project: &Project) {
+    let packages = project.packages();
+    if packages.is_empty() {
+        println!("{} has no dependencies", project.manifest.name);
+    }
+    for package in packages {
+        let version = package.version.as_deref().unwrap_or("-");
+        let license = package.license.as_deref().unwrap_or("no license");
+        let via = if package.direct { String::new() } else { format!("  via {}", package.required_by.join(", ")) };
+        println!("{:<24} {version:<10} {license:<20} {}{via}", package.name, package.status.label());
+    }
+}
+
+fn packages() -> Result<(), Error> {
+    print_packages(&project_at(Path::new("."))?);
     Ok(())
 }
 
@@ -170,13 +193,8 @@ fn remove(name: &str) -> Result<(), Error> {
 fn restore(locked: bool) -> Result<(), Error> {
     let mut project = project_at(Path::new("."))?;
     let registry = project.registry();
-    let statuses = project.restore(locked, &registry)?;
-    if statuses.is_empty() {
-        println!("{} has no dependencies", project.manifest.name);
-    }
-    for (name, status) in statuses {
-        println!("{name:<24} {}", status.label());
-    }
+    project.restore(locked, &registry)?;
+    print_packages(&project);
     Ok(())
 }
 

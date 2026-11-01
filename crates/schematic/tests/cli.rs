@@ -70,6 +70,9 @@ fn projects_are_created_restored_and_run_from_the_command_line() {
     let (code, out, _) = run_in(&demo, &["restore", "--locked"]);
     assert_eq!(code, 0);
     assert!(out.contains("lib") && out.contains("local path"), "{out}");
+    let (code, out, _) = run_in(&demo, &["packages"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("lib ") && out.contains("no license") && out.contains("local path"), "{out}");
     let (code, out, _) = run_in(&demo, &["remove", "lib"]);
     assert_eq!((code, out.as_str()), (0, "Removed lib\n"));
     let (code, _, err) = run_in(&demo, &["run"]);
