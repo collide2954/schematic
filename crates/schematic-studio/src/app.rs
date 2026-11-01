@@ -13,6 +13,7 @@ use schematic::check::{Diagnostic, check_source};
 use schematic::plot::Plot;
 use schematic::reader::read_all;
 
+use crate::commands::{self, Menu};
 use crate::completion::{self, Candidate};
 use crate::highlight::Marks;
 use crate::project::{self, ProjectInfo};
@@ -289,6 +290,8 @@ pub struct Studio {
     pub completion: Option<Completion>,
     pub find: Option<Find>,
     pub wrap: bool,
+    pub palette: Option<Palette>,
+    pub menu: Option<Menu>,
     pub editor_width: f32,
     pub editor_height: f32,
     pub side: Side,
@@ -394,8 +397,38 @@ pub enum Message {
     FindClose,
     ExpandSelection,
     JumpTo(usize),
+    JumpToLine(usize),
     ToggleWrap,
+    PaletteOpen(String),
+    PaletteQuery(String),
+    PaletteMove(i32),
+    PaletteRun(Option<usize>),
+    PaletteClose,
+    MenuToggle(Menu),
+    MenuHover(Menu),
+    MenuClose,
+    MenuPick(usize),
+    TogglePane(PaneKind),
+    Maximize(PaneKind),
+    RestorePanes,
+    ShowHelp(Page),
+    OpenWebsite,
+    About,
+    Quit,
+    QuitDecided(bool),
 }
+
+pub fn palette_id() -> Id {
+    Id::new("palette")
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Palette {
+    pub query: String,
+    pub selected: usize,
+}
+
+pub const WEBSITE: &str = "https://collide2954.github.io/schematic/";
 
 pub fn find_id() -> Id {
     Id::new("find")
@@ -507,6 +540,8 @@ pub struct Find {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shortcut {
     Escape,
+    Up,
+    Down,
     FindNext,
     FindPrevious,
     Find,
@@ -529,6 +564,8 @@ pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifie
     let letter = |wanted: &str| matches!(key, Key::Character(c) if c.eq_ignore_ascii_case(wanted));
     Some(match key {
         Key::Named(Named::Escape) => Shortcut::Escape,
+        Key::Named(Named::ArrowUp) if !command && !shift => Shortcut::Up,
+        Key::Named(Named::ArrowDown) if !command && !shift => Shortcut::Down,
         Key::Named(Named::F3) => {
             if shift {
                 Shortcut::FindPrevious
@@ -551,7 +588,7 @@ pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifie
         _ if letter("w") => Shortcut::Close,
         _ if letter("p") && shift => Shortcut::Palette,
         _ if letter("g") => Shortcut::GoToLine,
-        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=5).contains(n))?),
+        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=6).contains(n))?),
         _ => return None,
     })
 }
@@ -605,6 +642,34 @@ async fn confirm_delete(name: String) -> bool {
     matches!(result, rfd::MessageDialogResult::Yes)
 }
 
+async fn confirm_quit(unsaved: usize) -> bool {
+    let what = if unsaved == 1 { "1 file".to_string() } else { format!("{unsaved} files") };
+    let result = rfd::AsyncMessageDialog::new()
+        .set_title("Quit")
+        .set_description(format!("Quit without saving {what}?"))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await;
+    matches!(result, rfd::MessageDialogResult::Yes)
+}
+
+fn open_url(url: &str) -> std::io::Result<()> {
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    } else if cfg!(target_os = "macos") {
+        let mut command = std::process::Command::new("open");
+        command.arg(url);
+        command
+    } else {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+    command.spawn().map(|_| ())
+}
+
 async fn confirm_close(name: String) -> Decision {
     let result = rfd::AsyncMessageDialog::new()
         .set_title("Unsaved changes")
@@ -643,6 +708,8 @@ impl Studio {
             completion: None,
             find: None,
             wrap: false,
+            palette: None,
+            menu: None,
             editor_width: 0.0,
             editor_height: 0.0,
             side: Side::Environment,
@@ -946,6 +1013,113 @@ impl Studio {
             }
             Message::ToggleWrap => {
                 self.wrap = !self.wrap;
+                Task::none()
+            }
+            Message::JumpToLine(line) => {
+                self.palette = None;
+                let text = self.doc().content.text();
+                let offset = forms::offset_of(&text, line.saturating_sub(1), 0);
+                self.update(Message::JumpTo(offset))
+            }
+            Message::PaletteOpen(query) => {
+                self.menu = None;
+                self.palette = Some(Palette { query, selected: 0 });
+                operation::focus(palette_id())
+            }
+            Message::PaletteQuery(query) => {
+                if let Some(palette) = &mut self.palette {
+                    palette.query = query;
+                    palette.selected = 0;
+                }
+                Task::none()
+            }
+            Message::PaletteMove(step) => {
+                let count = self.palette.as_ref().map_or(0, |p| commands::matching(self, &p.query).len());
+                if let Some(palette) = &mut self.palette
+                    && count > 0 {
+                        palette.selected = (palette.selected as i32 + step).rem_euclid(count as i32) as usize;
+                    }
+                Task::none()
+            }
+            Message::PaletteRun(index) => {
+                let Some(palette) = self.palette.take() else { return Task::none() };
+                let found = commands::matching(self, &palette.query);
+                match found.get(index.unwrap_or(palette.selected)).and_then(|c| c.message.clone()) {
+                    Some(message) => Task::batch([operation::focus(editor_text_id()), self.update(message)]),
+                    None => {
+                        self.palette = Some(palette);
+                        Task::none()
+                    }
+                }
+            }
+            Message::PaletteClose => {
+                self.palette = None;
+                operation::focus(editor_text_id())
+            }
+            Message::MenuToggle(menu) => {
+                self.menu = if self.menu == Some(menu) { None } else { Some(menu) };
+                Task::none()
+            }
+            Message::MenuHover(menu) => {
+                if self.menu.is_some() {
+                    self.menu = Some(menu);
+                }
+                Task::none()
+            }
+            Message::MenuClose => {
+                self.menu = None;
+                Task::none()
+            }
+            Message::MenuPick(index) => {
+                self.menu = None;
+                match commands::commands(self).get(index).and_then(|c| c.message.clone()) {
+                    Some(message) => self.update(message),
+                    None => Task::none(),
+                }
+            }
+            Message::TogglePane(kind) => {
+                self.toggle_pane(kind);
+                Task::none()
+            }
+            Message::Maximize(kind) => {
+                if let Some(pane) = self.pane_of(kind) {
+                    self.panes.maximize(pane);
+                }
+                Task::none()
+            }
+            Message::RestorePanes => {
+                self.panes.restore();
+                Task::none()
+            }
+            Message::ShowHelp(page) => {
+                let help = self.help.get_or_insert(Help { page, query: String::new() });
+                help.page = page;
+                help.query.clear();
+                self.tab = Tab::Help;
+                Task::none()
+            }
+            Message::OpenWebsite => {
+                self.status = match open_url(WEBSITE) {
+                    Ok(()) => format!("Opened {WEBSITE}"),
+                    Err(e) => format!("Cannot open the website: {e}"),
+                };
+                Task::none()
+            }
+            Message::About => {
+                self.note(&format!("Schematic Studio {}. A workbench for Schematic: {WEBSITE}", env!("CARGO_PKG_VERSION")));
+                operation::snap_to(console_id(), RelativeOffset::END)
+            }
+            Message::Quit => {
+                let unsaved = self.docs.iter().filter(|d| d.dirty).count();
+                if unsaved == 0 {
+                    return iced::exit();
+                }
+                Task::perform(confirm_quit(unsaved), Message::QuitDecided)
+            }
+            Message::QuitDecided(yes) => {
+                if yes {
+                    return iced::exit();
+                }
                 Task::none()
             }
             Message::ToggleComment => {
@@ -1452,10 +1626,38 @@ impl Studio {
         Task::batch([self.follow_cursor(), refreshed, self.schedule_check()])
     }
 
+    pub fn pane_of(&self, kind: PaneKind) -> Option<pane_grid::Pane> {
+        self.panes.iter().find(|(_, k)| **k == kind).map(|(pane, _)| *pane)
+    }
+
+    fn toggle_pane(&mut self, kind: PaneKind) {
+        use pane_grid::Axis;
+        if let Some(pane) = self.pane_of(kind) {
+            if self.panes.maximized() == Some(pane) {
+                self.panes.restore();
+            }
+            self.panes.close(pane);
+            return;
+        }
+        let first = |kinds: &[PaneKind]| kinds.iter().find_map(|k| self.pane_of(*k)).or_else(|| self.panes.iter().next().map(|(p, _)| *p));
+        let (anchor, axis, before) = match kind {
+            PaneKind::Editor => (first(&[PaneKind::Console, PaneKind::Environment]), Axis::Horizontal, true),
+            PaneKind::Console => (first(&[PaneKind::Editor, PaneKind::Environment]), Axis::Horizontal, false),
+            PaneKind::Environment => (first(&[PaneKind::Viewer, PaneKind::Plots, PaneKind::Editor]), Axis::Vertical, false),
+            PaneKind::Viewer => (first(&[PaneKind::Environment, PaneKind::Plots, PaneKind::Editor]), Axis::Horizontal, false),
+            PaneKind::Plots => (first(&[PaneKind::Viewer, PaneKind::Environment, PaneKind::Console]), Axis::Horizontal, false),
+        };
+        let Some(anchor) = anchor else { return };
+        if let Some((pane, _)) = self.panes.split(axis, anchor, kind)
+            && before {
+                self.panes.swap(pane, anchor);
+            }
+    }
+
     fn shortcut(&mut self, shortcut: Shortcut) -> Task<Message> {
         match shortcut {
             Shortcut::Escape => {
-                if self.completion.take().is_some() {
+                if self.menu.take().is_some() || self.palette.take().is_some() || self.completion.take().is_some() {
                     return Task::none();
                 }
                 if self.find.is_some() {
@@ -1463,6 +1665,11 @@ impl Studio {
                 }
                 Task::none()
             }
+            Shortcut::Up if self.palette.is_some() => self.update(Message::PaletteMove(-1)),
+            Shortcut::Down if self.palette.is_some() => self.update(Message::PaletteMove(1)),
+            Shortcut::Up | Shortcut::Down => Task::none(),
+            Shortcut::Palette => self.update(Message::PaletteOpen(String::new())),
+            Shortcut::GoToLine => self.update(Message::PaletteOpen(":".to_string())),
             Shortcut::FindNext => self.update(Message::FindStep(1)),
             Shortcut::FindPrevious => self.update(Message::FindStep(-1)),
             Shortcut::Find => self.update(Message::FindOpen(false)),
@@ -1472,7 +1679,6 @@ impl Studio {
             Shortcut::Open => self.update(Message::Open),
             Shortcut::New => self.update(Message::NewFile),
             Shortcut::Close => self.update(Message::CloseTab(Tab::Doc(self.current))),
-            Shortcut::Palette | Shortcut::GoToLine => Task::none(),
             Shortcut::Pane(1) => operation::focus(editor_text_id()),
             Shortcut::Pane(2) => operation::focus(console_text_id()),
             Shortcut::Pane(n) => {
@@ -1889,6 +2095,45 @@ mod tests {
         let _ = studio.update(Message::ToggleWrap);
         assert!(studio.wrap);
         let _ = view::view(&studio);
+    }
+
+    #[test]
+    fn the_palette_and_menus_run_commands_and_panes_hide_and_return() {
+        let mut studio = studio_with_content();
+        let _ = studio.update(Message::Shortcut(Shortcut::Palette));
+        assert_eq!(studio.palette.as_ref().map(|p| p.query.as_str()), Some(""));
+        let _ = studio.update(Message::PaletteQuery("word wrap".into()));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::PaletteRun(None));
+        assert!(studio.wrap && studio.palette.is_none());
+        let _ = studio.update(Message::Shortcut(Shortcut::GoToLine));
+        let _ = studio.update(Message::PaletteQuery(":3".into()));
+        let _ = studio.update(Message::PaletteRun(None));
+        assert_eq!(studio.doc().content.cursor().position.line, 2);
+        let _ = studio.update(Message::MenuToggle(Menu::View));
+        assert_eq!(studio.menu, Some(Menu::View));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::MenuHover(Menu::Edit));
+        assert_eq!(studio.menu, Some(Menu::Edit));
+        let _ = studio.update(Message::Shortcut(Shortcut::Escape));
+        assert_eq!(studio.menu, None);
+        let plots = commands::commands(&studio).iter().position(|c| c.name == "Plots").unwrap();
+        let _ = studio.update(Message::MenuPick(plots));
+        assert_eq!(studio.pane_of(PaneKind::Plots), None);
+        assert_eq!(studio.panes.iter().count(), 4);
+        let _ = studio.update(Message::TogglePane(PaneKind::Plots));
+        assert!(studio.pane_of(PaneKind::Plots).is_some());
+        let _ = studio.update(Message::Maximize(PaneKind::Editor));
+        assert_eq!(studio.panes.maximized(), studio.pane_of(PaneKind::Editor));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::RestorePanes);
+        assert_eq!(studio.panes.maximized(), None);
+        for kind in [PaneKind::Editor, PaneKind::Console, PaneKind::Environment, PaneKind::Viewer, PaneKind::Plots] {
+            let _ = studio.update(Message::TogglePane(kind));
+        }
+        assert_eq!(studio.panes.iter().count(), 1, "the last pane stays");
+        let _ = studio.update(Message::ShowHelp(Page::Guide));
+        assert_eq!((studio.tab, studio.help.as_ref().map(|h| h.page)), (Tab::Help, Some(Page::Guide)));
     }
 
     #[test]

@@ -3,8 +3,8 @@ use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::text::{LineHeight, Span};
 use iced::widget::text_editor::{Binding, KeyPress, Motion, Status};
 use iced::widget::{
-    Column, Row, button, canvas, column, container, lazy, pane_grid, rich_text, row, rule, scrollable, sensor, space, span,
-    stack, table, text, text_editor, text_input, tooltip,
+    Column, Row, button, canvas, column, container, lazy, mouse_area, pane_grid, rich_text, row, rule, scrollable, sensor, space,
+    span, stack, table, text, text_editor, text_input, tooltip,
 };
 use std::path::Path;
 
@@ -12,10 +12,11 @@ use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
-    EDITOR_PAD, Find, LINE_HEIGHT, LineKind, Message, NamingKind, PAGE, Page, PaneKind, Side, Source, Studio, Tab, console_id,
-    console_text_id, editor_id, editor_text_id, find_id, naming_id,
+    EDITOR_PAD, Find, LINE_HEIGHT, LineKind, Message, NamingKind, PAGE, Page, Palette, PaneKind, Side, Source, Studio, Tab,
+    console_id, console_text_id, editor_id, editor_text_id, find_id, naming_id, palette_id,
 };
 use crate::chart::Chart;
+use crate::commands::{self, Menu};
 use crate::icons::{Glyph, Ink, icon};
 use crate::worker::Grid;
 use crate::{fonts, forms, highlight, theme};
@@ -57,7 +58,18 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
                 (single("Plots", detail), Some(plot_controls(studio)), plots(studio))
             }
         };
-        let bar = pane_grid::TitleBar::new(strip(tabs, controls)).style(theme::strip);
+        let maximized = studio.panes.maximized().is_some();
+        let fold = tip(
+            small(if maximized { "⤡" } else { "⤢" }, Some(if maximized { Message::RestorePanes } else { Message::Maximize(*kind) })),
+            if maximized { "Restore the layout" } else { "Maximize this pane" },
+        );
+        let hide = tip(small("–", Some(Message::TogglePane(*kind))), "Hide this pane (View menu shows it again)");
+        let pane_buttons = row![fold, hide].spacing(0);
+        let controls: Element<'_, Message> = match controls {
+            Some(controls) => row![controls, pane_buttons].spacing(6).align_y(Alignment::Center).into(),
+            None => pane_buttons.into(),
+        };
+        let bar = pane_grid::TitleBar::new(strip(tabs, Some(controls))).style(theme::strip);
         pane_grid::Content::new(body).title_bar(bar).style(theme::pane)
     })
     .spacing(1)
@@ -65,7 +77,98 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
     .on_resize(6, Message::PaneResized)
     .on_drag(Message::PaneDragged);
     let workspace = container(panes).width(Length::Fill).height(Length::Fill).style(theme::gaps);
-    column![toolbar(studio), line(), workspace, line(), status_bar(studio)].into()
+    let base: Element<'_, Message> = column![menu_bar(studio), line(), toolbar(studio), line(), workspace, line(), status_bar(studio)].into();
+    match (studio.menu, &studio.palette) {
+        (Some(menu), _) => stack![base, dropdown(studio, menu)].into(),
+        (None, Some(palette)) => stack![base, palette_layer(studio, palette)].into(),
+        (None, None) => base,
+    }
+}
+
+const MENU_HEIGHT: f32 = 26.0;
+
+fn menu_width(menu: Menu) -> f32 {
+    18.0 + 7.4 * menu.label().chars().count() as f32
+}
+
+fn menu_bar(studio: &Studio) -> Element<'_, Message> {
+    let mut bar = Row::new().height(MENU_HEIGHT).align_y(Alignment::Center).padding(Padding { top: 0.0, right: 8.0, bottom: 0.0, left: 6.0 });
+    for menu in Menu::ALL {
+        let open = studio.menu == Some(menu);
+        let head = button(text(menu.label()).size(12.5).font(fonts::UI_MEDIUM))
+            .padding([2, 0])
+            .width(menu_width(menu))
+            .style(theme::choice(open))
+            .on_press(Message::MenuToggle(menu));
+        let head: Element<'_, Message> = if studio.menu.is_some() { mouse_area(head).on_enter(Message::MenuHover(menu)).into() } else { head.into() };
+        bar = bar.push(container(head).center_x(Length::Shrink));
+    }
+    container(bar).width(Length::Fill).style(theme::bar).into()
+}
+
+fn dropdown(studio: &Studio, menu: Menu) -> Element<'_, Message> {
+    let x = 6.0 + Menu::ALL.iter().take_while(|m| **m != menu).map(|m| menu_width(*m)).sum::<f32>();
+    let mut list = Column::new().width(280);
+    let mut any = false;
+    for (index, command) in commands::commands(studio).into_iter().enumerate() {
+        if command.menu != menu {
+            continue;
+        }
+        if command.gap && any {
+            list = list.push(container(line()).padding([4, 0]));
+        }
+        any = true;
+        let enabled = command.message.is_some();
+        let label: TextStyle = if enabled { theme::strong } else { theme::faint };
+        let mark = match command.checked {
+            Some(true) => "✓",
+            _ => "",
+        };
+        let content = row![
+            text(mark).size(12).style(theme::accent).width(14),
+            text(command.name).size(12.5).style(label),
+            space::horizontal(),
+            text(command.keys).size(11.5).style(theme::faint),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        list = list.push(button(content).padding([4, 10]).width(Length::Fill).style(theme::row(false)).on_press_maybe(enabled.then_some(Message::MenuPick(index))));
+    }
+    let panel = container(list.padding(4)).style(theme::popup);
+    let placed = container(panel).padding(Padding { top: MENU_HEIGHT, right: 0.0, bottom: 0.0, left: x }).width(Length::Fill).height(Length::Fill);
+    let backdrop = mouse_area(container(space::horizontal()).width(Length::Fill).height(Length::Fill)).on_press(Message::MenuClose);
+    stack![backdrop, placed].into()
+}
+
+fn palette_layer<'a>(studio: &'a Studio, palette: &'a Palette) -> Element<'a, Message> {
+    let found = commands::matching(studio, &palette.query);
+    let input = text_input("Type a command, or : and a line number", &palette.query)
+        .id(palette_id())
+        .on_input(Message::PaletteQuery)
+        .on_submit(Message::PaletteRun(None))
+        .size(13.5)
+        .padding([7, 10])
+        .style(theme::field)
+        .width(Length::Fill);
+    let mut list = Column::new().width(Length::Fill);
+    for (index, command) in found.iter().enumerate().take(12) {
+        let content = row![
+            text(command.name).size(13).style(theme::strong),
+            space::horizontal(),
+            text(command.keys).size(11.5).style(theme::faint),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        let press = command.message.is_some().then_some(Message::PaletteRun(Some(index)));
+        list = list.push(button(content).padding([5, 10]).width(Length::Fill).style(theme::row(index == palette.selected)).on_press_maybe(press));
+    }
+    if found.is_empty() {
+        list = list.push(container(text("Nothing matches").size(12.5).style(theme::muted)).padding([6, 10]));
+    }
+    let panel = container(column![input, list].spacing(6).padding(8)).width(560).style(theme::popup);
+    let placed = container(panel).padding(Padding { top: 72.0, right: 0.0, bottom: 0.0, left: 0.0 }).width(Length::Fill).height(Length::Fill).center_x(Length::Fill);
+    let backdrop = mouse_area(container(space::horizontal()).width(Length::Fill).height(Length::Fill)).on_press(Message::PaletteClose);
+    stack![backdrop, placed].into()
 }
 
 fn line<'a>() -> Element<'a, Message> {

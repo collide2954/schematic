@@ -1,5 +1,6 @@
 pub mod app;
 pub mod chart;
+pub mod commands;
 pub mod completion;
 pub mod files;
 pub mod fonts;
