@@ -8,7 +8,7 @@ pub mod collections;
 mod core;
 mod csv;
 mod dates;
-mod functional;
+pub mod functional;
 mod help;
 mod io;
 pub mod math;
