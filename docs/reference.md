@@ -269,6 +269,29 @@ and `:labels true` prints each value next to its bar or point. A chart is a
 value: printing it draws a text version, Schematic Studio shows it in the
 Plots pane with values on hover, and missing values are left out.
 
+## Namespaces
+
+Every name lives in a namespace. Builtins live in `schematic.core`, which
+every namespace sees, and code that does not say otherwise runs in `user`.
+A symbol written as `prefix/name` looks up `name` in the namespace that
+`prefix` is an alias for, or in the namespace called `prefix`, unless the
+whole symbol is itself a name, which is how `call/ec` and `/` keep working.
+
+| Function | Description |
+|---|---|
+| `(ns name clauses...)` | switch to the namespace `name`, creating it if needed; a `(:require spec...)` clause loads other namespaces as `require` does |
+| `(require spec...)` | load namespaces; a spec is `'my.lib`, `'[my.lib :as m]`, `'[my.lib :refer [f g]]`, or `'[my.lib :refer :all]`, and `my.lib` is read from `my/lib.scm` on the load path |
+| `(refer 'ns)`, `(refer 'ns :only '[f g])` | make a loaded namespace's names, or just some of them, usable without a prefix |
+| `(alias 'short 'my.lib)` | let `short/name` stand for `my.lib/name` |
+| `(load path)` | run a file in the current namespace; a relative path is looked up on the load path |
+| `(current-ns)` | the current namespace as a symbol |
+
+The load path starts with the folder of the file being run and the working
+directory. A file loaded for a namespace begins with its own `ns` form, and
+loading it leaves the current namespace unchanged. Defining a name that
+already exists in `schematic.core` shadows it from then on in that
+namespace; code compiled earlier keeps the builtin.
+
 ## Help
 
 | Function | Description |

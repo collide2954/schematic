@@ -45,6 +45,9 @@ Early development. Working today:
 - Bytecode compiler and VM with proper tail calls, closures, `loop`/`recur`
 - `try`/`catch`/`finally`, `raise`, and `call/ec` escape continuations
 - Hygienic `syntax-rules` macros
+- Namespaces in the style of Clojure: `ns`, `require` with `:as` and
+  `:refer`, `refer`, `alias`, qualified names, and files found on a load
+  path
 - Vector and map destructuring in `define`, `let`, `loop`, and parameter
   lists, plus `match` with guards
 - A standard library of collection, string, numeric, and higher-order
@@ -62,9 +65,10 @@ Early development. Working today:
   histogram, box plot, and pie as values that print as text, save as SVG,
   and show in Studio's Plots pane, with facets, log scales, formatted
   axes, reference lines, and value labels
-- A REPL and file runner
+- A REPL and file runner, plus `doc` and `apropos` for help at the prompt
 
-Next up: more performance work.
+Next up: projects with a manifest, a lock file, and a package registry;
+then a gradual type checker.
 
 ## Running
 

@@ -205,4 +205,12 @@
 (define x 42)
 (check "quasiquote" '(x is 42 and doubled 84) `(x is ~x and doubled ~(* 2 x)))
 
+;; Namespaces
+(ns tour.helpers)
+(define (shout s) (string-upcase s))
+(ns user (:require [tour.helpers :as h :refer [shout]]))
+(check "qualified name" "HI" (h/shout "hi"))
+(check "referred name" "HI" (shout "hi"))
+(check "current namespace" 'user (current-ns))
+
 (println "tour complete")

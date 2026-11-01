@@ -535,6 +535,31 @@ nested structures:
 `(x is ~x and doubled ~(* 2 x))   ; (x is 42 and doubled 84)
 ```
 
+## Namespaces
+
+Larger programs split into namespaces, as in Clojure. `ns` switches to a
+namespace and creates it if needed, `define` puts names into the current
+one, and a name from another namespace is written `prefix/name`. Builtins
+live in `schematic.core`, which every namespace sees, and code that never
+mentions a namespace runs in `user`.
+
+```scheme
+(ns tour.helpers)
+(define (shout s) (string-upcase s))
+
+(ns user (:require [tour.helpers :as h :refer [shout]]))
+(h/shout "hi")                    ; "HI"
+(shout "hi")                      ; "HI", referred by name
+(current-ns)                      ; user
+```
+
+`(:require [name :as alias :refer [...]])` loads a namespace and gives it a
+short alias or brings some of its names in directly; `:refer :all` brings
+them all. A namespace called `my.lib` comes from the file `my/lib.scm`,
+found on the load path, which starts with the folder of the file being run
+and the working directory. `require`, `refer`, and `alias` also work on
+their own, with quoted arguments.
+
 ## Where to go next
 
 The [reference](reference.md) lists every special form and built-in
