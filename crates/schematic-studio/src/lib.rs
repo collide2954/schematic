@@ -7,6 +7,7 @@ pub mod fonts;
 pub mod forms;
 pub mod highlight;
 pub mod icons;
+pub mod notebook;
 pub mod project;
 pub mod settings;
 pub mod theme;
