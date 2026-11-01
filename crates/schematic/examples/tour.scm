@@ -119,6 +119,11 @@
 (check "line over dates" true (string-contains? (str (line-chart shop :when :units)) "2024-01-01"))
 (check "histogram" true (string-starts-with? (str (histogram (:units shop) {:bins 2})) "7–18.5"))
 (check "svg" true (string-starts-with? (to-svg (scatter shop :year :units)) "<svg"))
+(check "stacked bars" true (plot? (bar-chart shop :city :units {:by :year :stack true :labels true})))
+(check "facets" true (string-contains? (str (line-chart shop :when :units {:facet :city :y-range [0 40]})) "── Oslo ──"))
+(check "box plot" true (string-contains? (str (box-plot shop :city :units)) "Oslo"))
+(check "pie" true (string-contains? (str (pie-chart shop :city :units {:donut true})) "(86%)"))
+(check "sideways" true (plot? (bar-chart shop :city :units {:horizontal true :y-format "{:,}" :hline 20})))
 
 ;; Arrays
 (define prices #[10 20 30 nil])

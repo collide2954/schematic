@@ -470,9 +470,21 @@ Studio shows it in its Plots pane, and `save-plot` writes an SVG file:
 (save-plot (scatter shop :year :units) "units.svg")
 ```
 
-`bar-chart`, `line-chart`, and `scatter` take a table with two column
-keywords, or two plain collections. Missing values are skipped, and the
-options map accepts `:title`, `:x-label`, `:y-label`, and `:by`.
+`bar-chart`, `line-chart`, `area-chart`, `scatter`, and `pie-chart` take a
+table with two column keywords, or two plain collections; `box-plot` takes a
+value column and an optional group column. Missing values are skipped. The
+options map names things with `:title`, `:x-label`, and `:y-label`, splits
+rows into series with `:by` or into side-by-side panels with `:facet`, and
+shapes the axes with `:x-range`, `:y-range`, `:y-scale :log`, `:y-format`,
+`:hline`, `:vline`, and `:labels`:
+
+```scheme
+(bar-chart shop :city :units {:by :year :stack true :labels true})
+(line-chart shop :when :units {:facet :city :y-range [0 40]})
+(box-plot shop :city :units)
+(pie-chart shop :city :units {:donut true})
+(bar-chart shop :city :units {:horizontal true :y-format "{:,}" :hline 20})
+```
 
 ## When things go wrong
 

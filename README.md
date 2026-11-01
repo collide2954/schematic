@@ -58,11 +58,13 @@ Early development. Working today:
 - Tables with `select`, `where`, `distinct`, `order-by`, `group-by`,
   `aggregate`, `window`, `pivot`, `unpivot`, `join`, `describe`, row
   appending, and CSV reading and writing
-- Charts: bar, line, scatter, and histogram as values that print as text,
-  save as SVG, and show in Studio's Plots pane
+- Charts: bar (grouped, stacked, or sideways), line, area, scatter,
+  histogram, box plot, and pie as values that print as text, save as SVG,
+  and show in Studio's Plots pane, with facets, log scales, formatted
+  axes, reference lines, and value labels
 - A REPL and file runner
 
-Next up: more performance work and richer charts.
+Next up: more performance work.
 
 ## Running
 

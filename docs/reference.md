@@ -248,17 +248,26 @@ array of strings, so a text column turns into a date column in one call.
 
 | Function | Description |
 |---|---|
-| `(bar-chart data x y [opts])` | one bar per category in `x`; `data` is a table with two column keywords, or `x` and `y` are two collections |
+| `(bar-chart data x y [opts])` | one bar per category in `x`; `data` is a table with two column keywords, or `x` and `y` are two collections; `:stack true` stacks the `:by` series and `:horizontal true` turns the bars sideways |
 | `(line-chart data x y [opts])` | points joined in `x` order; `x` may hold numbers or dates |
+| `(area-chart data x y [opts])` | a line chart filled to the baseline; several series stack |
 | `(scatter data x y [opts])` | points |
 | `(histogram data [:col] [opts])` | counts of numbers in equal-width bins, ten unless `:bins` says otherwise |
+| `(box-plot data [:group] :value [opts])`, `(box-plot numbers [opts])` | median, quartiles, whiskers at 1.5 times the interquartile range, and outliers as points |
+| `(pie-chart data x y [opts])` | one slice per category, duplicates summed; `:donut true` leaves a hole |
 | `(plot? x)` | test |
 | `(to-svg plot)`, `(save-plot plot path)` | the chart as a 640 by 400 SVG document, as a string or written to a file |
 
-Options are a map with `:title`, `:x-label`, `:y-label`, `:by` (a column
-whose values split the rows into series), and `:bins`. A chart is a value:
-printing it draws a text version, Schematic Studio shows it in the Plots
-pane, and missing values are left out.
+Options are a map. `:title`, `:x-label`, and `:y-label` name things; `:by`
+splits the rows into series by a column and `:facet` splits them into
+panels with shared axes; `:bins` sizes a histogram. Axes take `:x-range`
+and `:y-range` as `[low high]`, `:x-scale` and `:y-scale` as `:linear` or
+`:log`, and `:x-format` and `:y-format` as a `format` spec such as `"{:,}"`
+or `"{:.0%}"`, or a `date-format` pattern for a date axis. `:hline` and
+`:vline` draw dashed reference lines at one value or a collection of them,
+and `:labels true` prints each value next to its bar or point. A chart is a
+value: printing it draws a text version, Schematic Studio shows it in the
+Plots pane with values on hover, and missing values are left out.
 
 ## Errors
 
