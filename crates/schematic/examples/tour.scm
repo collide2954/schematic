@@ -87,6 +87,24 @@
 (check "add-months" #2024-02-29 (add-months #2024-01-31 1))
 (check "date-range" #[#2024-01-30 #2024-01-31 #2024-02-01 #2024-02-02] (date-range #2024-01-30 #2024-02-02))
 
+;; Taking values apart
+(define [low high] [1 9])
+(check "define pattern" 8 (- high low))
+(check "rest pattern" [2 3] (let (([first & more] [1 2 3])) more))
+(define (full-name {:keys [first last]}) (str first " " last))
+(check "map pattern" "Ada Lovelace" (full-name {:first "Ada" :last "Lovelace"}))
+(define (shape-name shape)
+  (match shape
+    ([:circle r] (str "circle of radius " r))
+    ([:rect w h] :when (= w h) (str "square of side " w))
+    ([:rect w h] (str w " by " h " rectangle"))
+    ({:keys [points]} (str (count points) " points"))
+    (else "something else")))
+(check "match guard" "square of side 2" (shape-name [:rect 2 2]))
+(check "match rect" "2 by 3 rectangle" (shape-name [:rect 2 3]))
+(check "match map" "3 points" (shape-name {:points [1 2 3]}))
+(check "match else" "something else" (shape-name 42))
+
 ;; Arrays
 (define prices #[10 20 30 nil])
 (check "array-type" :int (array-type prices))

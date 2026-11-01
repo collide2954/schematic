@@ -47,10 +47,29 @@ keywords, maps, vectors, sets, and arrays.
 | `(try body... (catch e handler...) (finally cleanup...))` | catch raised values; `finally` always runs |
 | `(call/ec (lambda (k) body...))` | escape continuation: calling `k` returns from `call/ec` immediately |
 | `(quote x)`, `(quasiquote x)` | literal data, with `unquote` and `unquote-splicing` inside quasiquote |
+| `(define [a b & rest] value)`, `(define {:keys [x y]} value)` | destructure a value into several names; patterns also stand for names in `let`, `let*`, `loop`, named `let`, and parameter lists |
+| `(match value (pattern [:when test] body...) ... (else body...))` | run the first clause whose pattern fits the value; no fitting clause is an error |
 | `(define-syntax name (syntax-rules (literals...) (pattern template)...))` | hygienic macro; `_` matches anything, `...` repeats |
 
 Proper tail calls are guaranteed, so recursion in tail position never grows
 the stack. Non-tail recursion is limited to one million frames.
+
+## Patterns
+
+A pattern can stand wherever a name is bound. `[a b & rest :as all]` takes
+elements by position from a vector, list, array, or string, collects what is
+left into `rest`, and names the whole value `all`; when binding, a missing
+element is `nil`. `{:name n :address {:street s}}` takes map entries by key,
+`{:keys [x y]}` takes `:x` and `:y` into `x` and `y`, `:or {y 10}` supplies
+defaults, and `:as m` names the whole map. `_` skips an element, and
+patterns nest.
+
+In `match` a pattern also tests the value: a vector pattern needs exactly
+that many elements, or at least that many with `&`; a map pattern needs each
+key to be present unless `:or` gives it a default; a number, string,
+keyword, date, `nil`, `true`, `false`, or quoted symbol must be equal to the
+value. `:when test` adds a condition that can use the names the pattern
+bound, and `else` or `_` catches everything.
 
 ## Numbers
 

@@ -124,6 +124,37 @@ see the ones before it.
 `and` and `or` stop as soon as the answer is known and return the deciding
 value, not just `true` or `false`.
 
+## Taking values apart
+
+A vector or map can stand where a name would, and the names inside it bind
+to the matching pieces of the value:
+
+```scheme
+(define [low high] [1 9])                    ; low is 1, high is 9
+(let (([first & more] [1 2 3]))
+  more)                                      ; [2 3]
+(define (full-name {:keys [first last]})
+  (str first " " last))
+(full-name {:first "Ada" :last "Lovelace"})  ; "Ada Lovelace"
+```
+
+`match` picks the first clause whose pattern fits and binds names along the
+way. Literals must be equal, vectors must have the right length, maps must
+have the keys, and `:when` adds a condition:
+
+```scheme
+(define (shape-name shape)
+  (match shape
+    ([:circle r] (str "circle of radius " r))
+    ([:rect w h] :when (= w h) (str "square of side " w))
+    ([:rect w h] (str w " by " h " rectangle"))
+    ({:keys [points]} (str (count points) " points"))
+    (else "something else")))
+
+(shape-name [:rect 2 2])                     ; "square of side 2"
+(shape-name {:points [1 2 3]})               ; "3 points"
+```
+
 ## Repetition
 
 Schematic has no loop keyword in the usual sense. A function that calls

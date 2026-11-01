@@ -45,6 +45,8 @@ Early development. Working today:
 - Bytecode compiler and VM with proper tail calls, closures, `loop`/`recur`
 - `try`/`catch`/`finally`, `raise`, and `call/ec` escape continuations
 - Hygienic `syntax-rules` macros
+- Vector and map destructuring in `define`, `let`, `loop`, and parameter
+  lists, plus `match` with guards
 - A standard library of collection, string, numeric, and higher-order
   functions, with `format` placeholders and text functions that work on whole
   columns
@@ -58,7 +60,7 @@ Early development. Working today:
   appending, and CSV reading and writing
 - A REPL and file runner
 
-Next up: plotting-friendly output, destructuring, and more performance work.
+Next up: plotting-friendly output and more performance work.
 
 ## Running
 
