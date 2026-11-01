@@ -5,6 +5,7 @@ pub mod completion;
 pub mod files;
 pub mod fonts;
 pub mod forms;
+pub mod git;
 pub mod highlight;
 pub mod icons;
 pub mod notebook;
