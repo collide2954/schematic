@@ -18,6 +18,7 @@ pub mod patterns;
 pub mod plot;
 pub mod project;
 pub mod reader;
+pub mod regex;
 pub mod set;
 pub mod symbol;
 pub mod table;
