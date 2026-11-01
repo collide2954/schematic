@@ -12,15 +12,15 @@ use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
-    EDITOR_PAD, Find, LINE_HEIGHT, LineKind, Message, NamingKind, PAGE, Page, Palette, PaneKind, Side, Source, Studio, Tab,
-    console_find_id, console_id, console_text_id, editor_id, editor_text_id, find_id, naming_id, palette_id,
+    EDITOR_PAD, Find, LineKind, Message, NamingKind, PAGE, Page, Palette, PaneKind, Side, Source, Studio, Tab, console_find_id,
+    console_id, console_text_id, editor_id, editor_text_id, find_id, naming_id, palette_id,
 };
 use crate::chart::Chart;
 use crate::commands::{self, Menu};
 use crate::worker::Watched;
 use crate::icons::{Glyph, Ink, icon};
 use crate::worker::Grid;
-use crate::{fonts, forms, highlight, theme};
+use crate::{fonts, forms, highlight, settings, theme};
 
 type TextStyle = fn(&Theme) -> text::Style;
 
@@ -157,7 +157,7 @@ fn palette_layer<'a>(studio: &'a Studio, palette: &'a Palette) -> Element<'a, Me
     for (index, command) in found.iter().enumerate().take(12) {
         let label: TextStyle = if command.message.is_some() { theme::strong } else { theme::faint };
         let content = row![
-            text(command.name).size(theme::UI).style(label),
+            text(command.name.clone()).size(theme::UI).style(label),
             space::horizontal(),
             text(command.keys).size(theme::FINE).style(theme::faint),
         ]
@@ -286,6 +286,15 @@ fn editor_tabs(studio: &Studio) -> Vec<TabItem> {
             active: studio.tab == Tab::Help,
             select: Some(Message::SelectTab(Tab::Help)),
             close: Some(Message::CloseTab(Tab::Help)),
+        });
+    }
+    if studio.settings_open {
+        tabs.push(TabItem {
+            label: "Settings".to_string(),
+            detail: None,
+            active: studio.tab == Tab::Settings,
+            select: Some(Message::SelectTab(Tab::Settings)),
+            close: Some(Message::CloseTab(Tab::Settings)),
         });
     }
     tabs
@@ -660,11 +669,68 @@ fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messa
 fn workspace(studio: &Studio) -> Element<'_, Message> {
     match (studio.tab, &studio.help) {
         (Tab::Help, Some(_)) => help(studio),
+        (Tab::Settings, _) if studio.settings_open => settings_page(studio),
         _ => match &studio.find {
             Some(find) => column![find_bar(studio, find), line(), editor(studio)].into(),
             None => editor(studio),
         },
     }
+}
+
+fn setting<'a>(label: &'a str, note: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
+    let words = column![text(label).size(theme::UI).font(fonts::UI_MEDIUM), text(note).size(theme::FINE).style(theme::muted)].spacing(2).width(Length::Fill);
+    row![words, control].spacing(16).align_y(Alignment::Center).into()
+}
+
+fn toggle<'a>(on: bool, message: Message) -> Element<'a, Message> {
+    button(text(if on { "On" } else { "Off" }).size(theme::META).font(fonts::UI_MEDIUM)).padding(theme::TOOL).style(theme::choice(on)).on_press(message).into()
+}
+
+fn heading<'a>(label: &'a str) -> Element<'a, Message> {
+    container(text(label).size(theme::GLYPH).font(fonts::UI_SEMIBOLD)).padding(Padding { top: 10.0, right: 0.0, bottom: 0.0, left: 0.0 }).into()
+}
+
+fn settings_page(studio: &Studio) -> Element<'_, Message> {
+    let current = theme::name_of(&studio.theme);
+    let choice = |label: &'static str, name: &'static str| {
+        button(text(label).size(theme::META).font(fonts::UI_MEDIUM)).padding(theme::TOOL).style(theme::choice(current == name)).on_press(Message::SetTheme(name.to_string()))
+    };
+    let percent = |value: f32| text(format!("{:.0}%", value * 100.0)).size(theme::UI).width(48).align_x(Alignment::Center);
+    let themes = row![choice("Light", "light"), choice("Dark", "dark"), choice("Warm", "warm"), choice("High contrast", "contrast")].spacing(4);
+    let scale = row![
+        small("−", (studio.scale > 0.81).then_some(Message::ScaleBy(-1))),
+        percent(studio.scale),
+        small("+", (studio.scale < 1.59).then_some(Message::ScaleBy(1))),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
+    let zoom = row![
+        small("−", (studio.zoom > 0.71).then_some(Message::ZoomOut)),
+        percent(studio.zoom),
+        small("+", (studio.zoom < 1.79).then_some(Message::ZoomIn)),
+        small("Reset", ((studio.zoom - 1.0).abs() > 0.01).then_some(Message::ZoomReset)),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
+    let mut page = column![
+        heading("Appearance"),
+        setting("Theme", "Colors for the whole window", themes.into()),
+        setting("Interface size", "Scales every control and label", scale.into()),
+        setting("Code size", "Editor and console text; Ctrl+= and Ctrl+- change it too", zoom.into()),
+        heading("Editor"),
+        setting("Word wrap", "Wrap long lines instead of scrolling sideways", toggle(studio.wrap, Message::ToggleWrap)),
+        heading("Files"),
+        setting("Reopen files", "Open the files from the last session when Studio starts", toggle(studio.restore, Message::ToggleRestore)),
+        setting("Keep backups", "Keep the previous version of a file in the backups folder when saving over it", toggle(studio.backups, Message::ToggleBackups)),
+    ]
+    .spacing(14)
+    .padding(Padding { top: 8.0, right: 20.0, bottom: 24.0, left: 20.0 })
+    .max_width(680);
+    if studio.persistent
+        && let Some(path) = settings::path() {
+            page = page.push(text(format!("Settings are kept in {}", path.display())).size(theme::FINE).style(theme::faint));
+        }
+    scrollable(page).width(Length::Fill).height(Length::Fill).style(theme::scroll).into()
 }
 
 fn find_bar<'a>(studio: &'a Studio, find: &'a Find) -> Element<'a, Message> {
@@ -724,13 +790,14 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
     let lines = doc.content.line_count().max(1);
     let current = doc.content.cursor().position.line;
     let digits = lines.to_string().len().max(2);
+    let line_height = studio.line_height();
     let numbers = Column::with_children((0..lines).map(|i| {
         let flagged = doc.marks.problems.iter().any(|(line, _)| *line == i);
         let style: TextStyle = if flagged { theme::alarm } else if i == current { theme::strong } else { theme::faint };
         text(format!("{:>digits$}", i + 1))
             .font(fonts::MONO)
-            .size(theme::CODE)
-            .line_height(LineHeight::Absolute(Pixels(LINE_HEIGHT)))
+            .size(studio.code_size())
+            .line_height(LineHeight::Absolute(Pixels(line_height)))
             .style(style)
             .into()
     }))
@@ -740,8 +807,8 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
         .on_action(Message::Edit)
         .placeholder("Open a script or start typing. Ctrl+Enter runs the form at the cursor.")
         .font(fonts::MONO)
-        .size(theme::CODE)
-        .line_height(LineHeight::Absolute(Pixels(LINE_HEIGHT)))
+        .size(studio.code_size())
+        .line_height(LineHeight::Absolute(Pixels(line_height)))
         .padding(Padding { top: EDITOR_PAD, right: 12.0, bottom: EDITOR_PAD, left: 6.0 })
         .height(Length::Shrink)
         .wrapping(if studio.wrap { text::Wrapping::Word } else { text::Wrapping::None })
@@ -758,12 +825,13 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
     let view: Element<'_, Message> = sensor(scroller).on_show(Message::EditorResized).on_resize(Message::EditorResized).into();
     let Some((popup, rows)) = popup(studio, Source::Editor) else { return view };
     let cursor = doc.content.cursor().position;
-    let gutter = digits as f32 * 8.1 + 24.0;
-    let x = (gutter + 6.0 + cursor.column as f32 * 8.1).min((studio.editor_width - POPUP_WIDTH - 4.0).max(0.0));
+    let advance = CODE_ADVANCE * studio.zoom;
+    let gutter = digits as f32 * advance + 24.0;
+    let x = (gutter + 6.0 + cursor.column as f32 * advance).min((studio.editor_width - POPUP_WIDTH - 4.0).max(0.0));
     let height = rows as f32 * 24.0 + 8.0;
-    let below = EDITOR_PAD + (cursor.line as f32 + 1.0) * LINE_HEIGHT - doc.offset + 2.0;
+    let below = EDITOR_PAD + (cursor.line as f32 + 1.0) * line_height - doc.offset + 2.0;
     let y = if studio.editor_height > 0.0 && below + height > studio.editor_height {
-        (below - LINE_HEIGHT - height - 4.0).max(0.0)
+        (below - line_height - height - 4.0).max(0.0)
     } else {
         below
     };
@@ -772,6 +840,8 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
 }
 
 const POPUP_WIDTH: f32 = 400.0;
+const CODE_ADVANCE: f32 = 8.1;
+const CONSOLE_ADVANCE: f32 = 7.8;
 
 fn popup(studio: &Studio, source: Source) -> Option<(Element<'_, Message>, usize)> {
     let completion = studio.completion.as_ref().filter(|c| c.source == source)?;
@@ -929,6 +999,7 @@ fn help(studio: &Studio) -> Element<'_, Message> {
 }
 
 fn console(studio: &Studio) -> Element<'_, Message> {
+    let size = studio.console_size();
     let query = studio.console_find.as_deref().map(str::to_lowercase).filter(|q| !q.is_empty());
     let shown = studio.console.iter().filter(move |line| query.as_ref().is_none_or(|q| line.text.to_lowercase().contains(q)));
     let lines = shown.map(|line| {
@@ -941,10 +1012,10 @@ fn console(studio: &Studio) -> Element<'_, Message> {
         };
         let content = line.text.trim_end_matches('\n');
         let body: Element<'_, Message> = match line.kind {
-            LineKind::Input | LineKind::Result => code(content, &studio.theme, 13.0),
-            _ => text(content).font(font).size(theme::CONSOLE).style(style).width(Length::Fill).into(),
+            LineKind::Input | LineKind::Result => code(content, &studio.theme, size),
+            _ => text(content).font(font).size(size).style(style).width(Length::Fill).into(),
         };
-        let mut row = row![container(text(marker).font(fonts::MONO_BOLD).size(theme::CONSOLE).style(marker_style)).width(14), body].spacing(8);
+        let mut row = row![container(text(marker).font(fonts::MONO_BOLD).size(size).style(marker_style)).width(14), body].spacing(8);
         if line.kind != LineKind::Note {
             let copy = button(text("⧉").size(theme::FINE).style(theme::faint)).padding([0, 4]).style(theme::ghost).on_press(Message::CopyText(content.to_string()));
             row = row.push(tip(copy, "Copy"));
@@ -961,20 +1032,20 @@ fn console(studio: &Studio) -> Element<'_, Message> {
         .on_action(Message::Input)
         .placeholder("Type an expression and press Enter")
         .font(fonts::MONO)
-        .size(theme::CONSOLE)
+        .size(size)
         .padding(Padding { top: 7.0, right: 0.0, bottom: 7.0, left: 0.0 })
         .style(theme::editor)
         .highlight_with::<highlight::Schematic>(studio.input_marks.clone(), highlight::format)
         .key_binding(console_binding(studio));
-    let marker = container(text(prompt).font(fonts::MONO_BOLD).size(theme::CONSOLE).style(theme::accent))
+    let marker = container(text(prompt).font(fonts::MONO_BOLD).size(size).style(theme::accent))
         .width(14)
         .padding(Padding { top: 7.0, right: 0.0, bottom: 7.0, left: 0.0 });
     let entry = row![marker, input].spacing(8).padding([0, 12]);
     let body: Element<'_, Message> = column![history, line(), entry].into();
     let Some((popup, _)) = popup(studio, Source::Console) else { return body };
     let cursor = studio.input.cursor().position;
-    let x = 34.0 + cursor.column as f32 * 7.8;
-    let bottom = 16.0 + studio.input.line_count().max(1) as f32 * 18.0;
+    let x = 34.0 + cursor.column as f32 * CONSOLE_ADVANCE * studio.zoom;
+    let bottom = 16.0 + studio.input.line_count().max(1) as f32 * 18.0 * studio.zoom;
     let layer = container(popup)
         .padding(Padding { top: 0.0, right: 0.0, bottom, left: x })
         .width(Length::Fill)

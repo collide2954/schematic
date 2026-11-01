@@ -27,15 +27,15 @@ impl Menu {
 #[derive(Clone, Debug)]
 pub struct Command {
     pub menu: Menu,
-    pub name: &'static str,
+    pub name: String,
     pub keys: &'static str,
     pub message: Option<Message>,
     pub checked: Option<bool>,
     pub gap: bool,
 }
 
-fn item(menu: Menu, name: &'static str, keys: &'static str, message: Option<Message>) -> Command {
-    Command { menu, name, keys, message, checked: None, gap: false }
+fn item(menu: Menu, name: impl Into<String>, keys: &'static str, message: Option<Message>) -> Command {
+    Command { menu, name: name.into(), keys, message, checked: None, gap: false }
 }
 
 fn gap(mut command: Command) -> Command {
@@ -53,11 +53,20 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
     let ready = studio.worker.is_some();
     let shown = |kind: PaneKind| studio.panes.iter().any(|(_, k)| *k == kind);
     let maximized = studio.panes.maximized().is_some();
-    vec![
+    let theme_name = theme::name_of(&studio.theme);
+    let mut list = vec![
         item(Menu::File, "New file", "Ctrl+N", Some(Message::NewFile)),
         item(Menu::File, "New project…", "", Some(Message::NewProject)),
         item(Menu::File, "Open file…", "Ctrl+O", Some(Message::Open)),
         item(Menu::File, "Open folder…", "", Some(Message::OpenFolder)),
+    ];
+    for (i, path) in studio.recent.iter().filter(|p| p.is_file()).take(5).enumerate() {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut entry = item(Menu::File, format!("Open {name}"), "", Some(Message::OpenPath(path.clone())));
+        entry.gap = i == 0;
+        list.push(entry);
+    }
+    list.extend([
         gap(item(Menu::File, "Save", "Ctrl+S", Some(Message::Save))),
         item(Menu::File, "Save as…", "Ctrl+Shift+S", Some(Message::SaveAs)),
         gap(item(Menu::File, "Close tab", "Ctrl+W", Some(Message::CloseTab(Tab::Doc(studio.current))))),
@@ -76,6 +85,7 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         item(Menu::Edit, "Expand selection", "Ctrl+Shift+↑", Some(Message::ExpandSelection)),
         item(Menu::Edit, "Complete", "Ctrl+Space", Some(Message::Complete(Source::Editor))),
         gap(item(Menu::Edit, "Go to line…", "Ctrl+G", Some(Message::PaletteOpen(":".to_string())))),
+        gap(item(Menu::Edit, "Preferences…", "Ctrl+,", Some(Message::OpenSettings))),
         check(item(Menu::View, "Editor", "", Some(Message::TogglePane(PaneKind::Editor))), shown(PaneKind::Editor)),
         check(item(Menu::View, "Console", "", Some(Message::TogglePane(PaneKind::Console))), shown(PaneKind::Console)),
         check(item(Menu::View, "Environment", "", Some(Message::TogglePane(PaneKind::Environment))), shown(PaneKind::Environment)),
@@ -87,7 +97,13 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
             item(Menu::View, "Maximize editor", "", Some(Message::Maximize(PaneKind::Editor)))
         }),
         gap(check(item(Menu::View, "Word wrap", "", Some(Message::ToggleWrap)), studio.wrap)),
-        check(item(Menu::View, "Dark theme", "", Some(Message::ToggleTheme)), theme::is_dark(&studio.theme)),
+        item(Menu::View, "Larger code", "Ctrl+=", Some(Message::ZoomIn)),
+        item(Menu::View, "Smaller code", "Ctrl+-", Some(Message::ZoomOut)),
+        item(Menu::View, "Reset code size", "Ctrl+0", Some(Message::ZoomReset)),
+        gap(check(item(Menu::View, "Light theme", "", Some(Message::SetTheme("light".into()))), theme_name == "light")),
+        check(item(Menu::View, "Dark theme", "", Some(Message::SetTheme("dark".into()))), theme_name == "dark"),
+        check(item(Menu::View, "Warm theme", "", Some(Message::SetTheme("warm".into()))), theme_name == "warm"),
+        check(item(Menu::View, "High-contrast theme", "", Some(Message::SetTheme("contrast".into()))), theme_name == "contrast"),
         gap(check(item(Menu::View, "Environment tab", "Ctrl+3", Some(Message::ShowSide(Side::Environment))), studio.side == Side::Environment)),
         check(item(Menu::View, "Files tab", "Ctrl+4", Some(Message::ShowSide(Side::Files))), studio.side == Side::Files),
         check(item(Menu::View, "Project tab", "Ctrl+5", Some(Message::ShowSide(Side::Project))), studio.side == Side::Project),
@@ -106,7 +122,8 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         gap(item(Menu::Help, "Command palette", "Ctrl+Shift+P", Some(Message::PaletteOpen(String::new())))),
         gap(item(Menu::Help, "Website", "", Some(Message::OpenWebsite))),
         item(Menu::Help, "About Schematic Studio", "", Some(Message::About)),
-    ]
+    ]);
+    list
 }
 
 fn subsequence(query: &str, name: &str) -> bool {
@@ -123,7 +140,7 @@ pub fn matching(studio: &Studio, query: &str) -> Vec<Command> {
         }];
     }
     let query = query.trim();
-    let mut found: Vec<Command> = commands(studio).into_iter().filter(|c| subsequence(query, c.name)).collect();
+    let mut found: Vec<Command> = commands(studio).into_iter().filter(|c| subsequence(query, &c.name)).collect();
     if !query.is_empty() {
         let lowered = query.to_lowercase();
         found.sort_by_key(|c| {
@@ -144,7 +161,8 @@ mod tests {
         assert!(subsequence("Save As", "Save as…"));
         assert!(!subsequence("x", "Save"));
         let studio = Studio::new();
-        let names: Vec<&str> = matching(&studio, "sa").iter().map(|c| c.name).collect();
+        let found = matching(&studio, "sa");
+        let names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(&names[..2], ["Save", "Save as…"]);
         assert!(names.contains(&"Files tab") && !names.contains(&"Expand selection"));
         assert_eq!(matching(&studio, "").len(), commands(&studio).len());

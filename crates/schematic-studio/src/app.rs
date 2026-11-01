@@ -16,6 +16,7 @@ use schematic::reader::read_all;
 use crate::commands::{self, Menu};
 use crate::completion::{self, Candidate};
 use crate::highlight::Marks;
+use crate::settings::{self, Settings};
 use crate::project::{self, ProjectInfo};
 use crate::worker::{self, Binding, Event, Grid, Request, Watched};
 use crate::{files, fonts, forms, theme, view};
@@ -71,6 +72,7 @@ impl Group {
 pub enum Tab {
     Doc(usize),
     Help,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -344,6 +346,16 @@ pub struct Studio {
     pub completion: Option<Completion>,
     pub find: Option<Find>,
     pub wrap: bool,
+    pub zoom: f32,
+    pub scale: f32,
+    pub restore: bool,
+    pub backups: bool,
+    pub settings_open: bool,
+    pub persistent: bool,
+    pub saved: Option<Settings>,
+    pub window_size: Option<(f32, f32)>,
+    pub recent: Vec<PathBuf>,
+    pub projects: Vec<PathBuf>,
     pub palette: Option<Palette>,
     pub menu: Option<Menu>,
     pub editor_width: f32,
@@ -477,6 +489,17 @@ pub enum Message {
     About,
     Quit,
     QuitDecided(bool),
+    SetTheme(String),
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    ScaleBy(i32),
+    OpenSettings,
+    ToggleRestore,
+    ToggleBackups,
+    WindowResized(f32, f32),
+    Dropped(PathBuf),
+    OpenPath(PathBuf),
     SortBy(String),
     GridFilter(String),
     SelectRow(usize),
@@ -519,15 +542,19 @@ pub fn find_id() -> Id {
 }
 
 pub fn run() -> iced::Result {
+    let saved = settings::load();
+    let (width, height) = saved.window.unwrap_or((1280.0, 820.0));
     let settings = window::Settings {
-        size: Size::new(1280.0, 820.0),
+        size: Size::new(width, height),
         min_size: Some(Size::new(880.0, 560.0)),
+        exit_on_close_request: false,
         ..window::Settings::default()
     };
     let mut app = iced::application(Studio::boot, Studio::update, view::view)
         .title(Studio::title)
         .subscription(Studio::subscription)
         .theme(Studio::theme)
+        .scale_factor(|studio: &Studio| studio.scale)
         .default_font(fonts::UI)
         .window(settings);
     for file in fonts::FILES {
@@ -637,6 +664,10 @@ pub enum Shortcut {
     Close,
     Palette,
     GoToLine,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
+    Preferences,
     Pane(u8),
 }
 
@@ -672,14 +703,30 @@ pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifie
         _ if letter("w") => Shortcut::Close,
         _ if letter("p") && shift => Shortcut::Palette,
         _ if letter("g") => Shortcut::GoToLine,
+        _ if letter("=") || letter("+") => Shortcut::ZoomIn,
+        _ if letter("-") => Shortcut::ZoomOut,
+        _ if letter("0") => Shortcut::ZoomReset,
+        _ if letter(",") => Shortcut::Preferences,
         Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=7).contains(n))?),
         _ => return None,
     })
 }
 
-fn shortcuts(event: iced::Event, _status: iced::event::Status, _window: window::Id) -> Option<Message> {
-    let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) = event else { return None };
-    shortcut_of(&key, modifiers).map(Message::Shortcut)
+fn events(event: iced::Event, status: iced::event::Status, _window: window::Id) -> Option<Message> {
+    match event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+            let shortcut = shortcut_of(&key, modifiers)?;
+            let captured = status == iced::event::Status::Captured;
+            if captured && matches!(shortcut, Shortcut::Find | Shortcut::Replace) {
+                return None;
+            }
+            Some(Message::Shortcut(shortcut))
+        }
+        iced::Event::Window(window::Event::Resized(size)) => Some(Message::WindowResized(size.width, size.height)),
+        iced::Event::Window(window::Event::FileDropped(path)) => Some(Message::Dropped(path)),
+        iced::Event::Window(window::Event::CloseRequested) => Some(Message::Quit),
+        _ => None,
+    }
 }
 
 fn scripts() -> rfd::AsyncFileDialog {
@@ -796,21 +843,29 @@ async fn confirm_close(name: String) -> Decision {
     }
 }
 
+pub fn default_layout() -> pane_grid::Configuration<PaneKind> {
+    use pane_grid::{Axis, Configuration};
+    let split = |axis, ratio, a, b| Configuration::Split { axis, ratio, a: Box::new(a), b: Box::new(b) };
+    split(
+        Axis::Vertical,
+        0.62,
+        split(Axis::Horizontal, 0.64, Configuration::Pane(PaneKind::Editor), Configuration::Pane(PaneKind::Console)),
+        split(
+            Axis::Horizontal,
+            0.34,
+            Configuration::Pane(PaneKind::Environment),
+            split(Axis::Horizontal, 0.5, Configuration::Pane(PaneKind::Viewer), Configuration::Pane(PaneKind::Plots)),
+        ),
+    )
+}
+
 impl Studio {
     pub fn new() -> Studio {
-        use pane_grid::{Axis, Configuration};
-        let split = |axis, ratio, a, b| Configuration::Split { axis, ratio, a: Box::new(a), b: Box::new(b) };
-        let layout = split(
-            Axis::Vertical,
-            0.62,
-            split(Axis::Horizontal, 0.64, Configuration::Pane(PaneKind::Editor), Configuration::Pane(PaneKind::Console)),
-            split(
-                Axis::Horizontal,
-                0.34,
-                Configuration::Pane(PaneKind::Environment),
-                split(Axis::Horizontal, 0.5, Configuration::Pane(PaneKind::Viewer), Configuration::Pane(PaneKind::Plots)),
-            ),
-        );
+        Studio::with_settings(Settings::default())
+    }
+
+    pub fn with_settings(settings: Settings) -> Studio {
+        let layout = settings.layout.as_ref().map(settings::configuration).unwrap_or_else(default_layout);
         let mut studio = Studio {
             panes: pane_grid::State::with_configuration(layout),
             docs: vec![Document::untitled()],
@@ -819,7 +874,17 @@ impl Studio {
             help: None,
             completion: None,
             find: None,
-            wrap: false,
+            wrap: settings.wrap,
+            zoom: settings.zoom,
+            scale: settings.scale,
+            restore: settings.restore,
+            backups: settings.backups,
+            settings_open: false,
+            persistent: false,
+            saved: None,
+            window_size: settings.window,
+            recent: settings.recent.clone(),
+            projects: settings.projects.clone(),
             palette: None,
             menu: None,
             editor_width: 0.0,
@@ -846,7 +911,7 @@ impl Studio {
             grid_sort: None,
             grid_filter: String::new(),
             selected_rows: HashSet::new(),
-            watches: Vec::new(),
+            watches: settings.watches.clone(),
             watched: Vec::new(),
             console_find: None,
             last_run: None,
@@ -855,7 +920,7 @@ impl Studio {
             worker: None,
             interrupt: None,
             running: false,
-            theme: theme::light(),
+            theme: theme::named(&settings.theme),
             status: "Starting the interpreter".to_string(),
         };
         studio.note("Welcome to Schematic Studio. Ctrl+Enter runs the form at the cursor, Ctrl+Shift+Enter runs the whole file, F1 looks up the name at the cursor.");
@@ -863,16 +928,76 @@ impl Studio {
     }
 
     fn boot() -> (Studio, Task<Message>) {
-        let mut studio = Studio::new();
-        let check = match std::env::args().nth(1) {
-            Some(path) => studio.load(PathBuf::from(path)),
-            None => Task::none(),
-        };
+        let settings = settings::load();
+        let mut studio = Studio::with_settings(settings.clone());
+        let mut tasks = Vec::new();
+        match std::env::args().nth(1) {
+            Some(path) => tasks.push(studio.load(PathBuf::from(path))),
+            None if settings.restore => {
+                for path in settings.open.iter().filter(|p| p.is_file()) {
+                    tasks.push(studio.load(path.clone()));
+                }
+                if settings.current < studio.docs.len() {
+                    studio.current = settings.current;
+                    studio.tab = Tab::Doc(studio.current);
+                }
+            }
+            None => {}
+        }
         if studio.root.is_none()
-            && let Ok(dir) = std::env::current_dir() {
+            && let Some(dir) = settings.root.filter(|r| r.is_dir()).or_else(|| std::env::current_dir().ok()) {
                 studio.set_root(dir);
             }
-        (studio, check)
+        studio.persistent = true;
+        studio.saved = Some(studio.snapshot_settings());
+        (studio, Task::batch(tasks))
+    }
+
+    pub fn line_height(&self) -> f32 {
+        LINE_HEIGHT * self.zoom
+    }
+
+    pub fn code_size(&self) -> f32 {
+        theme::CODE * self.zoom
+    }
+
+    pub fn console_size(&self) -> f32 {
+        theme::CONSOLE * self.zoom
+    }
+
+    fn snapshot_settings(&self) -> Settings {
+        let open: Vec<PathBuf> = self.docs.iter().filter_map(|d| d.path.clone()).collect();
+        let current = self.docs[..self.current.min(self.docs.len())].iter().filter(|d| d.path.is_some()).count().min(open.len().saturating_sub(1));
+        Settings {
+            theme: theme::name_of(&self.theme).to_string(),
+            scale: self.scale,
+            zoom: self.zoom,
+            wrap: self.wrap,
+            restore: self.restore,
+            backups: self.backups,
+            window: self.window_size,
+            layout: settings::layout_of(&self.panes),
+            open,
+            current,
+            recent: self.recent.clone(),
+            projects: self.projects.clone(),
+            root: self.root.clone(),
+            watches: self.watches.clone(),
+        }
+    }
+
+    fn persist(&mut self) {
+        if !self.persistent {
+            return;
+        }
+        let current = self.snapshot_settings();
+        if self.saved.as_ref() == Some(&current) {
+            return;
+        }
+        if let Err(e) = settings::save(&current) {
+            self.status = format!("Cannot save the settings: {e}");
+        }
+        self.saved = Some(current);
     }
 
     pub fn set_root(&mut self, root: PathBuf) {
@@ -894,6 +1019,9 @@ impl Studio {
     fn refresh_project(&mut self) {
         let start = self.root.clone().or_else(|| self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf));
         self.project = start.as_deref().and_then(project::describe);
+        if let Some(project) = &self.project {
+            settings::remember(&mut self.projects, &project.root);
+        }
         if let Some(project) = &self.project
             && self.picked_package.as_ref().is_some_and(|name| !project.dependencies.iter().any(|d| &d.name == name)) {
                 self.picked_package = None;
@@ -1040,7 +1168,7 @@ impl Studio {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([Subscription::run(worker::subscription).map(Message::Worker), iced::event::listen_with(shortcuts)])
+        Subscription::batch([Subscription::run(worker::subscription).map(Message::Worker), iced::event::listen_with(events)])
     }
 
     pub fn groups(&self) -> Vec<(Group, Vec<&Binding>)> {
@@ -1063,6 +1191,12 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.handle(message);
+        self.persist();
+        task
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Worker(event) => self.on_event(event),
             Message::Edit(action) => {
@@ -1396,6 +1530,51 @@ impl Studio {
                 }
                 Task::none()
             }
+            Message::SetTheme(name) => {
+                self.theme = theme::named(&name);
+                Task::none()
+            }
+            Message::ZoomIn => self.zoom_by(1),
+            Message::ZoomOut => self.zoom_by(-1),
+            Message::ZoomReset => {
+                self.zoom = 1.0;
+                Task::none()
+            }
+            Message::ScaleBy(step) => {
+                self.scale = (((self.scale * 10.0).round() + step as f32) / 10.0).clamp(0.8, 1.6);
+                Task::none()
+            }
+            Message::OpenSettings => {
+                self.settings_open = true;
+                self.tab = Tab::Settings;
+                self.menu = None;
+                Task::none()
+            }
+            Message::ToggleRestore => {
+                self.restore = !self.restore;
+                Task::none()
+            }
+            Message::ToggleBackups => {
+                self.backups = !self.backups;
+                Task::none()
+            }
+            Message::WindowResized(width, height) => {
+                self.window_size = Some((width, height));
+                Task::none()
+            }
+            Message::Dropped(path) => {
+                if path.is_dir() {
+                    self.set_root(path);
+                    self.side = Side::Files;
+                    return Task::none();
+                }
+                let check = self.load(path);
+                Task::batch([check, self.scroll_to_doc()])
+            }
+            Message::OpenPath(path) => {
+                let check = self.load(path);
+                Task::batch([check, self.scroll_to_doc()])
+            }
             Message::NewProject => Task::perform(pick_folder(), Message::NewProjectIn),
             Message::NewProjectIn(parent) => {
                 let Some(parent) = parent else { return Task::none() };
@@ -1488,8 +1667,19 @@ impl Studio {
                 }
                 Task::none()
             }
+            Message::SelectTab(Tab::Settings) => {
+                if self.settings_open {
+                    self.tab = Tab::Settings;
+                }
+                Task::none()
+            }
             Message::CloseTab(Tab::Help) => {
                 self.help = None;
+                self.tab = Tab::Doc(self.current);
+                Task::none()
+            }
+            Message::CloseTab(Tab::Settings) => {
+                self.settings_open = false;
                 self.tab = Tab::Doc(self.current);
                 Task::none()
             }
@@ -1923,10 +2113,11 @@ impl Studio {
 
     fn follow_cursor(&mut self) -> Task<Message> {
         let height = self.editor_height;
+        let line_height = self.line_height();
         let doc = self.doc_mut();
         let line = doc.content.cursor().position.line as f32;
-        let top = EDITOR_PAD + line * LINE_HEIGHT;
-        match scroll_target(top, top + LINE_HEIGHT, doc.offset, height) {
+        let top = EDITOR_PAD + line * line_height;
+        match scroll_target(top, top + line_height, doc.offset, height) {
             Some(y) => {
                 doc.offset = y;
                 operation::scroll_to(editor_id(), AbsoluteOffset { x: 0.0, y })
@@ -1957,6 +2148,11 @@ impl Studio {
         let follow = self.follow_cursor();
         let echo = self.echo(&source);
         Task::batch([follow, echo, self.run(source, true)])
+    }
+
+    fn zoom_by(&mut self, step: i32) -> Task<Message> {
+        self.zoom = (((self.zoom * 10.0).round() + step as f32) / 10.0).clamp(0.7, 1.8);
+        self.follow_cursor()
     }
 
     fn after_rewrite(&mut self) -> Task<Message> {
@@ -2011,6 +2207,10 @@ impl Studio {
             Shortcut::Up | Shortcut::Down => Task::none(),
             Shortcut::Palette => self.update(Message::PaletteOpen(String::new())),
             Shortcut::GoToLine => self.update(Message::PaletteOpen(":".to_string())),
+            Shortcut::ZoomIn => self.update(Message::ZoomIn),
+            Shortcut::ZoomOut => self.update(Message::ZoomOut),
+            Shortcut::ZoomReset => self.update(Message::ZoomReset),
+            Shortcut::Preferences => self.update(Message::OpenSettings),
             Shortcut::FindNext => self.update(Message::FindStep(1)),
             Shortcut::FindPrevious => self.update(Message::FindStep(-1)),
             Shortcut::Find => self.update(Message::FindOpen(false)),
@@ -2238,6 +2438,7 @@ impl Studio {
         match std::fs::read_to_string(&path) {
             Ok(source) => {
                 self.status = format!("Opened {}", path.display());
+                settings::remember(&mut self.recent, &path);
                 if self.root.is_none()
                     && let Some(parent) = path.parent() {
                         self.set_root(parent.to_path_buf());
@@ -2263,11 +2464,15 @@ impl Studio {
 
     fn store(&mut self, i: usize, path: PathBuf) {
         let Some(doc) = self.docs.get_mut(i) else { return };
+        if self.backups && self.persistent {
+            settings::back_up(&path);
+        }
         match std::fs::write(&path, doc.content.text()) {
             Ok(()) => {
                 doc.dirty = false;
                 doc.path = Some(path.clone());
                 self.status = format!("Saved {}", path.display());
+                settings::remember(&mut self.recent, &path);
                 self.refresh_files();
             }
             Err(e) => self.status = format!("Cannot save {}: {e}", path.display()),
@@ -2940,5 +3145,44 @@ mod tests {
         step(&mut studio, text_editor::Motion::End);
         assert_eq!(studio.doc().marks.pair, Some([(0, 0), (0, 6)]));
         assert!(!studio.doc().dirty);
+    }
+
+    #[test]
+    fn settings_shape_the_studio_and_follow_its_changes() {
+        let layout = settings::Layout::Split {
+            horizontal: true,
+            ratio: 0.4,
+            a: Box::new(settings::Layout::Pane(PaneKind::Console)),
+            b: Box::new(settings::Layout::Pane(PaneKind::Editor)),
+        };
+        let saved = Settings { theme: "warm".into(), zoom: 1.2, scale: 1.1, wrap: true, layout: Some(layout.clone()), watches: vec!["x".into()], ..Settings::default() };
+        let mut studio = Studio::with_settings(saved);
+        assert_eq!(theme::name_of(&studio.theme), "warm");
+        assert!(studio.wrap && !studio.persistent);
+        assert_eq!(studio.panes.iter().count(), 2);
+        let snapshot = studio.snapshot_settings();
+        assert_eq!((snapshot.theme.as_str(), snapshot.zoom, snapshot.scale, snapshot.layout), ("warm", 1.2, 1.1, Some(layout)));
+        assert_eq!(snapshot.watches, ["x"]);
+        assert_eq!(studio.line_height(), LINE_HEIGHT * 1.2);
+        let _ = studio.update(Message::ZoomIn);
+        let _ = studio.update(Message::ZoomIn);
+        assert_eq!(studio.zoom, 1.4);
+        for _ in 0..10 {
+            let _ = studio.update(Message::ZoomIn);
+        }
+        assert_eq!(studio.zoom, 1.8);
+        let _ = studio.update(Message::ZoomReset);
+        assert_eq!(studio.zoom, 1.0);
+        let _ = studio.update(Message::ScaleBy(-9));
+        assert_eq!(studio.scale, 0.8);
+        let _ = studio.update(Message::SetTheme("contrast".into()));
+        assert_eq!(theme::name_of(&studio.theme), "contrast");
+        let _ = studio.update(Message::OpenSettings);
+        assert_eq!(studio.tab, Tab::Settings);
+        let _ = studio.update(Message::CloseTab(Tab::Settings));
+        assert!(!studio.settings_open && studio.tab == Tab::Doc(0));
+        let _ = studio.update(Message::WindowResized(1000.0, 700.0));
+        assert_eq!(studio.snapshot_settings().window, Some((1000.0, 700.0)));
+        assert!(commands::commands(&studio).iter().any(|c| c.name == "Preferences…"));
     }
 }
