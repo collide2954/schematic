@@ -349,7 +349,9 @@ mod tests {
         let sections: Vec<&str> = entry("where").unwrap().uses.iter().map(|u| u.section.as_str()).collect();
         assert_eq!(sections, ["Arrays", "Tables"]);
         assert_eq!(entry("let").unwrap().uses.len(), 2);
-        assert_eq!(entry("define").unwrap().uses.len(), 3);
+        assert_eq!(entry("define").unwrap().uses.len(), 5);
+        assert_eq!(entry("define").unwrap().uses.iter().filter(|u| u.section == "Types").count(), 2);
+        assert!(entry("[name").is_none() && entry("int").is_some());
         assert!(entry("+").is_some() && entry("-").is_some() && entry("call/ec").is_some() && entry("string->number").is_some());
         assert!(entry("a").is_none() && entry(":name").is_none() && entry("42").is_none() && entry("+inf.0").is_none());
         let names: Vec<&str> = search("chart").iter().map(|e| e.name.as_str()).collect();

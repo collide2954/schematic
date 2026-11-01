@@ -69,8 +69,11 @@ Early development. Working today:
   and pinned by commit and hash in `project.lock`, a registry read over
   HTTPS, and `schematic new`, `add`, `remove`, `restore --locked`, and `run`
 - A REPL and file runner, plus `doc` and `apropos` for help at the prompt
+- A gradual type checker: `schematic check` and Studio's editor report
+  certain mistakes without running anything, inferring types from the code
+  and from optional `[name : type]` annotations
 
-Next up: a gradual type checker.
+Next up: a text round with character functions and regular expressions.
 
 ## Running
 
@@ -97,7 +100,9 @@ files; a data grid with numbers right-aligned; and a plots pane that walks
 through the session's charts, shows values on hover, and saves them as SVG.
 A Help tab renders the guide and the reference with search, F1 looks up
 the name under the cursor, and a Project tab creates a project in the open
-folder, adds and removes packages, and restores them. It has its own light
+folder, adds and removes packages, and restores them. The type checker runs
+as you type: problems turn red, the status bar explains the one under the
+cursor, and F8 jumps to the next. It has its own light
 and dark themes and bundles
 the Inter and JetBrains Mono fonts, so it looks the same everywhere. The
 interpreter runs on its own thread, so the window stays responsive and a

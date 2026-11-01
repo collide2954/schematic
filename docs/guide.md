@@ -583,6 +583,37 @@ adds and removes packages, and restores them. The
 [packages page](https://collide2954.github.io/schematic/packages.html) lists
 what the registry holds and explains how to publish a package of your own.
 
+## Checking types
+
+Schematic is dynamically typed, but it can tell you about some mistakes
+before anything runs. `schematic check report.scm` reads a file and reports
+what is certain to fail: a call with the wrong number of arguments, a
+string passed where only a number will do, a name that is never defined, a
+value that is not a function being called. It works out types from
+literals, definitions, and the built-in functions, and whatever it cannot
+work out stays dynamic, so a clean report means something and every problem
+it lists is real. Inside a project, `schematic check` on its own covers
+every script under `src`. Studio runs the same check as you type: problems
+turn red along with their line numbers, the message appears in the status
+bar when the cursor is on one, and F8 jumps to the next.
+
+Annotations are optional, and only the checker reads them. A parameter or
+binding written `[name : type]` declares its type, and `: type` after a
+signature declares what the function returns:
+
+```scheme
+(define (area [r : float]) : float (* r r))
+(area 2.0)                        ; 4.0
+```
+
+Now `(area "big")` is reported before it runs, and so would be a body that
+returns something other than a float. Types are written `int`, `float`,
+`number`, `string`, `bool`, `keyword`, `symbol`, `date`, `nil`, `table`,
+`plot`, `fn`, and `any`; `[int]` is a vector of integers, `{keyword int}` a
+map, `#{string}` a set, `#[float]` an array, `(list int)` a list, `(or int
+nil)` either of two, and `(-> int int string)` a function from two integers
+to a string.
+
 ## Where to go next
 
 The [reference](reference.md) lists every special form and built-in

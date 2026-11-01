@@ -205,6 +205,10 @@
 (define x 42)
 (check "quasiquote" '(x is 42 and doubled 84) `(x is ~x and doubled ~(* 2 x)))
 
+;; Types
+(define (area [r : float]) : float (* r r))
+(check "annotation" 4.0 (area 2.0))
+
 ;; Namespaces
 (ns tour.helpers)
 (define (shout s) (string-upcase s))

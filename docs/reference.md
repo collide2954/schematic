@@ -310,6 +310,7 @@ path, so `(require 'text-tools)` finds a dependency called `text-tools`.
 | `schematic restore` | fetch whatever `packages` is missing or has changed, at the pinned commits, and pin anything new |
 | `schematic restore --locked` | the same, but refuse to resolve anything `project.lock` does not pin, and fail when a fetched package does not hash as the lock says |
 | `schematic run [file]` | run the project's main namespace, `src/<name>.scm` unless `:main` names another, or a given file |
+| `schematic check [file...]` | report certain mistakes without running anything; with no file, every script under the project's source folder |
 
 `project.scm` is a map with `:name`, `:version`, an optional `:source`
 (`"src"` by default), `:main`, and `:registry`, and a `:dependencies` map
@@ -320,6 +321,31 @@ endings; packages are vendored, so a checked-in project builds offline. The regi
 `collide2954/schematic-registry`, read over HTTPS one file per package;
 `:registry` in the manifest or the `SCHEMATIC_REGISTRY` variable can name
 another one, including a local folder.
+
+## Types
+
+`schematic check` and Studio's editor read code without running it and
+report only what is certain to fail: a call with the wrong number of
+arguments, an argument whose type the function can never accept, a name
+that is never defined, a value that is not a function being called, a form
+the compiler rejects, and an annotation that does not hold. Types are
+inferred from literals, definitions, and the built-in functions; whatever
+cannot be inferred stays dynamic and is never reported, and so is code
+inside a `try` that has a `catch`. Annotations are optional, and running
+code ignores them.
+
+| Form | Meaning |
+|---|---|
+| `[name : type]` | annotate a parameter, a binding in `let`, `let*`, `loop`, a named `let`, or `match`, or a defined name; a pattern can stand in for `name` |
+| `(define (f [x : int]) : string body...)`, `(lambda ([x : int]) : string body...)` | declare what a function returns, checked against its body and at every call |
+| `(define name : type value)` | declare a value's type |
+
+A type is written `int`, `float`, `number` (either), `string`, `bool`,
+`keyword`, `symbol`, `date`, `nil`, `table`, `plot`, `fn`, or `any`, which
+turns checking off for that name. `[int]` is a vector of integers, `{keyword
+int}` a map from keywords to integers, `#{string}` a set, `#[float]` an
+array, `(list int)` a list, `(or int nil)` one of several types, and `(->
+int int string)` a function from two integers to a string.
 
 ## Help
 
