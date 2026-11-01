@@ -80,12 +80,12 @@ cargo test
 ## Schematic Studio
 
 Schematic Studio is a desktop workbench in the spirit of RStudio, built with
-Iced. Four resizable cards sit on a canvas: a script editor with syntax
-highlighting and bracket matching, a console with history, an environment
-pane that groups everything you have defined into data, values, and
-functions, a data viewer that shows tables, arrays, and maps as a grid
-with numbers right-aligned, and a plots pane that draws charts and saves
-them as SVG. It has its own light and dark themes and bundles
+Iced. Five resizable panes meet at hairlines: a script editor with line
+numbers, syntax highlighting, and bracket matching; a console with history;
+an environment table that groups everything you have defined into data,
+values, and functions; a data grid with numbers right-aligned; and a plots
+pane that draws charts and saves them as SVG. It has its own light and dark
+themes and bundles
 the Inter and JetBrains Mono fonts, so it looks the same everywhere. The
 interpreter runs on its own thread, so the window stays responsive and a
 runaway loop can be stopped.
