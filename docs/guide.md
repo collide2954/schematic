@@ -288,6 +288,24 @@ string and returns an array, so a text column can be cleaned in one call:
 (format "{} ({})" #["Ada" "Bob"] #[36 41])  ; #["Ada (36)" "Bob (41)"]
 ```
 
+Patterns are written as raw strings, `#"..."`, which keep their
+backslashes. `re-find`, `re-seq`, `re-matches`, `re-split`, and `re-replace`
+take the string first and the pattern second; a pattern with groups returns
+the whole match followed by each group, and `re-replace` fills a template
+with `$1`, `$2`, and so on, or calls a function on each match. `letter?`,
+`digit?`, `whitespace?`, `upper-case?`, and `lower-case?` test every
+character of a string, splitting on `""` gives the characters, and
+`char-code` and `code-char` convert to and from character codes:
+
+```scheme
+(re-find "order 66" #"\d+")                                ; "66"
+(re-seq "k=v; a=b" #"(\w+)=(\w+)")                         ; [["k=v" "k" "v"] ["a=b" "a" "b"]]
+(re-replace "2024-03-15" #"(\d+)-(\d+)-(\d+)" "$3/$2/$1")  ; "15/03/2024"
+(re-split "a, b,c" #",\s*")                                ; ["a" "b" "c"]
+(string-join "" (filter letter? (string-split "a1b2" ""))) ; "ab"
+(char-code "A")                                            ; 65
+```
+
 ## Dates
 
 A date is written `#2024-03-15` and stands for a calendar day. Adding a

@@ -51,8 +51,9 @@ Early development. Working today:
 - Vector and map destructuring in `define`, `let`, `loop`, and parameter
   lists, plus `match` with guards
 - A standard library of collection, string, numeric, and higher-order
-  functions, with `format` placeholders and text functions that work on whole
-  columns
+  functions, with `format` placeholders, regular expressions written as raw
+  `#"..."` strings, character predicates, and text functions that work on
+  whole columns
 - Dates with a `#2024-03-15` literal, day arithmetic, parsing and formatting
   patterns, truncation to week, month, quarter, or year, and date columns
   inferred from CSV

@@ -79,6 +79,14 @@
 (check "starts-with array" #[true false] (string-starts-with? #["Ada" "Bob"] "A"))
 (check "format array" #["Ada (36)" "Bob (41)"] (format "{} ({})" #["Ada" "Bob"] #[36 41]))
 
+;; Text
+(check "re-find" "66" (re-find "order 66" #"\d+"))
+(check "re-seq" [["k=v" "k" "v"] ["a=b" "a" "b"]] (re-seq "k=v; a=b" #"(\w+)=(\w+)"))
+(check "re-replace" "15/03/2024" (re-replace "2024-03-15" #"(\d+)-(\d+)-(\d+)" "$3/$2/$1"))
+(check "re-split" ["a" "b" "c"] (re-split "a, b,c" #",\s*"))
+(check "letters" "ab" (string-join "" (filter letter? (string-split "a1b2" ""))))
+(check "char-code" 65 (char-code "A"))
+
 ;; Dates
 (define d #2024-03-15)
 (check "date add" #2024-04-04 (+ d 20))
