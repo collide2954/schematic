@@ -588,9 +588,14 @@ schematic run
 commit and a hash of the files, so whoever checks the project out gets the
 same code, and `schematic restore --locked` proves it. `run` loads
 `src/report.scm` with `src` and every package on the load path, so the main
-file can say `(ns report (:require [text-tools :as t]))`. Studio's Project
-tab does the same from the window: it creates a project in the open folder,
-adds and removes packages, and restores them. The
+file can say `(ns report (:require [text-tools :as t]))`. A package can
+depend on packages of its own; `add` brings those along, `project.lock`
+records which package needs which, and `schematic packages` lists them all
+with their licenses. A project that must stay within certain licenses says
+so with `:allowed-licenses ["MIT" "Apache-2.0"]` in `project.scm`, and
+`add` refuses anything else. Studio's Project tab does the same from the
+window: it creates a project in the open folder, adds and removes packages,
+and restores them. The
 [packages page](https://collide2954.github.io/schematic/packages.html) lists
 what the registry holds and explains how to publish a package of your own.
 

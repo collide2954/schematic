@@ -20,9 +20,10 @@ schematic add text-tools</code></pre>
 <p>Any project in a Git repository can be a package: a folder with a <code>project.scm</code> manifest and a <code>src</code> folder of namespaces, with a tag for each release. To list it, open a pull request to the registry that adds <code>packages/&lt;name&gt;.scm</code> and puts the name in <code>index.scm</code>.</p>
 <pre class="highlight"><code>{<span class="ss">:name</span> <span class="s">"text-tools"</span>
  <span class="ss">:description</span> <span class="s">"Small helpers for titles and slugs"</span>
+ <span class="ss">:license</span> <span class="s">"Apache-2.0"</span>
  <span class="ss">:git</span> <span class="s">"https://github.com/collide2954/schematic-registry"</span>
  <span class="ss">:subdir</span> <span class="s">"examples/text-tools"</span>
  <span class="ss">:versions</span> {<span class="s">"0.1.0"</span> {<span class="ss">:tag</span> <span class="s">"text-tools/0.1.0"</span>}}}</code></pre>
-<p>Every version names a <code>:tag</code> or a <code>:commit</code>, and <code>:subdir</code> points at the package's folder when a repository holds more than one. A project can also depend on a package that is not listed, straight from its repository or from a folder next to the project:</p>
+<p>Every version names a <code>:tag</code> or a <code>:commit</code>, <code>:license</code> is the package's SPDX expression (the package's own <code>project.scm</code> may say it too), and <code>:subdir</code> points at the package's folder when a repository holds more than one. A package may list <code>:dependencies</code> of its own in its <code>project.scm</code>; adding it brings them along, and <code>schematic packages</code> shows the whole set with licenses. A project can also depend on a package that is not listed, straight from its repository or from a folder next to the project:</p>
 <pre><code>schematic add text-tools --git https://github.com/collide2954/schematic-registry --tag text-tools/0.1.0 --subdir examples/text-tools
 schematic add my-lib --path ../my-lib</code></pre>

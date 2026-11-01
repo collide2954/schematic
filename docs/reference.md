@@ -306,18 +306,26 @@ path, so `(require 'text-tools)` finds a dependency called `text-tools`.
 | `schematic add <name>[@version]` | add a package from the registry, the newest version unless one is given: its source is copied into `packages/<name>` and the commit and a hash of the files are pinned in `project.lock` |
 | `schematic add <name> --path <dir>` | depend on a local folder, used in place |
 | `schematic add <name> --git <url> --tag <t>`, `schematic add <name> --git <url> --commit <c> --subdir <d>` | depend on a git repository, or on one folder of it |
-| `schematic remove <name>` | drop a dependency and its vendored copy |
-| `schematic restore` | fetch whatever `packages` is missing or has changed, at the pinned commits, and pin anything new |
+| `schematic remove <name>` | drop a dependency, and every vendored package nothing else needs |
+| `schematic restore` | fetch whatever `packages` is missing or has changed, at the pinned commits, and pin anything new, including what the packages themselves depend on |
 | `schematic restore --locked` | the same, but refuse to resolve anything `project.lock` does not pin, and fail when a fetched package does not hash as the lock says |
+| `schematic packages` | list every package in use, direct or brought in by another package, with its version, license, and status |
 | `schematic run [file]` | run the project's main namespace, `src/<name>.scm` unless `:main` names another, or a given file |
 | `schematic check [file...]` | report certain mistakes without running anything; with no file, every script under the project's source folder |
 
-`project.scm` is a map with `:name`, `:version`, an optional `:source`
+`project.scm` is a map with `:name`, `:version`, an optional `:license`
+(an SPDX expression such as `"MIT"` or `"MIT OR Apache-2.0"`), `:source`
 (`"src"` by default), `:main`, and `:registry`, and a `:dependencies` map
 from names to a version string, `{:path "../lib"}`, or `{:git url :tag t
-:subdir d}`. `project.lock` records, per package, the version, the git
-source and commit, and a `sha256:` hash of its files, which ignores line
-endings; packages are vendored, so a checked-in project builds offline. The registry is the repository
+:subdir d}`. A package is a project too, so its own `:dependencies` come
+along when it is added; the project's choice of a version wins over a
+package's, and among packages the newest requested version wins. With
+`:allowed-licenses ["MIT" "Apache-2.0"]` in the manifest, `add` and
+`restore` refuse any package whose license is missing or outside the list.
+`project.lock` records, per package, the version, the license, the git
+source and commit, the names it depends on, and a `sha256:` hash of its
+files, which ignores line endings; packages are vendored, so a checked-in
+project builds offline. The registry is the repository
 `collide2954/schematic-registry`, read over HTTPS one file per package;
 `:registry` in the manifest or the `SCHEMATIC_REGISTRY` variable can name
 another one, including a local folder.

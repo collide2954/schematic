@@ -66,8 +66,10 @@ Early development. Working today:
   and show in Studio's Plots pane, with facets, log scales, formatted
   axes, reference lines, and value labels
 - Projects: a `project.scm` manifest, packages vendored into `packages/`
-  and pinned by commit and hash in `project.lock`, a registry read over
-  HTTPS, and `schematic new`, `add`, `remove`, `restore --locked`, and `run`
+  along with the packages they depend on, pinned by commit and hash in
+  `project.lock`, a registry read over HTTPS, SPDX licenses per package
+  with an allowed list per project, and `schematic new`, `add`, `remove`,
+  `restore --locked`, `packages`, and `run`
 - A REPL and file runner, plus `doc` and `apropos` for help at the prompt
 - A gradual type checker: `schematic check` and Studio's editor report
   certain mistakes without running anything, inferring types from the code

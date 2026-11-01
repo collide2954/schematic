@@ -89,7 +89,7 @@
     const add = el("p", { class: "add" }, command);
     if (window.copyButton) add.append(window.copyButton(() => command.textContent));
     return el("article", { class: "package" },
-      el("h3", null, el("a", { href: sourceOf(pkg, pkg.versions?.[latest]) }, name), latest && el("span", { class: "version" }, latest)),
+      el("h3", null, el("a", { href: sourceOf(pkg, pkg.versions?.[latest]) }, name), latest && el("span", { class: "version" }, latest), pkg.license && el("span", { class: "license" }, pkg.license)),
       el("p", null, pkg.description || ""),
       add,
       versions.length > 1 && el("p", { class: "versions" }, `Earlier: ${versions.slice(1).join(", ")}`),
