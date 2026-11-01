@@ -33,8 +33,10 @@ and find names with `(apropos "chart")`.
 If you prefer a window, Schematic Studio (`cargo run --release -p
 schematic-studio`) puts an editor, a console, an environment pane, and a
 data viewer side by side. Ctrl+Enter in the editor runs the form under the
-cursor and moves to the next one, so you can step through a script, and the
-console remembers earlier inputs for the up and down arrows.
+cursor and moves to the next one, so you can step through a script, the
+console remembers earlier inputs for the up and down arrows, Ctrl+Space
+completes names, and F1 opens this guide and the reference in a Help tab at
+the name under the cursor.
 
 ## Expressions
 
