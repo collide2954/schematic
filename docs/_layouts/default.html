@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.url == "/" %}Schematic: a small Lisp for data{% else %}{{ page.title }} · Schematic{% endif %}</title>
+<meta name="description" content="{{ page.description | default: site.description }}">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./">Schematic</a>
+  <nav>
+    <a href="guide.html">Guide</a>
+    <a href="reference.html">Reference</a>
+    <a href="https://github.com/collide2954/schematic">GitHub</a>
+  </nav>
+</header>
+<main class="{{ page.class | default: 'prose' }}">
+{{ content }}
+</main>
+<footer>
+  <span>Apache-2.0</span>
+  <a href="https://github.com/collide2954/schematic">Source on GitHub</a>
+</footer>
+</body>
+</html>

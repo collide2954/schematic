@@ -1,0 +1,55 @@
+---
+layout: default
+title: Schematic
+class: landing
+---
+<section class="hero">
+  <div>
+    <h1>A small Lisp for working with data.</h1>
+    <p class="lead">Schematic has Scheme's shape and Clojure's literals, with typed arrays, tables, dates, and charts built in. It runs as a bytecode VM from the terminal, or inside Schematic Studio, a desktop workbench.</p>
+    <p class="actions">
+      <a class="button" href="guide.html">Read the guide</a>
+      <a class="button quiet" href="https://github.com/collide2954/schematic">Source on GitHub</a>
+    </p>
+  </div>
+<pre class="highlight"><code>(<span class="k">define</span> sales (read-csv <span class="s">"sales.csv"</span>))
+
+(-> sales
+    (where (> (<span class="ss">:units</span> sales) <span class="m">10</span>))
+    (group-by <span class="ss">:city</span>)
+    (aggregate {<span class="ss">:total</span> [sum <span class="ss">:units</span>]
+                <span class="ss">:orders</span> [count]})
+    (order-by <span class="ss">:total</span> <span class="ss">:desc</span>))
+
+(bar-chart sales <span class="ss">:city</span> <span class="ss">:units</span> {<span class="ss">:by</span> <span class="ss">:year</span>})</code></pre>
+</section>
+
+<section class="features">
+  <div>
+    <h2>Columns, not loops</h2>
+    <p>Arithmetic and comparisons broadcast over arrays, <code>nil</code> marks what is missing, and tables come with <code>select</code>, <code>where</code>, <code>group-by</code>, <code>aggregate</code>, <code>join</code>, <code>pivot</code>, and CSV in and out.</p>
+  </div>
+  <div>
+    <h2>Dates, text, charts</h2>
+    <p>Dates are values with their own literal and calendar math, <code>format</code> fills placeholders, and bar, line, scatter, and histogram charts print as text, save as SVG, or draw in Studio.</p>
+  </div>
+  <div>
+    <h2>A real Lisp</h2>
+    <p>Proper tail calls, hygienic <code>syntax-rules</code>, destructuring and <code>match</code>, escape continuations, and <code>try</code> with <code>finally</code>. Only <code>nil</code> and <code>false</code> are false.</p>
+  </div>
+</section>
+
+<section class="studio">
+  <h2>Schematic Studio</h2>
+  <p>An editor, a console, an environment pane, a data grid, and plots, side by side. Run the form under the cursor with Ctrl+Enter and step through a script, or run the whole file and watch the environment fill in.</p>
+  <img src="studio.png" alt="Schematic Studio showing a script, a console, an environment pane, a data grid, and a bar chart" width="1280" height="820" loading="lazy">
+</section>
+
+<section class="install">
+  <h2>Try it</h2>
+<pre><code>git clone https://github.com/collide2954/schematic
+cd schematic
+cargo run --release -p schematic            # the REPL
+cargo run --release -p schematic-studio     # Studio</code></pre>
+  <p>Schematic is written in Rust. The language has no dependencies at all, and Studio adds only Iced and a file dialog. It is early and moving quickly; the <a href="reference.html">reference</a> lists every form and function, and the <a href="guide.html">guide</a> walks through the language from the first expression to tables and charts.</p>
+</section>

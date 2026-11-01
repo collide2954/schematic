@@ -104,6 +104,7 @@ name in the environment pane opens it in the data viewer.
 
 ## Learning more
 
+- [Website](https://collide2954.github.io/schematic/): the guide and reference as web pages
 - [Guide](docs/guide.md): a walkthrough for newcomers, from expressions to tables
 - [Reference](docs/reference.md): every special form and built-in function
 - [examples/tour.scm](crates/schematic/examples/tour.scm): the guide's examples as a runnable, checked script

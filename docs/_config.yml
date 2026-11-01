@@ -1,0 +1,8 @@
+title: Schematic
+description: A small Lisp for working with data, with typed arrays, tables, dates, charts, and a desktop workbench.
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+exclude:
+  - README.md
