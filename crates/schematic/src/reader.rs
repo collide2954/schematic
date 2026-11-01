@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 
@@ -5,6 +6,54 @@ use crate::array::Array;
 use crate::map::Map;
 use crate::set::Set;
 use crate::value::Value;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct Spans {
+    forms: HashMap<usize, Span>,
+    items: HashMap<usize, Vec<Span>>,
+}
+
+fn key(form: &Value) -> Option<usize> {
+    match form {
+        Value::List(l) => l.key(),
+        Value::Vector(v) => Some(Rc::as_ptr(v) as usize),
+        Value::Map(m) => Some(Rc::as_ptr(m) as usize),
+        Value::Set(s) => Some(Rc::as_ptr(s) as usize),
+        Value::Array(a) => Some(Rc::as_ptr(a) as usize),
+        _ => None,
+    }
+}
+
+impl Spans {
+    pub fn of(&self, form: &Value) -> Option<Span> {
+        self.forms.get(&key(form)?).copied()
+    }
+
+    pub fn item(&self, container: &Value, index: usize) -> Option<Span> {
+        self.items.get(&key(container)?)?.get(index).copied()
+    }
+
+    fn record(&mut self, form: &Value, span: Span, items: Vec<Span>) {
+        let Some(k) = key(form) else { return };
+        self.forms.insert(k, span);
+        if !items.is_empty() {
+            self.items.insert(k, items);
+        }
+    }
+}
+
+pub fn position(src: &str, offset: usize) -> (usize, usize) {
+    let before = &src[..offset.min(src.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+    (line, column)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReadError {
@@ -39,11 +88,22 @@ pub fn read_all(src: &str) -> Result<Vec<Value>, ReadError> {
     Ok(out)
 }
 
+pub fn read_all_spanned(src: &str) -> Result<(Vec<(Value, Span)>, Spans), ReadError> {
+    let mut reader = Reader::new(src);
+    reader.spans = Some(Spans::default());
+    let mut out = Vec::new();
+    while let Some(v) = reader.read_spanned()? {
+        out.push(v);
+    }
+    Ok((out, reader.spans.take().unwrap_or_default()))
+}
+
 pub struct Reader<'a> {
     src: &'a str,
     pos: usize,
     line: usize,
     col: usize,
+    spans: Option<Spans>,
 }
 
 fn is_delimiter(c: char) -> bool {
@@ -52,7 +112,13 @@ fn is_delimiter(c: char) -> bool {
 
 impl<'a> Reader<'a> {
     pub fn new(src: &'a str) -> Reader<'a> {
-        Reader { src, pos: 0, line: 1, col: 1 }
+        Reader { src, pos: 0, line: 1, col: 1, spans: None }
+    }
+
+    fn note(&mut self, value: &Value, start: usize, items: Vec<Span>) {
+        if let Some(spans) = &mut self.spans {
+            spans.record(value, Span { start, end: self.pos }, items);
+        }
     }
 
     fn error(&self, message: impl Into<String>) -> ReadError {
@@ -128,35 +194,50 @@ impl<'a> Reader<'a> {
     }
 
     pub fn read(&mut self) -> Result<Option<Value>, ReadError> {
+        Ok(self.read_spanned()?.map(|(value, _)| value))
+    }
+
+    fn read_spanned(&mut self) -> Result<Option<(Value, Span)>, ReadError> {
         self.skip_trivia()?;
         let Some(c) = self.peek() else {
             return Ok(None);
         };
+        let start = self.pos;
         let value = match c {
             '"' => self.read_string()?,
-            '(' => Value::List(self.read_items(')')?.into_iter().collect()),
-            '[' => Value::vector(self.read_items(']')?),
-            '{' => self.read_map()?,
-            '#' => self.read_dispatch()?,
+            '(' => {
+                let (items, spans) = self.read_items(')')?;
+                let list = Value::List(items.into_iter().collect());
+                self.note(&list, start, spans);
+                list
+            }
+            '[' => {
+                let (items, spans) = self.read_items(']')?;
+                let vector = Value::vector(items);
+                self.note(&vector, start, spans);
+                vector
+            }
+            '{' => self.read_map(start)?,
+            '#' => self.read_dispatch(start)?,
             ')' | ']' | '}' => return Err(self.error(format!("unexpected `{c}`"))),
-            '\'' => self.read_prefixed("quote")?,
-            '`' => self.read_prefixed("quasiquote")?,
+            '\'' => self.read_prefixed("quote", start)?,
+            '`' => self.read_prefixed("quasiquote", start)?,
             '~' => {
                 self.bump();
                 if self.peek() == Some('@') {
                     self.bump();
-                    self.read_wrapped("unquote-splicing", "~@")?
+                    self.read_wrapped("unquote-splicing", "~@", start)?
                 } else {
-                    self.read_wrapped("unquote", "~")?
+                    self.read_wrapped("unquote", "~", start)?
                 }
             }
             _ => self.read_atom()?,
         };
-        Ok(Some(value))
+        Ok(Some((value, Span { start, end: self.pos })))
     }
 
-    fn read_map(&mut self) -> Result<Value, ReadError> {
-        let items = self.read_items('}')?;
+    fn read_map(&mut self, start: usize) -> Result<Value, ReadError> {
+        let (items, _) = self.read_items('}')?;
         if items.len() % 2 != 0 {
             return Err(self.error("map literal needs an even number of forms"));
         }
@@ -168,27 +249,33 @@ impl<'a> Reader<'a> {
             }
             map.insert_mut(k, v);
         }
-        Ok(Value::Map(Rc::new(map)))
+        let map = Value::Map(Rc::new(map));
+        self.note(&map, start, Vec::new());
+        Ok(map)
     }
 
-    fn read_dispatch(&mut self) -> Result<Value, ReadError> {
+    fn read_dispatch(&mut self, start: usize) -> Result<Value, ReadError> {
         match self.peek_second() {
             Some('{') => {
                 self.bump();
-                self.read_set()
+                self.read_set(start)
             }
             Some('[') => {
                 self.bump();
-                let items = self.read_items(']')?;
+                let (items, spans) = self.read_items(']')?;
                 let literal = |v: &Value| {
                     matches!(v, Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Date(_) | Value::Str(_))
                 };
                 if items.iter().all(literal) {
-                    return Array::from_values(items)
-                        .map(|a| Value::Array(Rc::new(a)))
-                        .map_err(|e| self.error(e.message()));
+                    let array = Array::from_values(items).map(|a| Value::Array(Rc::new(a))).map_err(|e| self.error(e.message()))?;
+                    self.note(&array, start, spans);
+                    return Ok(array);
                 }
-                Ok(Value::list([Value::symbol("array"), Value::vector(items)]))
+                let vector = Value::vector(items);
+                self.note(&vector, start, spans);
+                let call = Value::list([Value::symbol("array"), vector]);
+                self.note(&call, start, Vec::new());
+                Ok(call)
             }
             Some(c) if c.is_ascii_digit() => {
                 self.bump();
@@ -203,8 +290,8 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn read_set(&mut self) -> Result<Value, ReadError> {
-        let items = self.read_items('}')?;
+    fn read_set(&mut self, start: usize) -> Result<Value, ReadError> {
+        let (items, _) = self.read_items('}')?;
         let mut set = Set::new();
         for item in items {
             if set.contains(&item) {
@@ -212,38 +299,48 @@ impl<'a> Reader<'a> {
             }
             set.insert_mut(item);
         }
-        Ok(Value::Set(Rc::new(set)))
+        let set = Value::Set(Rc::new(set));
+        self.note(&set, start, Vec::new());
+        Ok(set)
     }
 
-    fn read_prefixed(&mut self, name: &str) -> Result<Value, ReadError> {
+    fn read_prefixed(&mut self, name: &str, start: usize) -> Result<Value, ReadError> {
         let prefix = self.bump().unwrap().to_string();
-        self.read_wrapped(name, &prefix)
+        self.read_wrapped(name, &prefix, start)
     }
 
-    fn read_wrapped(&mut self, name: &str, prefix: &str) -> Result<Value, ReadError> {
-        match self.read()? {
-            Some(v) => Ok(Value::list([Value::symbol(name), v])),
+    fn read_wrapped(&mut self, name: &str, prefix: &str, start: usize) -> Result<Value, ReadError> {
+        match self.read_spanned()? {
+            Some((v, inner)) => {
+                let form = Value::list([Value::symbol(name), v]);
+                self.note(&form, start, vec![Span { start, end: start + prefix.len() }, inner]);
+                Ok(form)
+            }
             None => Err(self.incomplete(format!("expected a form after `{prefix}`"))),
         }
     }
 
-    fn read_items(&mut self, close: char) -> Result<Vec<Value>, ReadError> {
+    fn read_items(&mut self, close: char) -> Result<(Vec<Value>, Vec<Span>), ReadError> {
         let open = self.bump().unwrap();
         let unclosed = self.incomplete(format!("unclosed `{open}`"));
         let mut items = Vec::new();
+        let mut spans = Vec::new();
         loop {
             self.skip_trivia()?;
             match self.peek() {
                 None => return Err(unclosed),
                 Some(c) if c == close => {
                     self.bump();
-                    return Ok(items);
+                    return Ok((items, spans));
                 }
                 Some(c @ (')' | ']' | '}')) => {
                     return Err(self.error(format!("expected `{close}` but found `{c}`")));
                 }
-                Some(_) => match self.read()? {
-                    Some(v) => items.push(v),
+                Some(_) => match self.read_spanned()? {
+                    Some((v, span)) => {
+                        items.push(v);
+                        spans.push(span);
+                    }
                     None => return Err(unclosed),
                 },
             }
@@ -299,10 +396,7 @@ impl<'a> Reader<'a> {
             "nil" => return Ok(Value::Nil),
             _ => {}
         }
-        if let Some(name) = token.strip_prefix(':') {
-            if name.is_empty() {
-                return Err(self.error("keyword needs a name"));
-            }
+        if let Some(name) = token.strip_prefix(':').filter(|name| !name.is_empty()) {
             return Ok(Value::keyword(name));
         }
         match parse_number(token) {
@@ -576,5 +670,32 @@ mod tests {
         assert_eq!(read("#| note |# 5"), Value::Int(5));
         assert_eq!(read("#| outer #| inner |# still |# 5"), Value::Int(5));
         assert!(read_str("#| open").is_err());
+    }
+
+    #[test]
+    fn a_bare_colon_is_a_symbol() {
+        assert_eq!(read(":"), Value::symbol(":"));
+        assert_eq!(read("[r : float]"), Value::vector([Value::symbol("r"), Value::symbol(":"), Value::symbol("float")]));
+    }
+
+    #[test]
+    fn spans_locate_forms_and_their_items() {
+        let src = "(define x\n  [1 \"two\"])\n 'y";
+        let (forms, spans) = read_all_spanned(src).unwrap();
+        assert_eq!(forms.len(), 2);
+        assert_eq!(forms[0].1, Span { start: 0, end: 22 });
+        assert_eq!(spans.of(&forms[0].0), Some(Span { start: 0, end: 22 }));
+        assert_eq!(spans.item(&forms[0].0, 1), Some(Span { start: 8, end: 9 }));
+        let Value::List(l) = &forms[0].0 else { panic!() };
+        let vector = l.iter().nth(2).unwrap();
+        assert_eq!(spans.of(vector), Some(Span { start: 12, end: 21 }));
+        assert_eq!(spans.item(vector, 1), Some(Span { start: 15, end: 20 }));
+        assert_eq!(spans.item(vector, 2), None);
+        assert_eq!(forms[1].1, Span { start: 24, end: 26 });
+        assert_eq!(spans.item(&forms[1].0, 1), Some(Span { start: 25, end: 26 }));
+        assert_eq!(spans.of(&Value::Int(1)), None);
+        assert_eq!(position(src, 0), (1, 1));
+        assert_eq!(position(src, 12), (2, 3));
+        assert_eq!(position("é(", 2), (1, 2));
     }
 }

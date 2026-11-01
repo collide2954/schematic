@@ -39,6 +39,10 @@ impl List {
         }
     }
 
+    pub fn key(&self) -> Option<usize> {
+        self.0.as_ref().map(|n| Rc::as_ptr(n) as usize)
+    }
+
     pub fn ptr_eq(&self, other: &List) -> bool {
         match (&self.0, &other.0) {
             (Some(a), Some(b)) => Rc::ptr_eq(a, b),
