@@ -1,0 +1,28 @@
+---
+layout: default
+title: Packages
+description: Packages published in the Schematic registry, how to add one to a project, and how to publish your own.
+packages: true
+---
+<span class="eyebrow">Registry</span>
+<h1>Packages</h1>
+<p class="lead">A package is a Schematic project published under a name. Adding one copies its source into your project's <code>packages</code> folder and pins the exact commit, and a hash of the files, in <code>project.lock</code>, so the project runs the same everywhere.</p>
+<pre><code>schematic new report
+cd report
+schematic add text-tools</code></pre>
+<p>Studio's Project tab does the same from the window. The list below is read live from the <a href="https://github.com/collide2954/schematic-registry">registry on GitHub</a>, where each package is one small file.</p>
+
+<h2>In the registry</h2>
+<div id="packages" class="packages"><p class="note">Reading the registry…</p></div>
+<noscript><p class="note">Listing the packages needs JavaScript. <a href="https://github.com/collide2954/schematic-registry/tree/main/packages">Browse them on GitHub</a> instead.</p></noscript>
+
+<h2>Publishing a package</h2>
+<p>Any project in a Git repository can be a package: a folder with a <code>project.scm</code> manifest and a <code>src</code> folder of namespaces, with a tag for each release. To list it, open a pull request to the registry that adds <code>packages/&lt;name&gt;.scm</code> and puts the name in <code>index.scm</code>.</p>
+<pre class="highlight"><code>{<span class="ss">:name</span> <span class="s">"text-tools"</span>
+ <span class="ss">:description</span> <span class="s">"Small helpers for titles and slugs"</span>
+ <span class="ss">:git</span> <span class="s">"https://github.com/collide2954/schematic-registry"</span>
+ <span class="ss">:subdir</span> <span class="s">"examples/text-tools"</span>
+ <span class="ss">:versions</span> {<span class="s">"0.1.0"</span> {<span class="ss">:tag</span> <span class="s">"text-tools/0.1.0"</span>}}}</code></pre>
+<p>Every version names a <code>:tag</code> or a <code>:commit</code>, and <code>:subdir</code> points at the package's folder when a repository holds more than one. A project can also depend on a package that is not listed, straight from its repository or from a folder next to the project:</p>
+<pre><code>schematic add text-tools --git https://github.com/collide2954/schematic-registry --tag text-tools/0.1.0 --subdir examples/text-tools
+schematic add my-lib --path ../my-lib</code></pre>

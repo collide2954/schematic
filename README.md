@@ -132,6 +132,7 @@ written in Schematic get the same treatment from `project.lock` and
 - [Website](https://collide2954.github.io/schematic/): the guide and reference as web pages
 - [Guide](docs/guide.md): a walkthrough for newcomers, from expressions to tables
 - [Reference](docs/reference.md): every special form and built-in function
+- [Packages](https://collide2954.github.io/schematic/packages.html): what the registry holds and how to publish a package
 - [examples/tour.scm](crates/schematic/examples/tour.scm): the guide's examples as a runnable, checked script
 
 ## License

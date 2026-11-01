@@ -579,7 +579,9 @@ same code, and `schematic restore --locked` proves it. `run` loads
 `src/report.scm` with `src` and every package on the load path, so the main
 file can say `(ns report (:require [text-tools :as t]))`. Studio's Project
 tab does the same from the window: it creates a project in the open folder,
-adds and removes packages, and restores them.
+adds and removes packages, and restores them. The
+[packages page](https://collide2954.github.io/schematic/packages.html) lists
+what the registry holds and explains how to publish a package of your own.
 
 ## Where to go next
 
