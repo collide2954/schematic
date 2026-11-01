@@ -114,7 +114,7 @@ impl Array {
         self.data = match value {
             Value::Int(_) => Data::Int(vec![0; n]),
             Value::Bool(_) => Data::Bool(vec![false; n]),
-            Value::Str(_) => Data::Str(vec![Rc::new(String::new()); n]),
+            Value::Str(_) => Data::Str((0..n).map(|_| Rc::new(String::new())).collect()),
             Value::Date(_) => Data::Date(vec![0; n]),
             _ => Data::Float(vec![0.0; n]),
         };

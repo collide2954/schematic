@@ -70,7 +70,7 @@ pub extern "C" fn alloc(len: usize) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn eval(pointer: *mut u8, len: usize) -> usize {
+pub unsafe extern "C" fn eval(pointer: *mut u8, len: usize) -> usize {
     let source = unsafe { String::from_raw_parts(pointer, len, len) };
     let text = run(&source);
     RESULT.with(|result| {

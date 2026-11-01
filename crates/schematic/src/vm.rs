@@ -144,8 +144,8 @@ fn split(name: Symbol) -> Option<(Symbol, Symbol)> {
 
 impl Globals {
     fn ensure(&mut self, name: Symbol) -> &mut Namespace {
-        if !self.namespaces.contains_key(&name) {
-            self.namespaces.insert(name, Namespace::new());
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.namespaces.entry(name) {
+            slot.insert(Namespace::new());
             self.created.push(name);
         }
         self.namespaces.get_mut(&name).expect("namespace")
