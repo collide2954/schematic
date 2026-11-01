@@ -1094,6 +1094,72 @@ fn charts_are_values_that_print_as_text() {
 }
 
 #[test]
+fn bars_stack_or_lie_sideways_and_pies_slice() {
+    let s = "(define s (table {:city [\"Oslo\" \"Oslo\" \"Rome\"] :year [2020 2021 2021] :units [12 30 7]}))";
+    let stacked = eval(&format!("{s} (to-svg (bar-chart s :city :units {{:by :year :stack true}}))"));
+    assert_eq!(stacked.matches("<rect").count(), 5, "{stacked}");
+    let sideways = eval("(to-svg (bar-chart [\"a\" \"b\"] [1 2] {:horizontal true}))");
+    assert_eq!(sideways.matches("<rect").count(), 2);
+    assert!(sideways.contains(">a<") && sideways.contains(">b<"));
+    let pie = format!("a {} 1 (25%)\nb {} 1 (25%)\nc {} 2 (50%)", "█".repeat(20), "█".repeat(20), "█".repeat(40));
+    assert_eq!(eval("(str (pie-chart [\"a\" \"b\" \"c\"] [1 1 2]))"), format!("{pie:?}"));
+    assert_eq!(eval(&format!("{s} (str (pie-chart s :city :units))")), format!("{:?}", format!("Oslo {} 42 (86%)\nRome {} 7 (14%)", "█".repeat(40), "█".repeat(7))));
+    let svg = eval("(to-svg (pie-chart [\"a\" \"b\" \"c\"] [1 1 2] {:donut true :title \"Share\"}))");
+    assert_eq!(svg.matches("<path").count(), 3, "{svg}");
+    assert!(svg.contains(">Share<") && svg.contains(">c 50%<"), "{svg}");
+    assert_eq!(eval("(pie-chart [\"a\"] [-1])"), "error: pie-chart expects positive values, got -1");
+}
+
+#[test]
+fn box_plots_summarize_distributions() {
+    let s = "(define s (table {:city [\"Oslo\" \"Oslo\" \"Rome\"] :year [2020 2021 2021] :units [12 30 7]}))";
+    let text = eval(&format!("{s} (str (box-plot s :city :units))"));
+    assert!(text.contains("Oslo") && text.contains("12 16.5 21 25.5 30") && text.contains("Rome") && text.contains("7 7 7 7 7"), "{text}");
+    let outliers = eval("(str (box-plot #[1 2 3 4 100]))");
+    assert!(outliers.contains("1 2 3 4 4") && outliers.contains('o'), "{outliers}");
+    let svg = eval(&format!("{s} (to-svg (box-plot s :city :units {{:title \"Units\"}}))"));
+    assert_eq!(svg.matches("<rect").count(), 2, "{svg}");
+    assert!(svg.contains(">Oslo<") && svg.contains(">Units<"));
+    assert!(eval("(to-svg (box-plot #[1 2 3 4 100]))").contains("<circle"));
+    assert_eq!(eval("(box-plot [\"a\"])"), "error: box-plot expects numbers, got \"a\"");
+}
+
+#[test]
+fn area_charts_fill_to_the_baseline() {
+    let svg = eval("(to-svg (area-chart [1 2 3] [1 4 2]))");
+    assert_eq!(svg.matches("<polygon").count(), 1, "{svg}");
+    assert_eq!(svg.matches("<polyline").count(), 1);
+    let s = "(define s (table {:city [\"Oslo\" \"Oslo\" \"Rome\" \"Rome\"] :year [2020 2021 2020 2021] :units [12 30 7 9]}))";
+    let stacked = eval(&format!("{s} (to-svg (area-chart s :year :units {{:by :city}}))"));
+    assert_eq!(stacked.matches("<polygon").count(), 2, "{stacked}");
+    let text = eval("(str (area-chart [1 2 3] [1 4 2]))");
+    assert_eq!(text.matches('•').count(), 3);
+}
+
+#[test]
+fn axis_options_shape_the_scales() {
+    let ranged = eval("(to-svg (bar-chart [\"a\"] [5] {:y-range [0 100]}))");
+    assert!(ranged.contains(">100<") && !ranged.contains(">6<"), "{ranged}");
+    let wide = eval("(to-svg (scatter [1 2] [1 2] {:x-range [0 10]}))");
+    assert!(wide.contains(">10<"), "{wide}");
+    let log = eval("(to-svg (scatter [1 10 100] [1 10 100] {:y-scale :log}))");
+    assert!(log.contains(">1<") && log.contains(">10<") && log.contains(">100<") && !log.contains(">50<"), "{log}");
+    assert_eq!(eval("(scatter [1 2] [0 2] {:y-scale :log})"), "error: scatter expects positive values on a log scale, got 0");
+    let grouped = eval("(to-svg (bar-chart [\"a\"] [1234567] {:y-format \"{:,}\"}))");
+    assert!(grouped.contains(">1,000,000<"), "{grouped}");
+    let percent = eval("(to-svg (bar-chart [\"a\" \"b\"] [0.4 0.9] {:y-format \"{:.0%}\"}))");
+    assert!(percent.contains(">50%<"), "{percent}");
+    let dated = eval("(to-svg (line-chart [#2024-01-01 #2024-02-01 #2024-03-01] [1 2 3] {:x-format \"MMM d\"}))");
+    assert!(dated.contains(">Jan ") || dated.contains(">Feb "), "{dated}");
+    let lines = eval("(to-svg (line-chart [1 2 3] [1 2 3] {:hline 2 :vline [1.5 2.5]}))");
+    assert_eq!(lines.matches("stroke-dasharray").count(), 3, "{lines}");
+    let labelled = eval("(to-svg (bar-chart [\"a\" \"b\"] [7 13] {:labels true}))");
+    assert!(labelled.contains(">7<") && labelled.contains(">13<"), "{labelled}");
+    assert_eq!(eval("(bar-chart [\"a\"] [1] {:y-range [1]})"), "error: bar-chart expects :y-range to be [low high]");
+    assert_eq!(eval("(bar-chart [\"a\"] [1] {:y-scale :loud})"), "error: bar-chart expects :linear or :log for :y-scale, got :loud");
+}
+
+#[test]
 fn charts_render_to_svg() {
     let svg = eval("(to-svg (bar-chart [\"a\" \"b\"] [1 2] {:title \"T\" :y-label \"count\"}))");
     assert!(svg.starts_with("\"<svg xmlns=\\\"http://www.w3.org/2000/svg\\\" width=\\\"640\\\" height=\\\"400\\\""), "{svg}");
