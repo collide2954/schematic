@@ -12,9 +12,10 @@ use iced::{Alignment, Color, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
-    Cell, EDITOR_PAD, Find, LineKind, Message, NamingKind, Notebook, PAGE, Page, Palette, PaneKind, Side, Source, Studio, Tab,
-    console_find_id, console_id, console_text_id, duration, editor_id, editor_text_id, find_id, naming_id, palette_id,
+    Cell, Diff, EDITOR_PAD, Find, LineKind, Message, NamingKind, Notebook, PAGE, Page, Palette, PaneKind, Side, Source, Studio,
+    Tab, console_find_id, console_id, console_text_id, duration, editor_id, editor_text_id, find_id, naming_id, palette_id,
 };
+use crate::git::{self, Change};
 use crate::notebook::{Kind, Output};
 use crate::chart::{Chart, PlotView, Thumb};
 use crate::commands::{self, Menu};
@@ -48,6 +49,7 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
                 Side::Project => (side_tabs(studio), None, project(studio)),
                 Side::Outline => (side_tabs(studio), None, outline(studio)),
                 Side::Watch => (side_tabs(studio), Some(watch_controls(studio)), watch(studio)),
+                Side::Git => (side_tabs(studio), None, git_tab(studio)),
             },
             PaneKind::Viewer => {
                 let grid = studio.grid.as_ref();
@@ -313,6 +315,15 @@ fn editor_tabs(studio: &Studio) -> Vec<TabItem> {
             close: Some(Message::CloseTab(Tab::Settings)),
         });
     }
+    if let Some(diff) = &studio.diff {
+        tabs.push(TabItem {
+            label: "Diff".to_string(),
+            detail: Some(diff.title.clone()),
+            active: studio.tab == Tab::Diff,
+            select: Some(Message::SelectTab(Tab::Diff)),
+            close: Some(Message::CloseTab(Tab::Diff)),
+        });
+    }
     tabs
 }
 
@@ -323,14 +334,6 @@ fn editor_controls(studio: &Studio) -> Element<'_, Message> {
         controls = controls.push(small("Reload", Some(Message::Reload)));
     }
     controls.push(small("+", Some(Message::NewFile))).push(small("Help", help)).into()
-}
-
-fn environment_label(studio: &Studio) -> Option<String> {
-    match studio.bindings.len() {
-        0 => None,
-        1 => Some("1 binding".to_string()),
-        n => Some(format!("{n} bindings")),
-    }
 }
 
 fn folder_name(path: &Path) -> String {
@@ -345,13 +348,145 @@ fn side_tabs(studio: &Studio) -> Vec<TabItem> {
         select: Some(Message::ShowSide(side)),
         close: None,
     };
+    let changes = studio.git.status.as_ref().map(git::Status::changes).filter(|n| *n > 0).map(|n| n.to_string());
     vec![
-        tab("Environment", Side::Environment, environment_label(studio)),
+        tab("Environment", Side::Environment, None),
         tab("Files", Side::Files, studio.root.as_deref().map(folder_name)),
         tab("Project", Side::Project, studio.project.as_ref().map(|p| p.name.clone())),
         tab("Outline", Side::Outline, None),
         tab("Watch", Side::Watch, (!studio.watches.is_empty()).then(|| studio.watches.len().to_string())),
+        tab("Git", Side::Git, changes),
     ]
+}
+
+fn git_tab(studio: &Studio) -> Element<'_, Message> {
+    let state = &studio.git;
+    let Some(status) = state.status.as_ref().filter(|_| state.root.is_some()) else {
+        let can_init = studio.root.is_some() && !state.busy;
+        let note = state.error.as_deref().unwrap_or("Not a git repository.");
+        return column![hint(note), container(small("Initialize repository", can_init.then_some(Message::GitInit))).padding(theme::GLYPH_PAD)].into();
+    };
+    let busy = state.busy;
+    let mut position = Vec::new();
+    if status.ahead > 0 {
+        position.push(format!("{} ahead", status.ahead));
+    }
+    if status.behind > 0 {
+        position.push(format!("{} behind", status.behind));
+    }
+    let header = row![
+        text(&status.branch).size(theme::UI).font(fonts::UI_MEDIUM),
+        text(position.join(", ")).size(theme::FINE).style(theme::muted),
+        space::horizontal(),
+        small("Pull", (!busy && status.upstream.is_some()).then_some(Message::GitPull)),
+        small("Push", (!busy).then_some(Message::GitPush)),
+        small("Refresh", (!busy).then_some(Message::GitRefresh)),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .padding(HEADER);
+    let mut list = Column::new().push(header).push(line()).width(Length::Fill);
+    if let Some(error) = &state.error {
+        list = list.push(container(text(error).size(theme::META).style(theme::alarm)).padding(theme::HEAD));
+    }
+    let staged: Vec<(&git::Entry, Change)> = status.staged().collect();
+    let unstaged: Vec<(&git::Entry, Change)> = status.unstaged().collect();
+    let commit_ready = !busy && !staged.is_empty() && !state.message.trim().is_empty();
+    let message = text_input("Commit message", &state.message)
+        .on_input(Message::GitMessage)
+        .on_submit(Message::GitCommit)
+        .size(theme::UI)
+        .padding(theme::FIELD_PAD)
+        .style(theme::field)
+        .width(Length::Fill);
+    list = list.push(row![message, small("Commit", commit_ready.then_some(Message::GitCommit))].spacing(6).align_y(Alignment::Center).padding(theme::HEAD)).push(line());
+    if staged.is_empty() && unstaged.is_empty() {
+        list = list.push(hint("Nothing to commit."));
+    }
+    if !staged.is_empty() {
+        list = list.push(section_row(format!("Staged {}", staged.len()), small("Unstage all", (!busy).then_some(Message::GitUnstageAll))));
+        for (entry, change) in staged {
+            list = list.push(change_row(entry, change, true, busy));
+        }
+    }
+    if !unstaged.is_empty() {
+        list = list.push(section_row(format!("Changes {}", unstaged.len()), small("Stage all", (!busy).then_some(Message::GitStageAll))));
+        for (entry, change) in unstaged {
+            list = list.push(change_row(entry, change, false, busy));
+        }
+    }
+    if !state.log.is_empty() {
+        list = list.push(section_row("Recent commits".to_string(), space::horizontal().into()));
+        for commit in &state.log {
+            let row = row![
+                text(&commit.hash).font(fonts::MONO).size(theme::META).style(theme::faint).width(64),
+                text(&commit.subject).size(theme::UI).style(theme::strong).width(Length::Fill),
+                text(&commit.when).size(theme::FINE).style(theme::faint),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .padding(theme::ROW);
+            list = list.push(row);
+        }
+    }
+    scrollable(list.padding(Padding { top: 0.0, right: 0.0, bottom: 8.0, left: 0.0 })).height(Length::Fill).style(theme::scroll).into()
+}
+
+fn section_row<'a>(label: String, action: Element<'a, Message>) -> Element<'a, Message> {
+    row![text(label).size(theme::FINE).font(fonts::UI_SEMIBOLD).style(theme::muted), space::horizontal(), action]
+        .align_y(Alignment::Center)
+        .padding(Padding { top: 9.0, right: 6.0, bottom: 2.0, left: 12.0 })
+        .into()
+}
+
+fn change_row<'a>(entry: &'a git::Entry, change: Change, staged: bool, busy: bool) -> Element<'a, Message> {
+    let mark: TextStyle = if staged { theme::accent } else { theme::warn };
+    let letter = text(change.letter()).font(fonts::MONO).size(theme::META).style(mark).width(16);
+    let name = text(&entry.path).font(fonts::MONO).size(theme::UI).style(theme::strong).width(Length::Fill);
+    let pick = button(row![letter, name].spacing(6).align_y(Alignment::Center))
+        .padding(theme::ROW)
+        .width(Length::Fill)
+        .style(theme::row(false))
+        .on_press(Message::GitDiff(entry.path.clone(), staged, Some(change)));
+    let mut actions = Row::new().align_y(Alignment::Center);
+    if staged {
+        actions = actions.push(tip(glyph_button(Glyph::Minus, (!busy).then_some(Message::GitUnstage(entry.path.clone()))), "Unstage"));
+    } else {
+        let discard = (!busy && change != Change::Conflict).then_some(Message::GitDiscard(entry.path.clone(), change));
+        actions = actions
+            .push(tip(glyph_button(Glyph::Plus, (!busy).then_some(Message::GitStage(entry.path.clone()))), "Stage"))
+            .push(tip(glyph_button(Glyph::Close, discard), "Discard"));
+    }
+    row![pick, actions].align_y(Alignment::Center).padding(Padding { top: 0.0, right: 6.0, bottom: 0.0, left: 0.0 }).into()
+}
+
+fn diff_view<'a>(studio: &'a Studio, diff: &'a Diff) -> Element<'a, Message> {
+    let header = row![
+        text(&diff.title).font(fonts::MONO).size(theme::UI).style(theme::strong),
+        space::horizontal(),
+        small("Copy", Some(Message::CopyText(diff.text.clone()))),
+    ]
+    .spacing(6)
+    .align_y(Alignment::Center)
+    .padding(HEADER);
+    let size = studio.code_size();
+    let lines = diff.text.lines().map(|shown| {
+        let style: TextStyle = if shown.starts_with("+++") || shown.starts_with("---") || shown.starts_with("diff ") || shown.starts_with("index ") {
+            theme::faint
+        } else if shown.starts_with('+') {
+            theme::good
+        } else if shown.starts_with('-') {
+            theme::alarm
+        } else if shown.starts_with("@@") {
+            theme::accent
+        } else {
+            theme::strong
+        };
+        text(shown).font(fonts::MONO).size(size).line_height(LineHeight::Absolute(Pixels(studio.line_height()))).style(style).wrapping(text::Wrapping::None).into()
+    });
+    let body = Column::with_children(lines).padding(Padding { top: EDITOR_PAD, right: 16.0, bottom: EDITOR_PAD, left: 16.0 });
+    let scroller = scrollable(body).direction(Direction::Both { vertical: Scrollbar::new(), horizontal: Scrollbar::new() }).width(Length::Fill).height(Length::Fill).style(theme::scroll);
+    column![header, line(), scroller].into()
 }
 
 fn console_controls(studio: &Studio) -> Element<'_, Message> {
@@ -549,9 +684,14 @@ fn files(studio: &Studio) -> Element<'_, Message> {
             (false, _) => "",
         };
         let style: TextStyle = if entry.dir || entry.name.ends_with(".scm") { theme::strong } else { theme::muted };
-        let content = row![text(chevron).size(theme::FINE).style(theme::faint).width(12), text(&entry.name).size(theme::UI).style(style)]
+        let mut content = row![text(chevron).size(theme::FINE).style(theme::faint).width(12), text(&entry.name).size(theme::UI).style(style)]
             .spacing(4)
             .align_y(Alignment::Center);
+        if let Some((change, staged)) = studio.badge(&entry.path) {
+            let mark: TextStyle = if staged { theme::accent } else { theme::warn };
+            let letter = if entry.dir { "•" } else { change.letter() };
+            content = content.push(space::horizontal()).push(text(letter).font(fonts::MONO).size(theme::FINE).style(mark));
+        }
         let selected = studio.selected.as_deref() == Some(entry.path.as_path());
         let indent = 12.0 + 14.0 * entry.depth as f32;
         list = list.push(
@@ -699,6 +839,7 @@ fn workspace(studio: &Studio) -> Element<'_, Message> {
         (Tab::Help, Some(_)) => help(studio),
         (Tab::Settings, _) if studio.settings_open => settings_page(studio),
         (Tab::Start, _) if studio.start_open => start_page(studio),
+        (Tab::Diff, _) if studio.diff.is_some() => diff_view(studio, studio.diff.as_ref().expect("a diff")),
         _ => match (&studio.doc().notebook, &studio.find) {
             (Some(notebook), _) => notebook_view(studio, notebook),
             (None, Some(find)) => column![find_bar(studio, find), line(), editor(studio)].into(),

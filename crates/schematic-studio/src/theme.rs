@@ -424,6 +424,10 @@ pub fn accent(theme: &Theme) -> text::Style {
     text::Style { color: Some(tones(theme).accent) }
 }
 
+pub fn good(theme: &Theme) -> text::Style {
+    text::Style { color: Some(tones(theme).success) }
+}
+
 pub fn alarm(theme: &Theme) -> text::Style {
     text::Style { color: Some(tones(theme).danger) }
 }

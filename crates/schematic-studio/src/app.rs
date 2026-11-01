@@ -17,6 +17,7 @@ use crate::commands::{self, Menu};
 use crate::completion::{self, Candidate};
 use crate::highlight::Marks;
 use crate::chart::PlotView;
+use crate::git::{self, Change, Commit, Snapshot as GitSnapshot};
 use crate::notebook::{self, CellText, Kind, Output};
 use crate::settings::{self, Settings};
 use crate::project::{self, ProjectInfo};
@@ -76,6 +77,24 @@ pub enum Tab {
     Help,
     Settings,
     Start,
+    Diff,
+}
+
+#[derive(Debug, Default)]
+pub struct Git {
+    pub root: Option<PathBuf>,
+    pub status: Option<git::Status>,
+    pub log: Vec<Commit>,
+    pub message: String,
+    pub busy: bool,
+    pub error: Option<String>,
+    pub stale: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diff {
+    pub title: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -104,6 +123,7 @@ pub enum Side {
     Project,
     Outline,
     Watch,
+    Git,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -493,6 +513,9 @@ pub struct Studio {
     pub next_tag: u64,
     pub active_run: Option<u64>,
     pub runs: usize,
+    pub git: Git,
+    pub diff: Option<Diff>,
+    pub ticks: u64,
     pub worker: Option<Sender<Request>>,
     pub interrupt: Option<Arc<AtomicBool>>,
     pub running: bool,
@@ -650,6 +673,22 @@ pub enum Message {
     ImportCsvFrom(Option<PathBuf>),
     DescribeBinding(String),
     WatchBinding(String),
+    GitRefresh,
+    GitLoaded(Option<GitSnapshot>),
+    GitMessage(String),
+    GitCommit,
+    GitStage(String),
+    GitUnstage(String),
+    GitStageAll,
+    GitUnstageAll,
+    GitDiscard(String, Change),
+    GitDiscardDecided(String, Change, bool),
+    GitDiff(String, bool, Option<Change>),
+    GitDiffLoaded(String, Result<String, String>),
+    GitDone(Result<String, String>),
+    GitPull,
+    GitPush,
+    GitInit,
 }
 
 pub fn console_find_id() -> Id {
@@ -840,7 +879,7 @@ pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifie
         _ if letter("-") => Shortcut::ZoomOut,
         _ if letter("0") => Shortcut::ZoomReset,
         _ if letter(",") => Shortcut::Preferences,
-        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=7).contains(n))?),
+        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=8).contains(n))?),
         _ => return None,
     })
 }
@@ -894,6 +933,16 @@ async fn save_svg() -> Option<PathBuf> {
 async fn pick_folder() -> Option<PathBuf> {
     let handle = rfd::AsyncFileDialog::new().set_title("Open a folder").pick_folder().await?;
     Some(handle.path().to_path_buf())
+}
+
+async fn confirm_discard(path: String) -> bool {
+    let result = rfd::AsyncMessageDialog::new()
+        .set_title("Discard")
+        .set_description(format!("Discard the changes to {path}? This cannot be undone."))
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await;
+    matches!(result, rfd::MessageDialogResult::Yes)
 }
 
 async fn pick_csv() -> Option<PathBuf> {
@@ -1075,6 +1124,9 @@ impl Studio {
             next_tag: 0,
             active_run: None,
             runs: 0,
+            git: Git::default(),
+            diff: None,
+            ticks: 0,
             worker: None,
             interrupt: None,
             running: false,
@@ -1173,6 +1225,7 @@ impl Studio {
             Some(root) => files::listing(root, &self.expanded),
             None => Vec::new(),
         };
+        self.git.stale = true;
         self.refresh_project();
     }
 
@@ -1399,9 +1452,51 @@ impl Studio {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
-        let task = self.handle(message);
+        let mut task = self.handle(message);
+        if self.git.stale {
+            self.git.stale = false;
+            task = Task::batch([task, self.git_refresh()]);
+        }
         self.persist();
         task
+    }
+
+    fn git_dir(&self) -> Option<PathBuf> {
+        self.root.clone().or_else(|| self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf))
+    }
+
+    fn git_refresh(&mut self) -> Task<Message> {
+        let Some(dir) = self.git_dir() else {
+            self.git.root = None;
+            self.git.status = None;
+            return Task::none();
+        };
+        Task::perform(async move { git::snapshot(&dir) }, Message::GitLoaded)
+    }
+
+    fn git_op(&mut self, op: impl FnOnce(PathBuf) -> Result<String, String> + Send + 'static) -> Task<Message> {
+        let Some(root) = self.git.root.clone() else { return Task::none() };
+        if self.git.busy {
+            return Task::none();
+        }
+        self.git.busy = true;
+        Task::perform(async move { op(root) }, Message::GitDone)
+    }
+
+    pub fn badge(&self, path: &Path) -> Option<(Change, bool)> {
+        let root = self.git.root.as_deref()?;
+        let status = self.git.status.as_ref()?;
+        let relative = git::relative(root, path)?;
+        if path.is_dir() {
+            let prefix = format!("{relative}/");
+            return status.entries.iter().any(|e| e.path.starts_with(&prefix)).then_some((Change::Modified, false));
+        }
+        let entry = status.entries.iter().find(|e| e.path == relative)?;
+        match (entry.staged, entry.unstaged) {
+            (_, Some(change)) => Some((change, false)),
+            (Some(change), None) => Some((change, true)),
+            (None, None) => None,
+        }
     }
 
     fn handle(&mut self, message: Message) -> Task<Message> {
@@ -1798,7 +1893,13 @@ impl Studio {
                 }
                 Task::none()
             }
-            Message::Tick => self.check_disk(),
+            Message::Tick => {
+                self.ticks += 1;
+                if self.side == Side::Git && self.ticks.is_multiple_of(3) && !self.git.busy {
+                    self.git.stale = true;
+                }
+                self.check_disk()
+            }
             Message::Reload => {
                 if self.reload(self.current) {
                     return Task::batch([self.refresh_find(true), self.schedule_check()]);
@@ -1980,6 +2081,92 @@ impl Studio {
                 self.side = Side::Watch;
                 Task::none()
             }
+            Message::GitRefresh => {
+                self.git.stale = false;
+                self.git_refresh()
+            }
+            Message::GitLoaded(snapshot) => {
+                match snapshot {
+                    Some(GitSnapshot { root, status, log }) => {
+                        self.git.root = Some(root);
+                        match status {
+                            Ok(status) => {
+                                self.git.status = Some(status);
+                                self.git.error = None;
+                            }
+                            Err(e) => self.git.error = Some(e),
+                        }
+                        self.git.log = log;
+                    }
+                    None => {
+                        self.git.root = None;
+                        self.git.status = None;
+                        self.git.log.clear();
+                    }
+                }
+                Task::none()
+            }
+            Message::GitMessage(text) => {
+                self.git.message = text;
+                Task::none()
+            }
+            Message::GitCommit => {
+                let message = self.git.message.trim().to_string();
+                if message.is_empty() {
+                    return Task::none();
+                }
+                self.git_op(move |root| git::commit(&root, &message))
+            }
+            Message::GitStage(path) => self.git_op(move |root| git::stage(&root, &[path])),
+            Message::GitUnstage(path) => self.git_op(move |root| git::unstage(&root, &[path])),
+            Message::GitStageAll => self.git_op(|root| git::stage(&root, &[])),
+            Message::GitUnstageAll => self.git_op(|root| git::unstage(&root, &[])),
+            Message::GitDiscard(path, change) => Task::perform(confirm_discard(path.clone()), move |yes| Message::GitDiscardDecided(path.clone(), change, yes)),
+            Message::GitDiscardDecided(path, change, true) => self.git_op(move |root| git::discard(&root, &path, change)),
+            Message::GitDiscardDecided(_, _, false) => Task::none(),
+            Message::GitDiff(path, staged, change) => {
+                let Some(root) = self.git.root.clone() else { return Task::none() };
+                let title = if staged { format!("{path} (staged)") } else { path.clone() };
+                Task::perform(async move { git::diff(&root, &path, staged, change) }, move |result| Message::GitDiffLoaded(title.clone(), result))
+            }
+            Message::GitDiffLoaded(title, result) => {
+                match result {
+                    Ok(text) => {
+                        let text = if text.trim().is_empty() { "No differences.".to_string() } else { text };
+                        self.diff = Some(Diff { title, text });
+                        self.tab = Tab::Diff;
+                    }
+                    Err(e) => self.status = format!("Error: {e}"),
+                }
+                Task::none()
+            }
+            Message::GitDone(result) => {
+                self.git.busy = false;
+                match result {
+                    Ok(message) => {
+                        if message.starts_with("Committed") {
+                            self.git.message.clear();
+                        }
+                        self.status = message;
+                    }
+                    Err(e) => self.status = format!("Error: {e}"),
+                }
+                self.git.stale = true;
+                Task::none()
+            }
+            Message::GitPull => self.git_op(|root| git::pull(&root)),
+            Message::GitPush => {
+                let upstream = self.git.status.as_ref().is_some_and(|s| s.upstream.is_some());
+                self.git_op(move |root| git::push(&root, upstream))
+            }
+            Message::GitInit => {
+                let Some(dir) = self.git_dir() else { return Task::none() };
+                if self.git.busy {
+                    return Task::none();
+                }
+                self.git.busy = true;
+                Task::perform(async move { git::init(&dir) }, Message::GitDone)
+            }
             Message::NewProject => Task::perform(pick_folder(), Message::NewProjectIn),
             Message::NewProjectIn(parent) => {
                 let Some(parent) = parent else { return Task::none() };
@@ -2089,6 +2276,17 @@ impl Studio {
                 self.tab = Tab::Doc(self.current);
                 Task::none()
             }
+            Message::SelectTab(Tab::Diff) => {
+                if self.diff.is_some() {
+                    self.tab = Tab::Diff;
+                }
+                Task::none()
+            }
+            Message::CloseTab(Tab::Diff) => {
+                self.diff = None;
+                self.tab = Tab::Doc(self.current);
+                Task::none()
+            }
             Message::CloseTab(Tab::Help) => {
                 self.help = None;
                 self.tab = Tab::Doc(self.current);
@@ -2146,6 +2344,9 @@ impl Studio {
             }
             Message::ShowSide(side) => {
                 self.side = side;
+                if side == Side::Git {
+                    self.git.stale = true;
+                }
                 Task::none()
             }
             Message::OpenFolder => Task::perform(pick_folder(), Message::OpenedFolder),
@@ -2733,8 +2934,12 @@ impl Studio {
                     4 => Side::Files,
                     5 => Side::Project,
                     6 => Side::Outline,
-                    _ => Side::Watch,
+                    7 => Side::Watch,
+                    _ => Side::Git,
                 };
+                if self.side == Side::Git {
+                    self.git.stale = true;
+                }
                 Task::none()
             }
         }
@@ -3847,5 +4052,48 @@ mod tests {
         assert_eq!(csv_name(Path::new("C:/x/Sales Data 2024.csv")), "sales-data-2024");
         assert_eq!(csv_name(Path::new("2024.csv")), "data-2024");
         assert_eq!(csv_name(Path::new("---.csv")), "data");
+    }
+
+    #[test]
+    fn the_git_tab_shows_status_and_routes_actions() {
+        let mut studio = Studio::new();
+        let _ = studio.update(Message::ShowSide(Side::Git));
+        let _ = view::view(&studio);
+        studio.root = Some(PathBuf::from("C:/repo"));
+        let status = git::parse_status(
+            "# branch.oid abc\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +1 -0\n1 .M N... 100644 100644 100644 a b src/a.scm\n1 A. N... 000000 100644 100644 0 c new.scm\n? notes.md\n",
+        );
+        let snapshot = GitSnapshot {
+            root: PathBuf::from("C:/repo"),
+            status: Ok(status),
+            log: vec![Commit { hash: "abc1234".into(), subject: "First".into(), when: "now".into() }],
+        };
+        let _ = studio.update(Message::GitLoaded(Some(snapshot)));
+        assert_eq!(studio.git.status.as_ref().map(git::Status::changes), Some(3));
+        let _ = view::view(&studio);
+        assert_eq!(studio.badge(Path::new("C:/repo/src/a.scm")), Some((Change::Modified, false)));
+        assert_eq!(studio.badge(Path::new("C:/repo/new.scm")), Some((Change::Added, true)));
+        assert_eq!(studio.badge(Path::new("C:/repo/other.scm")), None);
+        let _ = studio.update(Message::GitCommit);
+        assert!(!studio.git.busy, "an empty message commits nothing");
+        let _ = studio.update(Message::GitMessage("Add things".into()));
+        let _ = studio.update(Message::GitCommit);
+        assert!(studio.git.busy);
+        let _ = studio.update(Message::GitStageAll);
+        let _ = studio.update(Message::GitDone(Ok("Committed abc First".into())));
+        assert!(!studio.git.busy && studio.git.message.is_empty() && studio.status == "Committed abc First");
+        let _ = studio.update(Message::GitDone(Err("boom".into())));
+        assert_eq!(studio.status, "Error: boom");
+        let _ = studio.update(Message::GitDiffLoaded("src/a.scm".into(), Ok("+++ a\n-old\n+new\n@@ -1 +1 @@\n".into())));
+        assert_eq!(studio.tab, Tab::Diff);
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::CloseTab(Tab::Diff));
+        assert!(studio.diff.is_none() && studio.tab == Tab::Doc(0));
+        let all = commands::commands(&studio);
+        let listed: Vec<(&str, bool)> = all.iter().filter(|c| c.menu == commands::Menu::Git).map(|c| (c.name.as_str(), c.message.is_some())).collect();
+        assert!(listed.contains(&("Stage all", true)) && listed.contains(&("Unstage all", true)) && listed.contains(&("Commit", false)) && listed.contains(&("Pull", true)));
+        let _ = studio.update(Message::GitLoaded(None));
+        assert!(studio.git.root.is_none() && studio.git.status.is_none());
+        let _ = view::view(&studio);
     }
 }

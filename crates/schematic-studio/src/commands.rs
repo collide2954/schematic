@@ -7,11 +7,12 @@ pub enum Menu {
     Edit,
     View,
     Run,
+    Git,
     Help,
 }
 
 impl Menu {
-    pub const ALL: [Menu; 5] = [Menu::File, Menu::Edit, Menu::View, Menu::Run, Menu::Help];
+    pub const ALL: [Menu; 6] = [Menu::File, Menu::Edit, Menu::View, Menu::Run, Menu::Git, Menu::Help];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -19,6 +20,7 @@ impl Menu {
             Menu::Edit => "Edit",
             Menu::View => "View",
             Menu::Run => "Run",
+            Menu::Git => "Git",
             Menu::Help => "Help",
         }
     }
@@ -56,6 +58,10 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
     let theme_name = theme::name_of(&studio.theme);
     let notebook = doc.notebook.as_ref();
     let cell = notebook.map(|nb| nb.focused);
+    let git_ready = studio.git.root.is_some() && studio.git.status.is_some() && !studio.git.busy;
+    let staged = studio.git.status.as_ref().map(|s| s.staged().count()).unwrap_or(0);
+    let unstaged = studio.git.status.as_ref().map(|s| s.unstaged().count()).unwrap_or(0);
+    let upstream = studio.git.status.as_ref().is_some_and(|s| s.upstream.is_some());
     let mut list = vec![
         item(Menu::File, "New file", "Ctrl+N", Some(Message::NewFile)),
         item(Menu::File, "New notebook", "Ctrl+Shift+N", Some(Message::NewNotebook)),
@@ -114,6 +120,7 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         check(item(Menu::View, "Project tab", "Ctrl+5", Some(Message::ShowSide(Side::Project))), studio.side == Side::Project),
         check(item(Menu::View, "Outline tab", "Ctrl+6", Some(Message::ShowSide(Side::Outline))), studio.side == Side::Outline),
         check(item(Menu::View, "Watch tab", "Ctrl+7", Some(Message::ShowSide(Side::Watch))), studio.side == Side::Watch),
+        check(item(Menu::View, "Git tab", "Ctrl+8", Some(Message::ShowSide(Side::Git))), studio.side == Side::Git),
         item(Menu::Run, "Run form at cursor", "Ctrl+Enter", (ready && notebook.is_none()).then_some(Message::RunForm)),
         item(Menu::Run, "Run file", "Ctrl+Shift+Enter", (ready && notebook.is_none()).then_some(Message::RunFile)),
         item(Menu::Run, "Run cell", "Ctrl+Enter", cell.filter(|_| ready).map(Message::RunCell)),
@@ -124,6 +131,13 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         item(Menu::Run, "Restart the interpreter", "", ready.then_some(Message::Restart)),
         gap(item(Menu::Run, "Find in console", "", Some(Message::ConsoleFind(true)))),
         item(Menu::Run, "Clear console", "", Some(Message::ClearConsole)),
+        item(Menu::Git, "Refresh", "", git_ready.then_some(Message::GitRefresh)),
+        gap(item(Menu::Git, "Stage all", "", (git_ready && unstaged > 0).then_some(Message::GitStageAll))),
+        item(Menu::Git, "Unstage all", "", (git_ready && staged > 0).then_some(Message::GitUnstageAll)),
+        item(Menu::Git, "Commit", "", (git_ready && staged > 0 && !studio.git.message.trim().is_empty()).then_some(Message::GitCommit)),
+        gap(item(Menu::Git, "Pull", "", (git_ready && upstream).then_some(Message::GitPull))),
+        item(Menu::Git, "Push", "", git_ready.then_some(Message::GitPush)),
+        gap(item(Menu::Git, "Git tab", "Ctrl+8", Some(Message::ShowSide(Side::Git)))),
         item(Menu::Help, "Guide", "", Some(Message::ShowHelp(Page::Guide))),
         item(Menu::Help, "Reference", "", Some(Message::ShowHelp(Page::Reference))),
         item(Menu::Help, "Look up the name at the cursor", "F1", Some(Message::LookUp(Source::Editor))),
