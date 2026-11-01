@@ -129,7 +129,10 @@ them as cells that run one at a time, keeps each cell's output beneath it
 and in a `.scm.out` sidecar, and exports them as HTML or Markdown, while the
 CLI runs them as plain scripts. File → Import CSV loads a file into a
 table, and the Environment tab offers Describe, Watch, and Copy name for
-the selected binding. It has light, dark, warm,
+the selected binding. A Git tab drives the `git` on your path: branch and
+upstream position, staged and unstaged changes with stage, unstage, and
+discard, one-line commits, pull, push, recent commits, diffs in a tab, and
+change letters next to files in the Files tab. It has light, dark, warm,
 and high-contrast themes and bundles the Inter and JetBrains Mono fonts,
 so it looks the same everywhere. The interpreter runs on its own thread,
 so the window stays responsive and a runaway loop can be stopped.

@@ -64,6 +64,13 @@ runs the whole file top to bottom, because the markers are comments. File →
 Import CSV reads a file into a table named after it, and the Environment
 tab offers Describe, Watch, and Copy name for whatever is selected.
 
+The Git tab (Ctrl+8) works on the repository around the open folder through
+the `git` on your path: it shows the branch and how far it is ahead of or
+behind its upstream, lists staged and unstaged changes, stages, unstages,
+or discards a file, commits with a one-line message, pulls, pushes, and
+shows recent commits. Clicking a change opens its diff in a tab, and the
+Files tab marks changed files with the same letters git uses.
+
 ## Expressions
 
 Everything is an expression written in parentheses with the operation first:
