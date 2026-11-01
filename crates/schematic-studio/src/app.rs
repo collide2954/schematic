@@ -1,13 +1,15 @@
 use std::collections::HashSet;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 
 use iced::widget::scrollable::{AbsoluteOffset, RelativeOffset, Viewport};
 use iced::widget::text_editor::{Action, Edit, Motion, Position};
 use iced::widget::{Id, operation, pane_grid, text_editor};
 use iced::{Size, Subscription, Task, Theme, window};
+use schematic::check::{Diagnostic, check_source};
 use schematic::plot::Plot;
 use schematic::reader::read_all;
 
@@ -143,16 +145,30 @@ pub struct Line {
 }
 
 pub struct Document {
+    pub id: u64,
     pub path: Option<PathBuf>,
     pub content: text_editor::Content,
     pub marks: Marks,
     pub dirty: bool,
     pub offset: f32,
+    pub problems: Vec<Diagnostic>,
+    pub checked: u64,
 }
 
+static DOCUMENT_IDS: AtomicU64 = AtomicU64::new(1);
+
 impl Document {
+    pub fn new(path: Option<PathBuf>, content: text_editor::Content) -> Document {
+        let id = DOCUMENT_IDS.fetch_add(1, Ordering::Relaxed);
+        Document { id, path, content, marks: Marks::default(), dirty: false, offset: 0.0, problems: Vec::new(), checked: 0 }
+    }
+
     pub fn untitled() -> Document {
-        Document { path: None, content: text_editor::Content::new(), marks: Marks::default(), dirty: false, offset: 0.0 }
+        Document::new(None, text_editor::Content::new())
+    }
+
+    pub fn problem_at(&self, offset: usize) -> Option<&Diagnostic> {
+        self.problems.iter().find(|d| d.span.start <= offset && offset <= d.span.end.max(d.span.start + 1))
     }
 
     pub fn name(&self) -> String {
@@ -263,6 +279,8 @@ pub enum Message {
     PaneResized(pane_grid::ResizeEvent),
     PaneDragged(pane_grid::DragEvent),
     ToggleTheme,
+    Checked(u64, u64, Vec<Diagnostic>),
+    NextProblem,
 }
 
 pub fn run() -> iced::Result {
@@ -329,7 +347,29 @@ fn marks_of(content: &text_editor::Content) -> Marks {
     let offset = forms::offset_of(&text, cursor.line, cursor.column);
     let pair = forms::matching_bracket(&text, offset)
         .map(|(open, close)| [forms::line_offset(&text, open), forms::line_offset(&text, close)]);
-    Marks { pair }
+    Marks { pair, problems: Vec::new() }
+}
+
+pub fn problem_marks(text: &str, problems: &[Diagnostic]) -> Vec<(usize, Range<usize>)> {
+    problems
+        .iter()
+        .map(|d| {
+            let start_offset = d.span.start.min(text.len());
+            let (line, column) = forms::line_offset(text, start_offset);
+            let line_start = start_offset - column;
+            let line_len = text[line_start..].find('\n').unwrap_or(text.len() - line_start);
+            let width = d.span.end.saturating_sub(d.span.start).max(1);
+            let start = column.min(line_len.saturating_sub(1));
+            let end = (column + width).min(line_len).max(start + 1);
+            (line, start..end)
+        })
+        .collect()
+}
+
+fn marks_for(doc: &Document) -> Marks {
+    let mut marks = marks_of(&doc.content);
+    marks.problems = problem_marks(&doc.content.text(), &doc.problems);
+    marks
 }
 
 fn scripts() -> rfd::AsyncFileDialog {
@@ -445,16 +485,17 @@ impl Studio {
         studio
     }
 
-    fn boot() -> Studio {
+    fn boot() -> (Studio, Task<Message>) {
         let mut studio = Studio::new();
-        if let Some(path) = std::env::args().nth(1) {
-            studio.load(PathBuf::from(path));
-        }
+        let check = match std::env::args().nth(1) {
+            Some(path) => studio.load(PathBuf::from(path)),
+            None => Task::none(),
+        };
         if studio.root.is_none()
             && let Ok(dir) = std::env::current_dir() {
                 studio.set_root(dir);
             }
-        studio
+        (studio, check)
     }
 
     pub fn set_root(&mut self, root: PathBuf) {
@@ -551,8 +592,8 @@ impl Studio {
                 self.refresh_files();
                 self.selected = Some(target.clone());
                 if naming.kind == NamingKind::File {
-                    self.load(target);
-                    return self.scroll_to_doc();
+                    let check = self.load(target);
+                    return Task::batch([check, self.scroll_to_doc()]);
                 }
                 Task::none()
             }
@@ -611,15 +652,26 @@ impl Studio {
             Message::Worker(event) => self.on_event(event),
             Message::Edit(action) => {
                 let follow = follow_completion(&action);
+                let edited = action.is_edit();
                 let doc = self.doc_mut();
-                if action.is_edit() {
+                if edited {
                     doc.dirty = true;
                 }
                 doc.content.perform(action);
-                doc.marks = marks_of(&doc.content);
+                doc.marks = marks_for(doc);
                 self.track_completion(Source::Editor, follow);
-                self.follow_cursor()
+                let check = if edited { self.schedule_check() } else { Task::none() };
+                Task::batch([self.follow_cursor(), check])
             }
+            Message::Checked(id, generation, problems) => {
+                if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id)
+                    && doc.checked == generation {
+                        doc.problems = problems;
+                        doc.marks = marks_for(doc);
+                    }
+                Task::none()
+            }
+            Message::NextProblem => self.next_problem(),
             Message::EditorScrolled(viewport) => {
                 self.doc_mut().offset = viewport.absolute_offset().y;
                 self.editor_width = viewport.bounds().width;
@@ -665,8 +717,8 @@ impl Studio {
             Message::Open => Task::perform(pick_file(), Message::Opened),
             Message::Opened(path) => match path {
                 Some(path) => {
-                    self.load(path);
-                    self.scroll_to_doc()
+                    let check = self.load(path);
+                    Task::batch([check, self.scroll_to_doc()])
                 }
                 None => Task::none(),
             },
@@ -762,8 +814,8 @@ impl Studio {
                     self.refresh_files();
                     return Task::none();
                 }
-                self.load(path);
-                self.scroll_to_doc()
+                let check = self.load(path);
+                Task::batch([check, self.scroll_to_doc()])
             }
             Message::StartNaming(kind) => {
                 let (parent, text) = match &kind {
@@ -969,9 +1021,7 @@ impl Studio {
         };
         self.running = true;
         self.status = "Running".to_string();
-        let mut load_path: Vec<PathBuf> = self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf).into_iter().collect();
-        load_path.extend(self.root.clone());
-        load_path.extend(self.project.iter().flat_map(|p| p.load_path.clone()));
+        let load_path = self.load_path();
         let _ = worker.send(Request::Run { source, show_results, load_path });
         Task::none()
     }
@@ -1039,8 +1089,8 @@ impl Studio {
             Source::Editor => {
                 let doc = self.doc_mut();
                 doc.dirty = true;
-                doc.marks = marks;
-                operation::focus(editor_text_id())
+                doc.marks = marks_for(doc);
+                Task::batch([operation::focus(editor_text_id()), self.schedule_check()])
             }
             Source::Console => {
                 self.input_marks = marks;
@@ -1097,11 +1147,49 @@ impl Studio {
             let position = text_editor::Position { line, column };
             let doc = self.doc_mut();
             doc.content.move_to(text_editor::Cursor { position, selection: None });
-            doc.marks = marks_of(&doc.content);
+            doc.marks = marks_for(doc);
         }
         let follow = self.follow_cursor();
         let echo = self.echo(&source);
         Task::batch([follow, echo, self.run(source, true)])
+    }
+
+    fn load_path(&self) -> Vec<PathBuf> {
+        let mut load_path: Vec<PathBuf> = self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf).into_iter().collect();
+        load_path.extend(self.root.clone());
+        load_path.extend(self.project.iter().flat_map(|p| p.load_path.clone()));
+        load_path
+    }
+
+    fn schedule_check(&mut self) -> Task<Message> {
+        let load_path = self.load_path();
+        let doc = self.doc_mut();
+        doc.checked += 1;
+        let (id, generation, text) = (doc.id, doc.checked, doc.content.text());
+        let dir = doc.path.as_deref().and_then(Path::parent).map(Path::to_path_buf);
+        Task::perform(async move { check_source(&text, dir.as_deref(), &load_path) }, move |problems| Message::Checked(id, generation, problems))
+    }
+
+    pub fn problem_here(&self) -> Option<&Diagnostic> {
+        let doc = self.doc();
+        let text = doc.content.text();
+        let cursor = doc.content.cursor().position;
+        doc.problem_at(forms::offset_of(&text, cursor.line, cursor.column))
+    }
+
+    fn next_problem(&mut self) -> Task<Message> {
+        let doc = self.doc();
+        let text = doc.content.text();
+        let cursor = doc.content.cursor().position;
+        let offset = forms::offset_of(&text, cursor.line, cursor.column);
+        let Some(target) = doc.problems.iter().find(|d| d.span.start > offset).or(doc.problems.first()).map(|d| d.span.start) else {
+            return Task::none();
+        };
+        let (line, column) = forms::position_of(&text, target);
+        let doc = self.doc_mut();
+        doc.content.move_to(text_editor::Cursor { position: Position { line, column }, selection: None });
+        doc.marks = marks_for(doc);
+        self.follow_cursor()
     }
 
     fn set_input(&mut self, text: &str) {
@@ -1172,11 +1260,11 @@ impl Studio {
         Task::none()
     }
 
-    fn load(&mut self, path: PathBuf) {
+    fn load(&mut self, path: PathBuf) -> Task<Message> {
         if let Some(i) = self.docs.iter().position(|d| d.path.as_ref() == Some(&path)) {
             self.current = i;
             self.tab = Tab::Doc(i);
-            return;
+            return Task::none();
         }
         match std::fs::read_to_string(&path) {
             Ok(source) => {
@@ -1189,7 +1277,7 @@ impl Studio {
                     self.project = path.parent().and_then(project::describe);
                 }
                 let content = text_editor::Content::with_text(&source.replace("\r\n", "\n"));
-                let doc = Document { path: Some(path), content, marks: Marks::default(), dirty: false, offset: 0.0 };
+                let doc = Document::new(Some(path), content);
                 if self.doc().blank() {
                     self.docs[self.current] = doc;
                 } else {
@@ -1197,9 +1285,11 @@ impl Studio {
                     self.current = self.docs.len() - 1;
                 }
                 self.tab = Tab::Doc(self.current);
+                return self.schedule_check();
             }
             Err(e) => self.status = format!("Cannot open {}: {e}", path.display()),
         }
+        Task::none()
     }
 
     fn store(&mut self, i: usize, path: PathBuf) {
@@ -1254,6 +1344,34 @@ mod tests {
     fn the_window_builds_with_and_without_content() {
         let _ = view::view(&Studio::new());
         let _ = view::view(&studio_with_content());
+    }
+
+    #[test]
+    fn problems_are_marked_and_shown_at_the_cursor() {
+        let mut studio = Studio::new();
+        studio.doc_mut().content = text_editor::Content::with_text("(define n 3)\n(string-upcase n)\n");
+        let (id, generation) = (studio.doc().id, studio.doc().checked);
+        let problems = check_source(&studio.doc().content.text(), None, &[]);
+        assert_eq!(problems.len(), 1);
+        let _ = studio.update(Message::Checked(id, generation + 7, problems.clone()));
+        assert!(studio.doc().problems.is_empty());
+        let _ = studio.update(Message::Checked(id, generation, problems));
+        assert_eq!(studio.doc().marks.problems, vec![(1, 15..16)]);
+        assert!(studio.problem_here().is_none());
+        let _ = studio.update(Message::NextProblem);
+        let cursor = studio.doc().content.cursor().position;
+        assert_eq!((cursor.line, cursor.column), (1, 15));
+        assert_eq!(studio.problem_here().map(|d| d.message.as_str()), Some("string-upcase expects a string, got an integer"));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::Edit(Action::Edit(Edit::Insert('x'))));
+        assert_eq!(studio.doc().checked, generation + 1);
+    }
+
+    #[test]
+    fn problem_marks_clip_to_their_line() {
+        let text = "ab\ncd";
+        let d = |start, end| Diagnostic { line: 1, column: 1, span: schematic::reader::Span { start, end }, message: String::new() };
+        assert_eq!(problem_marks(text, &[d(3, 5), d(1, 1), d(5, 5)]), vec![(1, 0..2), (0, 1..2), (1, 1..2)]);
     }
 
     #[test]

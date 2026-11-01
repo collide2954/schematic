@@ -144,15 +144,17 @@ fn status_bar(studio: &Studio) -> Element<'_, Message> {
     let dot_style: TextStyle = if studio.running { theme::accent } else { theme::faint };
     let status_style: TextStyle = if studio.status.starts_with("Error") { theme::alarm } else { theme::muted };
     let path = studio.doc().path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
-    let bar = row![
-        text("•").size(13).style(dot_style),
-        text(&studio.status).size(11.5).style(status_style),
-        space::horizontal(),
-        text(path).size(11.5).style(theme::faint),
-        text(format!("Ln {line}, Col {column}")).size(11.5).style(theme::muted),
-    ]
-    .spacing(12)
-    .align_y(Alignment::Center);
+    let mut bar = row![text("•").size(13).style(dot_style), text(&studio.status).size(11.5).style(status_style), space::horizontal()]
+        .spacing(12)
+        .align_y(Alignment::Center);
+    let count = studio.doc().problems.len();
+    if let Some(problem) = studio.problem_here() {
+        bar = bar.push(text(problem.message.clone()).size(11.5).style(theme::alarm));
+    } else if count > 0 {
+        let label = if count == 1 { "1 problem, F8 to jump".to_string() } else { format!("{count} problems, F8 to jump") };
+        bar = bar.push(text(label).size(11.5).style(theme::warn));
+    }
+    bar = bar.push(text(path).size(11.5).style(theme::faint)).push(text(format!("Ln {line}, Col {column}")).size(11.5).style(theme::muted));
     container(bar).padding([3, 10]).width(Length::Fill).style(theme::bar).into()
 }
 
@@ -389,6 +391,7 @@ fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messag
             Key::Named(key::Named::Enter) if command => Some(if shift { Message::RunFile } else { Message::RunForm }),
             Key::Named(key::Named::Space) if command => Some(Message::Complete(Source::Editor)),
             Key::Named(key::Named::F1) => Some(Message::LookUp(Source::Editor)),
+            Key::Named(key::Named::F8) => Some(Message::NextProblem),
             Key::Character(c) if command && c.eq_ignore_ascii_case("s") => Some(if shift { Message::SaveAs } else { Message::Save }),
             Key::Character(c) if command && c.eq_ignore_ascii_case("o") => Some(Message::Open),
             Key::Character(c) if command && c.eq_ignore_ascii_case("n") => Some(Message::NewFile),
@@ -447,7 +450,8 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
     let current = doc.content.cursor().position.line;
     let digits = lines.to_string().len().max(2);
     let numbers = Column::with_children((0..lines).map(|i| {
-        let style: TextStyle = if i == current { theme::strong } else { theme::faint };
+        let flagged = doc.marks.problems.iter().any(|(line, _)| *line == i);
+        let style: TextStyle = if flagged { theme::alarm } else if i == current { theme::strong } else { theme::faint };
         text(format!("{:>digits$}", i + 1))
             .font(fonts::MONO)
             .size(13.5)

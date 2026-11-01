@@ -15,6 +15,7 @@ pub enum Kind {
     Constant,
     Bracket(u8),
     Match,
+    Problem,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -27,6 +28,40 @@ pub struct LineState {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Marks {
     pub pair: Option<[(usize, usize); 2]>,
+    pub problems: Vec<(usize, Range<usize>)>,
+}
+
+fn overlay(tokens: &mut Vec<(Range<usize>, Kind)>, range: Range<usize>, kind: Kind) {
+    let mut out = Vec::with_capacity(tokens.len() + 2);
+    let mut placed = false;
+    for (token, token_kind) in tokens.drain(..) {
+        if token.end <= range.start {
+            out.push((token, token_kind));
+            continue;
+        }
+        if token.start >= range.end {
+            if !placed {
+                out.push((range.clone(), kind));
+                placed = true;
+            }
+            out.push((token, token_kind));
+            continue;
+        }
+        if token.start < range.start {
+            out.push((token.start..range.start, token_kind));
+        }
+        if !placed {
+            out.push((range.clone(), kind));
+            placed = true;
+        }
+        if token.end > range.end {
+            out.push((range.end..token.end, token_kind));
+        }
+    }
+    if !placed {
+        out.push((range, kind));
+    }
+    *tokens = out;
 }
 
 pub const SPECIALS: &[&str] = &[
@@ -210,6 +245,12 @@ impl Highlighter for Schematic {
                 }
             }
         }
+        for (problem_line, range) in &self.marks.problems {
+            let range = range.start.min(line.len())..range.end.min(line.len());
+            if *problem_line == self.current && !range.is_empty() {
+                overlay(&mut out, range, Kind::Problem);
+            }
+        }
         self.current += 1;
         if self.states.len() <= self.current {
             self.states.push(state);
@@ -235,6 +276,7 @@ pub fn format(kind: &Kind, theme: &Theme) -> Format<Font> {
         Kind::Constant => (t.constant, None),
         Kind::Bracket(depth) => (t.brackets[*depth as usize % 3], None),
         Kind::Match => (t.accent, Some(fonts::MONO_BOLD)),
+        Kind::Problem => (t.danger, Some(fonts::MONO_BOLD)),
     };
     Format { color: Some(color), font }
 }
@@ -327,13 +369,25 @@ mod tests {
 
     #[test]
     fn marked_brackets_highlight_as_a_match() {
-        let marks = Marks { pair: Some([(0, 3), (1, 5)]) };
+        let marks = Marks { pair: Some([(0, 3), (1, 5)]), problems: Vec::new() };
         let mut h = Schematic::new(&marks);
         assert_eq!(h.highlight_line("(a #[1").collect::<Vec<_>>(), [(0..1, Kind::Bracket(0)), (3..5, Kind::Match), (5..6, Kind::Number)]);
         assert_eq!(h.highlight_line("   2])").collect::<Vec<_>>(), [(3..4, Kind::Number), (4..5, Kind::Bracket(1)), (5..6, Kind::Match)]);
         h.update(&Marks::default());
         assert_eq!(h.current_line(), 0);
         assert_eq!(h.highlight_line("(a #[1").collect::<Vec<_>>(), [(0..1, Kind::Bracket(0)), (3..5, Kind::Bracket(1)), (5..6, Kind::Number)]);
+    }
+
+    #[test]
+    fn problems_overlay_the_tokens_on_their_line() {
+        let marks = Marks { pair: None, problems: vec![(0, 15..17), (1, 1..3), (1, 40..50)] };
+        let mut h = Schematic::new(&marks);
+        assert_eq!(
+            h.highlight_line("(string-upcase 42)").collect::<Vec<_>>(),
+            [(0..1, Kind::Bracket(0)), (15..17, Kind::Problem), (17..18, Kind::Bracket(0))]
+        );
+        assert_eq!(h.highlight_line("\"abc\"").collect::<Vec<_>>(), [(0..1, Kind::Str), (1..3, Kind::Problem), (3..5, Kind::Str)]);
+        assert_eq!(h.highlight_line("x").collect::<Vec<_>>(), []);
     }
 
     #[test]
