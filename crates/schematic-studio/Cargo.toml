@@ -8,5 +8,5 @@ repository.workspace = true
 
 [dependencies]
 schematic = { path = "../schematic" }
-iced = { version = "0.14", features = ["advanced", "canvas"] }
+iced = { version = "0.14", features = ["advanced", "canvas", "lazy"] }
 rfd = "0.17"

@@ -160,6 +160,17 @@ pub fn offset_of(text: &str, line: usize, column: usize) -> usize {
     text.len()
 }
 
+pub fn symbol_at(text: &str, offset: usize) -> Option<&str> {
+    let offset = offset.min(text.len());
+    if !text.is_char_boundary(offset) {
+        return None;
+    }
+    let delimiter = |c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';' | ',' | '\'' | '`' | '~' | '@');
+    let start = text[..offset].rfind(delimiter).map_or(0, |i| i + text[i..].chars().next().map_or(1, char::len_utf8));
+    let end = text[offset..].find(delimiter).map_or(text.len(), |i| offset + i);
+    (start < end).then(|| &text[start..end])
+}
+
 pub fn position_of(text: &str, offset: usize) -> (usize, usize) {
     let offset = offset.min(text.len());
     let before = &text[..offset];
@@ -243,6 +254,19 @@ mod tests {
         assert_eq!(line_offset(text, 7), (1, 4));
         assert_eq!(line_offset(text, 8), (2, 0));
         assert_eq!(line_offset(text, 99), (2, 1));
+    }
+
+    #[test]
+    fn the_symbol_at_an_offset_surrounds_or_precedes_it() {
+        assert_eq!(symbol_at("(bar-chart t)", 3), Some("bar-chart"));
+        assert_eq!(symbol_at("(bar-chart t)", 10), Some("bar-chart"));
+        assert_eq!(symbol_at("(bar-chart t)", 11), Some("t"));
+        assert_eq!(symbol_at("(bar-chart t)", 0), None);
+        assert_eq!(symbol_at("(inc x)", 4), Some("inc"));
+        assert_eq!(symbol_at("'é x", 3), Some("é"));
+        assert_eq!(symbol_at("'é x", 2), None);
+        assert_eq!(symbol_at("", 0), None);
+        assert_eq!(symbol_at("ab", 9), Some("ab"));
     }
 
     #[test]

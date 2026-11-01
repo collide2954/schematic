@@ -3,12 +3,13 @@ use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::text::{LineHeight, Span};
 use iced::widget::text_editor::{Binding, KeyPress, Status};
 use iced::widget::{
-    Column, button, canvas, column, container, pane_grid, rich_text, row, rule, scrollable, sensor, space, span, table,
-    text, text_editor, tooltip,
+    Column, Row, button, canvas, column, container, lazy, pane_grid, rich_text, row, rule, scrollable, sensor, space, span,
+    table, text, text_editor, text_input, tooltip,
 };
 use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
+use schematic::docs::{self, Block, Inline};
 
-use crate::app::{EDITOR_PAD, LINE_HEIGHT, LineKind, Message, PAGE, PaneKind, Studio, console_id, editor_id};
+use crate::app::{EDITOR_PAD, LINE_HEIGHT, LineKind, Message, PAGE, Page, PaneKind, Source, Studio, Tab, console_id, editor_id};
 use crate::chart::Chart;
 use crate::icons::{Glyph, Ink, icon};
 use crate::worker::Grid;
@@ -16,24 +17,35 @@ use crate::{fonts, highlight, theme};
 
 type TextStyle = fn(&Theme) -> text::Style;
 
+pub struct TabItem {
+    pub label: String,
+    pub detail: Option<String>,
+    pub active: bool,
+    pub select: Option<Message>,
+    pub close: Option<Message>,
+}
+
+fn single(name: &str, detail: Option<String>) -> Vec<TabItem> {
+    vec![TabItem { label: name.to_string(), detail, active: true, select: None, close: None }]
+}
+
 pub fn view(studio: &Studio) -> Element<'_, Message> {
     let panes = pane_grid(&studio.panes, |_, kind, _| {
-        let (name, detail, controls, body): (&str, Option<String>, Option<Element<'_, Message>>, Element<'_, Message>) =
-            match kind {
-                PaneKind::Editor => ("Editor", Some(editor_label(studio)), None, editor(studio)),
-                PaneKind::Console => ("Console", None, Some(small("Clear", Some(Message::ClearConsole))), console(studio)),
-                PaneKind::Environment => ("Environment", environment_label(studio), None, environment(studio)),
-                PaneKind::Viewer => {
-                    let grid = studio.grid.as_ref();
-                    ("Data", grid.map(|g| g.name.clone()), grid.map(pager), viewer(studio))
-                }
-                PaneKind::Plots => {
-                    let plot = studio.plot();
-                    let detail = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
-                    ("Plots", detail, Some(plot_controls(studio)), plots(studio))
-                }
-            };
-        let bar = pane_grid::TitleBar::new(strip(name, detail, controls)).style(theme::strip);
+        let (tabs, controls, body): (Vec<TabItem>, Option<Element<'_, Message>>, Element<'_, Message>) = match kind {
+            PaneKind::Editor => (editor_tabs(studio), Some(editor_controls(studio)), workspace(studio)),
+            PaneKind::Console => (single("Console", None), Some(small("Clear", Some(Message::ClearConsole))), console(studio)),
+            PaneKind::Environment => (single("Environment", environment_label(studio)), None, environment(studio)),
+            PaneKind::Viewer => {
+                let grid = studio.grid.as_ref();
+                (single("Data", grid.map(|g| g.name.clone())), grid.map(pager), viewer(studio))
+            }
+            PaneKind::Plots => {
+                let plot = studio.plot();
+                let detail = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
+                (single("Plots", detail), Some(plot_controls(studio)), plots(studio))
+            }
+        };
+        let bar = pane_grid::TitleBar::new(strip(tabs, controls)).style(theme::strip);
         pane_grid::Content::new(body).title_bar(bar).style(theme::pane)
     })
     .spacing(1)
@@ -48,13 +60,27 @@ fn line<'a>() -> Element<'a, Message> {
     rule::horizontal(1).style(theme::separator).into()
 }
 
-fn strip<'a>(name: &'a str, detail: Option<String>, controls: Option<Element<'a, Message>>) -> Element<'a, Message> {
-    let mut label = row![text(name).size(12.5).font(fonts::UI_MEDIUM)].spacing(8).align_y(Alignment::Center);
-    if let Some(detail) = detail {
-        label = label.push(text(detail).size(12).style(theme::muted));
+fn strip<'a>(tabs: Vec<TabItem>, controls: Option<Element<'a, Message>>) -> Element<'a, Message> {
+    let mut bar = Row::new().height(30).align_y(Alignment::Center);
+    for tab in tabs {
+        let mut label = row![text(tab.label).size(12.5).font(fonts::UI_MEDIUM)].spacing(8).align_y(Alignment::Center);
+        if let Some(detail) = tab.detail {
+            label = label.push(text(detail).size(12).style(theme::muted));
+        }
+        let closable = tab.close.is_some();
+        let pick = button(container(label).height(Length::Fill).align_y(Alignment::Center))
+            .padding(Padding { top: 0.0, right: if closable { 4.0 } else { 12.0 }, bottom: 0.0, left: 12.0 })
+            .height(Length::Fill)
+            .style(theme::tab_button(tab.active))
+            .on_press_maybe(tab.select);
+        let mut inner = Row::new().align_y(Alignment::Center).height(Length::Fill).push(pick);
+        if let Some(close) = tab.close {
+            let cross = button(text("×").size(14).font(fonts::UI_MEDIUM)).padding([0, 6]).style(theme::ghost).on_press(close);
+            inner = inner.push(container(cross).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 0.0 }));
+        }
+        bar = bar.push(container(inner).height(Length::Fill).style(theme::tab_shell(tab.active)));
     }
-    let tab = container(label).padding([0, 12]).height(Length::Fill).align_y(Alignment::Center).style(theme::tab);
-    let mut bar = row![tab, space::horizontal()].height(30).align_y(Alignment::Center);
+    bar = bar.push(space::horizontal());
     if let Some(controls) = controls {
         bar = bar.push(container(controls).padding([0, 6]));
     }
@@ -90,6 +116,7 @@ fn toolbar(studio: &Studio) -> Element<'_, Message> {
         tool(Glyph::PlayAll, Ink::Text, "Run file", "Run the whole file (Ctrl+Shift+Enter)", ready.then_some(Message::RunFile)),
         tool(Glyph::Stop, stop_ink, "Stop", "Interrupt the running code", studio.running.then_some(Message::Stop)),
         divider(),
+        small("New", Some(Message::NewFile)),
         tool(Glyph::Open, Ink::Text, "Open", "Open a script (Ctrl+O)", Some(Message::Open)),
         tool(Glyph::Save, Ink::Text, "Save", "Save (Ctrl+S)", Some(Message::Save)),
         small("Save as", Some(Message::SaveAs)),
@@ -105,7 +132,7 @@ fn status_bar(studio: &Studio) -> Element<'_, Message> {
     let (line, column) = studio.cursor();
     let dot_style: TextStyle = if studio.running { theme::accent } else { theme::faint };
     let status_style: TextStyle = if studio.status.starts_with("Error") { theme::alarm } else { theme::muted };
-    let path = studio.path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+    let path = studio.doc().path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
     let bar = row![
         text("•").size(13).style(dot_style),
         text(&studio.status).size(11.5).style(status_style),
@@ -118,8 +145,34 @@ fn status_bar(studio: &Studio) -> Element<'_, Message> {
     container(bar).padding([3, 10]).width(Length::Fill).style(theme::bar).into()
 }
 
-fn editor_label(studio: &Studio) -> String {
-    format!("{}{}", studio.file_name(), if studio.dirty { " •" } else { "" })
+fn editor_tabs(studio: &Studio) -> Vec<TabItem> {
+    let mut tabs: Vec<TabItem> = studio
+        .docs
+        .iter()
+        .enumerate()
+        .map(|(i, doc)| TabItem {
+            label: doc.label(),
+            detail: None,
+            active: studio.tab == Tab::Doc(i),
+            select: Some(Message::SelectTab(Tab::Doc(i))),
+            close: Some(Message::CloseTab(Tab::Doc(i))),
+        })
+        .collect();
+    if studio.help.is_some() {
+        tabs.push(TabItem {
+            label: "Help".to_string(),
+            detail: None,
+            active: studio.tab == Tab::Help,
+            select: Some(Message::SelectTab(Tab::Help)),
+            close: Some(Message::CloseTab(Tab::Help)),
+        });
+    }
+    tabs
+}
+
+fn editor_controls(studio: &Studio) -> Element<'_, Message> {
+    let help = (studio.tab != Tab::Help).then_some(Message::OpenHelp);
+    row![small("+", Some(Message::NewFile)), small("Help", help)].spacing(2).into()
 }
 
 fn environment_label(studio: &Studio) -> Option<String> {
@@ -130,22 +183,28 @@ fn environment_label(studio: &Studio) -> Option<String> {
     }
 }
 
-fn editor_binding(press: KeyPress) -> Option<Binding<Message>> {
-    let command = press.modifiers.command();
-    let shift = press.modifiers.shift();
-    let global = match &press.key {
-        Key::Named(key::Named::Enter) if command => Some(if shift { Message::RunFile } else { Message::RunForm }),
-        Key::Character(c) if command && c.eq_ignore_ascii_case("s") => Some(if shift { Message::SaveAs } else { Message::Save }),
-        Key::Character(c) if command && c.eq_ignore_ascii_case("o") => Some(Message::Open),
-        _ => None,
-    };
-    if let Some(message) = global {
-        return Some(Binding::Custom(message));
+fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Message>> {
+    let current = studio.current;
+    move |press| {
+        let command = press.modifiers.command();
+        let shift = press.modifiers.shift();
+        let global = match &press.key {
+            Key::Named(key::Named::Enter) if command => Some(if shift { Message::RunFile } else { Message::RunForm }),
+            Key::Named(key::Named::F1) => Some(Message::LookUp(Source::Editor)),
+            Key::Character(c) if command && c.eq_ignore_ascii_case("s") => Some(if shift { Message::SaveAs } else { Message::Save }),
+            Key::Character(c) if command && c.eq_ignore_ascii_case("o") => Some(Message::Open),
+            Key::Character(c) if command && c.eq_ignore_ascii_case("n") => Some(Message::NewFile),
+            Key::Character(c) if command && c.eq_ignore_ascii_case("w") => Some(Message::CloseTab(Tab::Doc(current))),
+            _ => None,
+        };
+        if let Some(message) = global {
+            return Some(Binding::Custom(message));
+        }
+        if matches!(press.key, Key::Named(key::Named::Tab)) && matches!(press.status, Status::Focused { .. }) {
+            return Some(Binding::Sequence(vec![Binding::Insert(' '), Binding::Insert(' ')]));
+        }
+        Binding::from_key_press(press)
     }
-    if matches!(press.key, Key::Named(key::Named::Tab)) && matches!(press.status, Status::Focused { .. }) {
-        return Some(Binding::Sequence(vec![Binding::Insert(' '), Binding::Insert(' ')]));
-    }
-    Binding::from_key_press(press)
 }
 
 fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Message>> {
@@ -160,6 +219,7 @@ fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messa
         let plain = !press.modifiers.shift() && !press.modifiers.command();
         match &press.key {
             Key::Named(key::Named::Enter) if plain => Some(Binding::Custom(Message::Submit)),
+            Key::Named(key::Named::F1) => Some(Binding::Custom(Message::LookUp(Source::Console))),
             Key::Named(key::Named::ArrowUp) if plain && first_line => Some(Binding::Custom(Message::HistoryBack)),
             Key::Named(key::Named::ArrowDown) if plain && last_line && browsing => {
                 Some(Binding::Custom(Message::HistoryForward))
@@ -170,9 +230,17 @@ fn console_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messa
     }
 }
 
+fn workspace(studio: &Studio) -> Element<'_, Message> {
+    match (studio.tab, &studio.help) {
+        (Tab::Help, Some(_)) => help(studio),
+        _ => editor(studio),
+    }
+}
+
 fn editor(studio: &Studio) -> Element<'_, Message> {
-    let lines = studio.editor.line_count().max(1);
-    let current = studio.editor.cursor().position.line;
+    let doc = studio.doc();
+    let lines = doc.content.line_count().max(1);
+    let current = doc.content.cursor().position.line;
     let digits = lines.to_string().len().max(2);
     let numbers = Column::with_children((0..lines).map(|i| {
         let style: TextStyle = if i == current { theme::strong } else { theme::faint };
@@ -184,7 +252,7 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
             .into()
     }))
     .padding(Padding { top: EDITOR_PAD, right: 10.0, bottom: EDITOR_PAD, left: 14.0 });
-    let code = text_editor(&studio.editor)
+    let code = text_editor(&doc.content)
         .on_action(Message::Edit)
         .placeholder("Open a script or start typing. Ctrl+Enter runs the form at the cursor.")
         .font(fonts::MONO)
@@ -194,8 +262,8 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
         .height(Length::Shrink)
         .wrapping(text::Wrapping::None)
         .style(theme::editor)
-        .highlight_with::<highlight::Schematic>(studio.marks.clone(), highlight::format)
-        .key_binding(editor_binding);
+        .highlight_with::<highlight::Schematic>(doc.marks.clone(), highlight::format)
+        .key_binding(editor_binding(studio));
     let body = row![numbers, code].align_y(Alignment::Start).width(Length::Fill);
     let scroller = scrollable(body)
         .id(editor_id())
@@ -206,18 +274,139 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
     sensor(scroller).on_show(Message::EditorResized).on_resize(Message::EditorResized).into()
 }
 
-fn code<'a>(source: &'a str, theme: &Theme, size: f32) -> Element<'a, Message> {
+fn code(source: &str, theme: &Theme, size: f32) -> Element<'static, Message> {
     let base = theme::tones(theme).text;
-    let spans: Vec<Span<'a, (), Font>> = highlight::segments(source)
+    let spans: Vec<Span<'static, (), Font>> = highlight::segments(source)
         .into_iter()
         .map(|(range, kind)| {
             let format = kind.map(|kind| highlight::format(&kind, theme));
-            span(&source[range])
+            span(source[range].to_string())
                 .color(format.and_then(|f| f.color).unwrap_or(base))
                 .font(format.and_then(|f| f.font).unwrap_or(fonts::MONO))
         })
         .collect();
     rich_text(spans).size(size).width(Length::Fill).into()
+}
+
+fn prose(markdown: &str, theme: &Theme, size: f32) -> Element<'static, Message> {
+    let t = theme::tones(theme);
+    let spans: Vec<Span<'static, (), Font>> = docs::inlines(markdown)
+        .into_iter()
+        .map(|inline| match inline {
+            Inline::Text(s) => span(s).color(t.text),
+            Inline::Code(s) => span(s).font(fonts::MONO).size(size - 0.5).color(t.text).background(t.raised).padding([0, 3]),
+            Inline::Bold(s) => span(s).font(fonts::UI_SEMIBOLD).color(t.text),
+            Inline::Italic(s) => span(s).font(fonts::UI_MEDIUM).color(t.muted),
+            Inline::Link(s, _) => span(s).color(t.accent).underline(true),
+        })
+        .collect();
+    rich_text(spans).size(size).width(Length::Fill).into()
+}
+
+fn table_block(rows: Vec<Vec<String>>, theme: &Theme) -> Element<'static, Message> {
+    let mut rows = rows.into_iter();
+    let Some(header) = rows.next() else { return space::vertical().height(0).into() };
+    let n = header.len();
+    let width = move |i: usize| -> Length {
+        match (n, i) {
+            (2, 0) => Length::FillPortion(2),
+            (2, _) => Length::FillPortion(3),
+            _ => Length::FillPortion(1),
+        }
+    };
+    let head = Row::with_children(
+        header.into_iter().enumerate().map(|(i, cell)| text(cell).size(11.5).font(fonts::UI_SEMIBOLD).style(theme::muted).width(width(i)).into()),
+    )
+    .spacing(12);
+    let mut column = Column::new().width(Length::Fill).push(container(head).padding([4, 0])).push(line());
+    for row in rows {
+        let cells = Row::with_children(row.iter().enumerate().map(|(i, cell)| container(prose(cell, theme, 12.5)).width(width(i)).into()))
+            .spacing(12)
+            .align_y(Alignment::Start);
+        column = column.push(container(cells).padding([5, 0])).push(line());
+    }
+    column.into()
+}
+
+fn render(block: Block, theme: &Theme) -> Element<'static, Message> {
+    match block {
+        Block::Heading(level, title) => {
+            let (size, top) = match level {
+                1 => (22.0, 4.0),
+                2 => (17.0, 16.0),
+                _ => (14.0, 8.0),
+            };
+            container(text(title).size(size).font(fonts::UI_SEMIBOLD)).padding(Padding { top, right: 0.0, bottom: 0.0, left: 0.0 }).into()
+        }
+        Block::Paragraph(text) => prose(&text, theme, 13.0),
+        Block::Code(source) => container(code(&source, theme, 12.5)).padding([8, 12]).width(Length::Fill).style(theme::code_block).into(),
+        Block::Quote(text) => container(prose(&text, theme, 13.0)).padding([6, 12]).width(Length::Fill).style(theme::quote).into(),
+        Block::List(items) => {
+            let rows = items.into_iter().map(|item| {
+                row![text("•").size(13).style(theme::muted).width(16), prose(&item, theme, 13.0)].spacing(4).align_y(Alignment::Start).into()
+            });
+            Column::with_children(rows).spacing(4).into()
+        }
+        Block::Table(rows) => table_block(rows, theme),
+    }
+}
+
+fn document(page: Page, dark: bool) -> Element<'static, Message> {
+    let theme = if dark { theme::dark() } else { theme::light() };
+    let markdown = match page {
+        Page::Guide => docs::GUIDE,
+        Page::Reference => docs::REFERENCE,
+    };
+    let blocks = docs::blocks(markdown).into_iter().map(|block| render(block, &theme));
+    Column::with_children(blocks)
+        .spacing(10)
+        .padding(Padding { top: 8.0, right: 20.0, bottom: 24.0, left: 20.0 })
+        .width(Length::Fill)
+        .max_width(760)
+        .into()
+}
+
+fn matches<'a>(query: &str, theme: &Theme) -> Element<'a, Message> {
+    let found = docs::search(query);
+    if found.is_empty() {
+        return hint("Nothing in the reference matches.");
+    }
+    let mut column = Column::new().spacing(16).padding(Padding { top: 8.0, right: 20.0, bottom: 24.0, left: 20.0 }).max_width(760);
+    for entry in found.into_iter().take(40) {
+        let mut block = Column::new().spacing(4).push(text(entry.name.clone()).font(fonts::MONO_BOLD).size(14).style(theme::accent));
+        for found in &entry.uses {
+            block = block
+                .push(code(&found.signatures.join(", "), theme, 12.5))
+                .push(prose(&found.description, theme, 12.5))
+                .push(text(found.section.clone()).size(11).style(theme::faint));
+        }
+        column = column.push(block);
+    }
+    column.into()
+}
+
+fn help(studio: &Studio) -> Element<'_, Message> {
+    let Some(help) = &studio.help else {
+        return hint("Press F1 on a name to look it up.");
+    };
+    let dark = theme::is_dark(&studio.theme);
+    let page = |label: &'static str, page: Page| {
+        button(text(label).size(12).font(fonts::UI_MEDIUM)).padding([3, 8]).style(theme::choice(help.page == page)).on_press(Message::HelpPage(page))
+    };
+    let search = text_input("Search the reference", &help.query)
+        .on_input(Message::HelpQuery)
+        .size(12.5)
+        .padding([5, 8])
+        .style(theme::field)
+        .width(Length::Fill);
+    let bar = row![page("Guide", Page::Guide), page("Reference", Page::Reference), search].spacing(6).padding([8, 12]).align_y(Alignment::Center);
+    let body: Element<'_, Message> = if help.query.trim().is_empty() {
+        let page = help.page;
+        lazy((page, dark), move |_| document(page, dark)).into()
+    } else {
+        matches(&help.query, &studio.theme)
+    };
+    column![bar, line(), scrollable(body).width(Length::Fill).height(Length::Fill).style(theme::scroll)].into()
 }
 
 fn console(studio: &Studio) -> Element<'_, Message> {
@@ -350,6 +539,6 @@ fn plots(studio: &Studio) -> Element<'_, Message> {
     }
 }
 
-fn hint(message: &str) -> Element<'_, Message> {
+fn hint<'a>(message: &'a str) -> Element<'a, Message> {
     container(text(message).size(12.5).style(theme::faint)).padding(12).into()
 }

@@ -192,6 +192,42 @@ pub fn row(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     }
 }
 
+pub fn tab_button(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let t = tones(theme);
+        let (background, color) = match (active, status) {
+            (true, _) => (Some(t.surface), t.text),
+            (false, button::Status::Hovered | button::Status::Pressed) => (Some(t.hover), t.text),
+            (false, _) => (None, t.muted),
+        };
+        button::Style { border: Border::default(), ..plain(background, color) }
+    }
+}
+
+pub fn tab_shell(active: bool) -> impl Fn(&Theme) -> container::Style {
+    move |theme| if active { filled(tones(theme).surface) } else { container::Style::default() }
+}
+
+pub fn choice(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme, status| {
+        let t = tones(theme);
+        match (selected, status) {
+            (true, _) => plain(Some(fade(t.accent, 0.15)), t.accent),
+            (false, button::Status::Hovered | button::Status::Pressed) => plain(Some(t.hover), t.text),
+            (false, _) => plain(None, t.muted),
+        }
+    }
+}
+
+pub fn code_block(theme: &Theme) -> container::Style {
+    container::Style { border: rounded(4.0), ..filled(tones(theme).raised) }
+}
+
+pub fn quote(theme: &Theme) -> container::Style {
+    let t = tones(theme);
+    container::Style { text_color: Some(t.muted), border: rounded(4.0), ..filled(fade(t.accent, 0.07)) }
+}
+
 pub fn editor(theme: &Theme, _status: text_editor::Status) -> text_editor::Style {
     let t = tones(theme);
     text_editor::Style {
