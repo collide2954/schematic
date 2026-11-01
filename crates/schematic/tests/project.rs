@@ -27,6 +27,7 @@ fn upstream(root: &Path) -> PathBuf {
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "first"]);
     git(&dir, &["tag", "v0.1.0"]);
+    write(dir.join(".gitattributes"), "* text eol=lf\n");
     write(dir.join("pkg").join("src").join("text-tools.scm"), "(ns text-tools)\n(define (slugify s) (string-join \"-\" (string-split (string-downcase s))))\n(define (shout s) (string-upcase s))\n");
     git(&dir, &["add", "-A"]);
     git(&dir, &["commit", "-q", "-m", "second"]);
@@ -43,6 +44,9 @@ fn projects_add_restore_and_remove_packages() {
     let root = std::env::temp_dir().join(format!("schematic-project-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
+    let gitconfig = root.join("gitconfig");
+    std::fs::write(&gitconfig, "[core]\n\tautocrlf = true\n").unwrap();
+    unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
     let upstream = upstream(&root);
     let registry_dir = root.join("registry");
     write(
@@ -68,6 +72,7 @@ fn projects_add_restore_and_remove_packages() {
     assert!(locked.hash.starts_with("sha256:"));
     let vendored = project_dir.join("packages").join("text-tools").join("src").join("text-tools.scm");
     assert!(std::fs::read_to_string(&vendored).unwrap().contains("shout"));
+    assert!(!std::fs::read(&vendored).unwrap().contains(&b'\r'));
     assert!(!project_dir.join("packages").join("text-tools").join(".git").exists());
     let lock_text = std::fs::read_to_string(project_dir.join("project.lock")).unwrap();
     assert!(lock_text.contains(":version \"0.2.0\"") && lock_text.contains(":subdir \"pkg\"") && lock_text.contains(":commit \""), "{lock_text}");
@@ -92,6 +97,9 @@ fn projects_add_restore_and_remove_packages() {
 
     project.add("text-tools", Source::Registry { version: Some("0.1.0".into()) }, &registry).unwrap();
     assert!(!std::fs::read_to_string(&vendored).unwrap().contains("shout"));
+    std::fs::remove_dir_all(project_dir.join("packages")).unwrap();
+    assert_eq!(project.restore(true, &registry).unwrap()[0].1, Status::Vendored);
+    assert!(!std::fs::read(&vendored).unwrap().contains(&b'\r'));
     assert_eq!(project.add("text-tools", Source::Registry { version: Some("9.9.9".into()) }, &registry).unwrap_err().to_string(), "text-tools has no version 9.9.9; the registry lists 0.1.0, 0.2.0");
 
     write(root.join("local-lib").join("src").join("local-lib.scm"), "(ns local-lib)\n(define answer 42)\n");

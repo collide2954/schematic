@@ -315,8 +315,8 @@ path, so `(require 'text-tools)` finds a dependency called `text-tools`.
 (`"src"` by default), `:main`, and `:registry`, and a `:dependencies` map
 from names to a version string, `{:path "../lib"}`, or `{:git url :tag t
 :subdir d}`. `project.lock` records, per package, the version, the git
-source and commit, and a `sha256:` hash of its files; packages are vendored,
-so a checked-in project builds offline. The registry is the repository
+source and commit, and a `sha256:` hash of its files, which ignores line
+endings; packages are vendored, so a checked-in project builds offline. The registry is the repository
 `collide2954/schematic-registry`, read over HTTPS one file per package;
 `:registry` in the manifest or the `SCHEMATIC_REGISTRY` variable can name
 another one, including a local folder.

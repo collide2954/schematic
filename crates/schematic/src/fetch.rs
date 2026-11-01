@@ -10,18 +10,40 @@ pub enum Reference {
     Commit(String),
 }
 
-pub fn run(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String, Error> {
+fn command(program: &str, args: &[&str], cwd: Option<&Path>) -> Command {
     let mut command = Command::new(program);
     command.args(args);
     if let Some(dir) = cwd {
         command.current_dir(dir);
     }
+    command
+}
+
+fn execute(mut command: Command, program: &str, args: &[&str]) -> Result<String, Error> {
     let output = command.output().map_err(|e| Error::new("io-error", format!("cannot run {program}: {e}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(Error::new("io-error", format!("{program} {} failed: {stderr}", args.join(" "))));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub fn run(program: &str, args: &[&str], cwd: Option<&Path>) -> Result<String, Error> {
+    execute(command(program, args, cwd), program, args)
+}
+
+const VERBATIM_FILES: [(&str, &str); 5] = [
+    ("GIT_CONFIG_COUNT", "2"),
+    ("GIT_CONFIG_KEY_0", "core.autocrlf"),
+    ("GIT_CONFIG_VALUE_0", "false"),
+    ("GIT_CONFIG_KEY_1", "core.eol"),
+    ("GIT_CONFIG_VALUE_1", "lf"),
+];
+
+fn git(args: &[&str], cwd: Option<&Path>) -> Result<String, Error> {
+    let mut command = command("git", args, cwd);
+    command.envs(VERBATIM_FILES);
+    execute(command, "git", args)
 }
 
 pub fn http_get(url: &str) -> Result<String, Error> {
@@ -34,20 +56,32 @@ fn scratch() -> PathBuf {
     std::env::temp_dir().join(format!("schematic-fetch-{}-{}", std::process::id(), COUNTER.fetch_add(1, Ordering::Relaxed)))
 }
 
+fn fetch_commit(dir: &Path, url: &str, commit: &str) -> Result<(), Error> {
+    std::fs::create_dir_all(dir).map_err(|e| Error::new("io-error", format!("cannot create {}: {e}", dir.display())))?;
+    git(&["init", "--quiet"], Some(dir))?;
+    git(&["remote", "add", "origin", url], Some(dir))?;
+    git(&["fetch", "--quiet", "--depth", "1", "origin", commit], Some(dir))?;
+    git(&["checkout", "--quiet", "FETCH_HEAD"], Some(dir))?;
+    Ok(())
+}
+
 pub fn checkout(url: &str, reference: &Reference) -> Result<(PathBuf, String), Error> {
     let dir = scratch();
     remove_tree(&dir);
     let target = dir.to_string_lossy().to_string();
     match reference {
         Reference::Tag(tag) => {
-            run("git", &["clone", "--quiet", "--depth", "1", "--branch", tag, url, &target], None)?;
+            git(&["clone", "--quiet", "--depth", "1", "--branch", tag, url, &target], None)?;
         }
         Reference::Commit(commit) => {
-            run("git", &["clone", "--quiet", url, &target], None)?;
-            run("git", &["checkout", "--quiet", commit], Some(&dir))?;
+            if fetch_commit(&dir, url, commit).is_err() {
+                remove_tree(&dir);
+                git(&["clone", "--quiet", url, &target], None)?;
+                git(&["checkout", "--quiet", commit], Some(&dir))?;
+            }
         }
     }
-    let commit = run("git", &["rev-parse", "HEAD"], Some(&dir))?;
+    let commit = git(&["rev-parse", "HEAD"], Some(&dir))?;
     Ok((dir, commit))
 }
 

@@ -122,13 +122,28 @@ fn files_under(dir: &Path, prefix: &Path, out: &mut Vec<(String, std::path::Path
     Ok(())
 }
 
+fn unix_line_endings(bytes: Vec<u8>) -> Vec<u8> {
+    if !bytes.contains(&b'\r') {
+        return bytes;
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut iter = bytes.iter().peekable();
+    while let Some(&b) = iter.next() {
+        if b == b'\r' && iter.peek() == Some(&&b'\n') {
+            continue;
+        }
+        out.push(b);
+    }
+    out
+}
+
 pub fn hash_tree(dir: &Path) -> std::io::Result<String> {
     let mut files = Vec::new();
     files_under(dir, Path::new(""), &mut files)?;
     files.sort();
     let mut hasher = Sha256::new();
     for (relative, path) in files {
-        let content = std::fs::read(&path)?;
+        let content = unix_line_endings(std::fs::read(&path)?);
         hasher.update(relative.as_bytes());
         hasher.update(&[0]);
         hasher.update(&(content.len() as u64).to_be_bytes());
@@ -175,6 +190,20 @@ mod tests {
         assert_eq!(hash_tree(&dir).unwrap(), first);
         std::fs::write(dir.join("src").join("x.scm"), "(ns x) 1").unwrap();
         assert_ne!(hash_tree(&dir).unwrap(), first);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn tree_hashes_ignore_line_endings() {
+        let dir = std::env::temp_dir().join(format!("schematic-hash-eol-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.scm"), "(ns a)\n(define x 1)\n").unwrap();
+        let unix = hash_tree(&dir).unwrap();
+        std::fs::write(dir.join("a.scm"), "(ns a)\r\n(define x 1)\r\n").unwrap();
+        assert_eq!(hash_tree(&dir).unwrap(), unix);
+        std::fs::write(dir.join("a.scm"), "(ns a)\r(define x 1)\r").unwrap();
+        assert_ne!(hash_tree(&dir).unwrap(), unix);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
