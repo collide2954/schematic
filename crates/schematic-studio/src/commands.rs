@@ -120,6 +120,7 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         item(Menu::Help, "Reference", "", Some(Message::ShowHelp(Page::Reference))),
         item(Menu::Help, "Look up the name at the cursor", "F1", Some(Message::LookUp(Source::Editor))),
         gap(item(Menu::Help, "Command palette", "Ctrl+Shift+P", Some(Message::PaletteOpen(String::new())))),
+        gap(item(Menu::Help, "Start page", "", Some(Message::OpenStart))),
         gap(item(Menu::Help, "Website", "", Some(Message::OpenWebsite))),
         item(Menu::Help, "About Schematic Studio", "", Some(Message::About)),
     ]);

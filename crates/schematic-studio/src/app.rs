@@ -16,6 +16,7 @@ use schematic::reader::read_all;
 use crate::commands::{self, Menu};
 use crate::completion::{self, Candidate};
 use crate::highlight::Marks;
+use crate::chart::PlotView;
 use crate::settings::{self, Settings};
 use crate::project::{self, ProjectInfo};
 use crate::worker::{self, Binding, Event, Grid, Request, Watched};
@@ -73,6 +74,7 @@ pub enum Tab {
     Doc(usize),
     Help,
     Settings,
+    Start,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -242,13 +244,20 @@ pub struct Document {
     pub future: Vec<Snapshot>,
     pub last_edit: Option<EditKind>,
     pub found: Vec<(usize, usize)>,
+    pub modified: Option<std::time::SystemTime>,
+    pub stale: bool,
 }
 
 static DOCUMENT_IDS: AtomicU64 = AtomicU64::new(1);
 
+fn modified_at(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
 impl Document {
     pub fn new(path: Option<PathBuf>, content: text_editor::Content) -> Document {
         let id = DOCUMENT_IDS.fetch_add(1, Ordering::Relaxed);
+        let modified = path.as_deref().and_then(modified_at);
         Document {
             id,
             path,
@@ -262,6 +271,8 @@ impl Document {
             future: Vec::new(),
             last_edit: None,
             found: Vec::new(),
+            modified,
+            stale: false,
         }
     }
 
@@ -351,6 +362,7 @@ pub struct Studio {
     pub restore: bool,
     pub backups: bool,
     pub settings_open: bool,
+    pub start_open: bool,
     pub persistent: bool,
     pub saved: Option<Settings>,
     pub window_size: Option<(f32, f32)>,
@@ -388,6 +400,7 @@ pub struct Studio {
     pub last_run: Option<u128>,
     pub plots: Vec<Plot>,
     pub plot_at: usize,
+    pub plot_view: PlotView,
     pub worker: Option<Sender<Request>>,
     pub interrupt: Option<Arc<AtomicBool>>,
     pub running: bool,
@@ -519,6 +532,14 @@ pub enum Message {
     RestartDecided(bool),
     NewProject,
     NewProjectIn(Option<PathBuf>),
+    OpenStart,
+    OpenProject(PathBuf),
+    Tick,
+    Reload,
+    PlotView(PlotView),
+    PlotReset,
+    PlotSelect(usize),
+    CopyPlot,
 }
 
 pub fn console_find_id() -> Id {
@@ -880,6 +901,7 @@ impl Studio {
             restore: settings.restore,
             backups: settings.backups,
             settings_open: false,
+            start_open: false,
             persistent: false,
             saved: None,
             window_size: settings.window,
@@ -917,6 +939,7 @@ impl Studio {
             last_run: None,
             plots: Vec::new(),
             plot_at: 0,
+            plot_view: PlotView::default(),
             worker: None,
             interrupt: None,
             running: false,
@@ -946,6 +969,10 @@ impl Studio {
             && let Some(dir) = settings.root.filter(|r| r.is_dir()).or_else(|| std::env::current_dir().ok()) {
                 studio.set_root(dir);
             }
+        if tasks.is_empty() {
+            studio.start_open = true;
+            studio.tab = Tab::Start;
+        }
         studio.persistent = true;
         studio.saved = Some(studio.snapshot_settings());
         (studio, Task::batch(tasks))
@@ -1166,7 +1193,52 @@ impl Studio {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([Subscription::run(worker::subscription).map(Message::Worker), iced::event::listen_with(events)])
+        Subscription::batch([
+            Subscription::run(worker::subscription).map(Message::Worker),
+            Subscription::run(worker::ticks).map(|()| Message::Tick),
+            iced::event::listen_with(events),
+        ])
+    }
+
+    fn check_disk(&mut self) -> Task<Message> {
+        let mut reloaded = Vec::new();
+        for i in 0..self.docs.len() {
+            let doc = &self.docs[i];
+            let Some(now) = doc.path.as_deref().and_then(modified_at) else { continue };
+            if doc.modified == Some(now) {
+                continue;
+            }
+            if doc.dirty {
+                self.status = format!("{} changed on disk", doc.name());
+                let doc = &mut self.docs[i];
+                doc.stale = true;
+                doc.modified = Some(now);
+            } else if self.reload(i) {
+                reloaded.push(i);
+            }
+        }
+        if reloaded.contains(&self.current) {
+            return Task::batch([self.refresh_find(true), self.schedule_check()]);
+        }
+        Task::none()
+    }
+
+    fn reload(&mut self, i: usize) -> bool {
+        let Some(path) = self.docs.get(i).and_then(|d| d.path.clone()) else { return false };
+        let Ok(source) = std::fs::read_to_string(&path) else { return false };
+        let doc = &mut self.docs[i];
+        let cursor = doc.content.cursor();
+        doc.content = text_editor::Content::with_text(&source.replace("\r\n", "\n"));
+        doc.content.move_to(cursor);
+        doc.dirty = false;
+        doc.stale = false;
+        doc.modified = modified_at(&path);
+        doc.history.clear();
+        doc.future.clear();
+        doc.last_edit = None;
+        doc.marks = marks_for(doc);
+        self.status = format!("Reloaded {}", self.docs[i].name());
+        true
     }
 
     pub fn groups(&self) -> Vec<(Group, Vec<&Binding>)> {
@@ -1573,6 +1645,50 @@ impl Studio {
                 let check = self.load(path);
                 Task::batch([check, self.scroll_to_doc()])
             }
+            Message::OpenStart => {
+                self.start_open = true;
+                self.tab = Tab::Start;
+                self.menu = None;
+                Task::none()
+            }
+            Message::OpenProject(path) => {
+                if path.is_dir() {
+                    self.set_root(path);
+                    self.side = Side::Project;
+                } else {
+                    self.status = format!("{} is gone", path.display());
+                }
+                Task::none()
+            }
+            Message::Tick => self.check_disk(),
+            Message::Reload => {
+                if self.reload(self.current) {
+                    return Task::batch([self.refresh_find(true), self.schedule_check()]);
+                }
+                Task::none()
+            }
+            Message::PlotView(view) => {
+                self.plot_view = view;
+                Task::none()
+            }
+            Message::PlotReset => {
+                self.plot_view = PlotView::default();
+                Task::none()
+            }
+            Message::PlotSelect(i) => {
+                if i < self.plots.len() {
+                    self.plot_at = i;
+                    self.plot_view = PlotView::default();
+                }
+                Task::none()
+            }
+            Message::CopyPlot => match self.plot().map(Plot::svg) {
+                Some(svg) => {
+                    self.status = "Copied the chart as SVG".to_string();
+                    iced::clipboard::write(svg)
+                }
+                None => Task::none(),
+            },
             Message::NewProject => Task::perform(pick_folder(), Message::NewProjectIn),
             Message::NewProjectIn(parent) => {
                 let Some(parent) = parent else { return Task::none() };
@@ -1669,6 +1785,17 @@ impl Studio {
                 if self.settings_open {
                     self.tab = Tab::Settings;
                 }
+                Task::none()
+            }
+            Message::SelectTab(Tab::Start) => {
+                if self.start_open {
+                    self.tab = Tab::Start;
+                }
+                Task::none()
+            }
+            Message::CloseTab(Tab::Start) => {
+                self.start_open = false;
+                self.tab = Tab::Doc(self.current);
                 Task::none()
             }
             Message::CloseTab(Tab::Help) => {
@@ -1877,10 +2004,12 @@ impl Studio {
             }
             Message::PlotBack => {
                 self.plot_at = self.plot_at.saturating_sub(1);
+                self.plot_view = PlotView::default();
                 Task::none()
             }
             Message::PlotForward => {
                 self.plot_at = (self.plot_at + 1).min(self.plots.len().saturating_sub(1));
+                self.plot_view = PlotView::default();
                 Task::none()
             }
             Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
@@ -1935,6 +2064,7 @@ impl Studio {
             Event::Plot(plot) => {
                 self.plots.push(*plot);
                 self.plot_at = self.plots.len() - 1;
+                self.plot_view = PlotView::default();
                 Task::none()
             }
             Event::Watches(watched) => {
@@ -2468,6 +2598,8 @@ impl Studio {
         match std::fs::write(&path, doc.content.text()) {
             Ok(()) => {
                 doc.dirty = false;
+                doc.stale = false;
+                doc.modified = modified_at(&path);
                 doc.path = Some(path.clone());
                 self.status = format!("Saved {}", path.display());
                 settings::remember(&mut self.recent, &path);
@@ -3182,5 +3314,77 @@ mod tests {
         let _ = studio.update(Message::WindowResized(1000.0, 700.0));
         assert_eq!(studio.snapshot_settings().window, Some((1000.0, 700.0)));
         assert!(commands::commands(&studio).iter().any(|c| c.name == "Preferences…"));
+    }
+
+    #[test]
+    fn the_start_page_lists_recent_work_and_opens_it() {
+        let dir = scratch("start");
+        let file = dir.join("recent.scm");
+        std::fs::write(&file, "(define r 1)\n").unwrap();
+        let mut studio = Studio::new();
+        studio.recent = vec![file.clone(), dir.join("gone.scm")];
+        studio.projects = vec![dir.clone()];
+        let _ = studio.update(Message::OpenStart);
+        assert!(studio.start_open && studio.tab == Tab::Start);
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::OpenPath(file.clone()));
+        assert_eq!((studio.tab, studio.doc().path.as_deref()), (Tab::Doc(0), Some(file.as_path())));
+        assert_eq!(studio.recent[0], file);
+        let _ = studio.update(Message::OpenProject(dir.clone()));
+        assert_eq!((studio.root.as_deref(), studio.side), (Some(dir.as_path()), Side::Project));
+        let _ = studio.update(Message::SelectTab(Tab::Start));
+        assert_eq!(studio.tab, Tab::Start);
+        let _ = studio.update(Message::CloseTab(Tab::Start));
+        assert!(!studio.start_open && studio.tab == Tab::Doc(0));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn files_changed_on_disk_are_reloaded_or_flagged() {
+        let dir = scratch("reload");
+        let file = dir.join("a.scm");
+        std::fs::write(&file, "(define a 1)\n").unwrap();
+        let mut studio = Studio::new();
+        let _ = studio.update(Message::Opened(Some(file.clone())));
+        assert!(studio.doc().modified.is_some());
+        let _ = studio.update(Message::Tick);
+        assert_eq!(studio.doc().content.text(), "(define a 1)\n");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(&file, "(define a 2)\n").unwrap();
+        let _ = studio.update(Message::Tick);
+        assert_eq!(studio.doc().content.text(), "(define a 2)\n");
+        assert!(studio.status.starts_with("Reloaded") && !studio.doc().stale);
+        studio.doc_mut().dirty = true;
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(&file, "(define a 3)\n").unwrap();
+        let _ = studio.update(Message::Tick);
+        assert_eq!(studio.doc().content.text(), "(define a 2)\n");
+        assert!(studio.doc().stale && studio.status.ends_with("changed on disk"));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::Reload);
+        assert_eq!(studio.doc().content.text(), "(define a 3)\n");
+        assert!(!studio.doc().stale && !studio.doc().dirty);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn plot_views_zoom_and_reset_when_the_chart_changes() {
+        let mut studio = Studio::new();
+        let _ = studio.update(Message::Worker(Event::Plot(Box::new(chart("one")))));
+        let _ = studio.update(Message::Worker(Event::Plot(Box::new(chart("two")))));
+        let zoomed = PlotView { zoom: 2.0, pan: (-10.0, -5.0) };
+        let _ = studio.update(Message::PlotView(zoomed));
+        assert_eq!(studio.plot_view, zoomed);
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::PlotReset);
+        assert_eq!(studio.plot_view, PlotView::default());
+        let _ = studio.update(Message::PlotView(zoomed));
+        let _ = studio.update(Message::PlotSelect(0));
+        assert_eq!((studio.plot_at, studio.plot_view), (0, PlotView::default()));
+        let _ = studio.update(Message::PlotView(zoomed));
+        let _ = studio.update(Message::PlotForward);
+        assert_eq!((studio.plot_at, studio.plot_view), (1, PlotView::default()));
+        let _ = studio.update(Message::CopyPlot);
+        assert_eq!(studio.status, "Copied the chart as SVG");
     }
 }

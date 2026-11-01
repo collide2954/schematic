@@ -6,7 +6,7 @@ use iced::widget::{
     Column, Row, button, canvas, column, container, lazy, mouse_area, pane_grid, rich_text, row, rule, scrollable, sensor, space,
     span, stack, table, text, text_editor, text_input, tooltip,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use iced::{Alignment, Element, Font, Length, Padding, Pixels, Theme};
 use schematic::docs::{self, Block, Inline};
@@ -15,7 +15,7 @@ use crate::app::{
     EDITOR_PAD, Find, LineKind, Message, NamingKind, PAGE, Page, Palette, PaneKind, Side, Source, Studio, Tab, console_find_id,
     console_id, console_text_id, editor_id, editor_text_id, find_id, naming_id, palette_id,
 };
-use crate::chart::Chart;
+use crate::chart::{Chart, PlotView, Thumb};
 use crate::commands::{self, Menu};
 use crate::worker::Watched;
 use crate::icons::{Glyph, Ink, icon};
@@ -211,7 +211,7 @@ fn small<'a>(label: &'a str, message: Option<Message>) -> Element<'a, Message> {
 }
 
 fn glyph_button<'a>(glyph: Glyph, message: Option<Message>) -> Element<'a, Message> {
-    button(icon(glyph, Ink::Muted)).padding([3, 5]).style(theme::ghost).on_press_maybe(message).into()
+    button(icon(glyph, Ink::Muted)).padding([3, 3]).style(theme::ghost).on_press_maybe(message).into()
 }
 
 fn tip<'a>(content: impl Into<Element<'a, Message>>, hint: &'a str) -> Element<'a, Message> {
@@ -271,18 +271,23 @@ fn status_bar(studio: &Studio) -> Element<'_, Message> {
 }
 
 fn editor_tabs(studio: &Studio) -> Vec<TabItem> {
-    let mut tabs: Vec<TabItem> = studio
-        .docs
-        .iter()
-        .enumerate()
-        .map(|(i, doc)| TabItem {
-            label: doc.label(),
+    let mut tabs: Vec<TabItem> = Vec::new();
+    if studio.start_open {
+        tabs.push(TabItem {
+            label: "Start".to_string(),
             detail: None,
-            active: studio.tab == Tab::Doc(i),
-            select: Some(Message::SelectTab(Tab::Doc(i))),
-            close: Some(Message::CloseTab(Tab::Doc(i))),
-        })
-        .collect();
+            active: studio.tab == Tab::Start,
+            select: Some(Message::SelectTab(Tab::Start)),
+            close: Some(Message::CloseTab(Tab::Start)),
+        });
+    }
+    tabs.extend(studio.docs.iter().enumerate().map(|(i, doc)| TabItem {
+        label: doc.label(),
+        detail: doc.stale.then(|| "changed on disk".to_string()),
+        active: studio.tab == Tab::Doc(i),
+        select: Some(Message::SelectTab(Tab::Doc(i))),
+        close: Some(Message::CloseTab(Tab::Doc(i))),
+    }));
     if studio.help.is_some() {
         tabs.push(TabItem {
             label: "Help".to_string(),
@@ -306,7 +311,11 @@ fn editor_tabs(studio: &Studio) -> Vec<TabItem> {
 
 fn editor_controls(studio: &Studio) -> Element<'_, Message> {
     let help = (studio.tab != Tab::Help).then_some(Message::OpenHelp);
-    row![small("+", Some(Message::NewFile)), small("Help", help)].spacing(2).into()
+    let mut controls = Row::new().spacing(2);
+    if studio.doc().stale && matches!(studio.tab, Tab::Doc(_)) {
+        controls = controls.push(small("Reload", Some(Message::Reload)));
+    }
+    controls.push(small("+", Some(Message::NewFile))).push(small("Help", help)).into()
 }
 
 fn environment_label(studio: &Studio) -> Option<String> {
@@ -682,11 +691,49 @@ fn workspace(studio: &Studio) -> Element<'_, Message> {
     match (studio.tab, &studio.help) {
         (Tab::Help, Some(_)) => help(studio),
         (Tab::Settings, _) if studio.settings_open => settings_page(studio),
+        (Tab::Start, _) if studio.start_open => start_page(studio),
         _ => match &studio.find {
             Some(find) => column![find_bar(studio, find), line(), editor(studio)].into(),
             None => editor(studio),
         },
     }
+}
+
+fn start_page(studio: &Studio) -> Element<'_, Message> {
+    let action = |label: &'static str, message: Message| button(text(label).size(theme::UI).font(fonts::UI_MEDIUM)).padding(theme::TOOL).style(theme::tool).on_press(message);
+    let actions = row![
+        action("New file", Message::NewFile),
+        action("Open file…", Message::Open),
+        action("Open folder…", Message::OpenFolder),
+        action("New project…", Message::NewProject),
+    ]
+    .spacing(6);
+    let entry = |path: &Path, message: Message| -> Element<'_, Message> {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.display().to_string());
+        let place = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
+        let content = row![text(name).font(fonts::MONO).size(theme::UI).style(theme::strong), text(place).size(theme::FINE).style(theme::faint)]
+            .spacing(10)
+            .align_y(Alignment::Center);
+        button(content).padding(theme::ROW).width(Length::Fill).style(theme::row(false)).on_press(message).into()
+    };
+    let mut page = column![text("Schematic Studio").size(theme::GLYPH + 4.0).font(fonts::UI_SEMIBOLD), actions].spacing(14).padding(Padding { top: 16.0, right: 20.0, bottom: 24.0, left: 20.0 }).max_width(680);
+    let files: Vec<&PathBuf> = studio.recent.iter().filter(|p| p.is_file()).take(8).collect();
+    if !files.is_empty() {
+        let mut list = Column::new().push(heading("Recent files")).spacing(2);
+        for path in files {
+            list = list.push(entry(path, Message::OpenPath(path.clone())));
+        }
+        page = page.push(list);
+    }
+    let projects: Vec<&PathBuf> = studio.projects.iter().filter(|p| p.is_dir()).take(8).collect();
+    if !projects.is_empty() {
+        let mut list = Column::new().push(heading("Recent projects")).spacing(2);
+        for path in projects {
+            list = list.push(entry(path, Message::OpenProject(path.clone())));
+        }
+        page = page.push(list);
+    }
+    scrollable(page).width(Length::Fill).height(Length::Fill).style(theme::scroll).into()
 }
 
 fn setting<'a>(label: &'a str, note: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
@@ -1208,21 +1255,29 @@ fn watch(studio: &Studio) -> Element<'_, Message> {
 
 fn plot_controls(studio: &Studio) -> Element<'_, Message> {
     let count = studio.plots.len();
-    let save = small("Save as SVG", studio.plot().map(|_| Message::SavePlot));
-    if count < 2 {
-        return save;
+    let shown = studio.plot().is_some();
+    let reset = small("Reset view", (studio.plot_view != PlotView::default()).then_some(Message::PlotReset));
+    let copy = small("Copy SVG", shown.then_some(Message::CopyPlot));
+    let save = small("Save as SVG", shown.then_some(Message::SavePlot));
+    let mut controls = Row::new().spacing(4).align_y(Alignment::Center);
+    if count >= 2 {
+        let position = text(format!("{} of {count}", studio.plot_at + 1)).size(theme::META).style(theme::muted);
+        let back = glyph_button(Glyph::Left, (studio.plot_at > 0).then_some(Message::PlotBack));
+        let forward = glyph_button(Glyph::Right, (studio.plot_at + 1 < count).then_some(Message::PlotForward));
+        controls = controls.push(position).push(back).push(forward);
     }
-    let position = text(format!("{} of {count}", studio.plot_at + 1)).size(theme::META).style(theme::muted);
-    let back = glyph_button(Glyph::Left, (studio.plot_at > 0).then_some(Message::PlotBack));
-    let forward = glyph_button(Glyph::Right, (studio.plot_at + 1 < count).then_some(Message::PlotForward));
-    row![position, back, forward, save].spacing(4).align_y(Alignment::Center).into()
+    controls.push(reset).push(copy).push(save).into()
 }
 
 fn plots(studio: &Studio) -> Element<'_, Message> {
-    match studio.plot() {
-        Some(plot) => canvas(Chart { plot }).width(Length::Fill).height(Length::Fill).into(),
-        None => hint("No charts."),
+    let Some(plot) = studio.plot() else { return hint("No charts.") };
+    let chart: Element<'_, Message> = canvas(Chart { plot, view: studio.plot_view }).width(Length::Fill).height(Length::Fill).into();
+    if studio.plots.len() < 2 {
+        return chart;
     }
+    let thumbs = studio.plots.iter().enumerate().map(|(i, plot)| canvas(Thumb { plot, index: i, selected: i == studio.plot_at }).width(96).height(56).into());
+    let strip = scrollable(row(thumbs).spacing(6).padding([6, 12])).direction(Direction::Horizontal(Scrollbar::new())).style(theme::scroll);
+    column![chart, line(), strip].into()
 }
 
 fn hint<'a>(message: &'a str) -> Element<'a, Message> {

@@ -100,6 +100,23 @@ impl<F: FnMut(Event)> Write for Forward<F> {
     }
 }
 
+pub fn ticks() -> impl Stream<Item = ()> {
+    stream::channel(1, async |mut output| {
+        let (ticks, mut inbox) = futures_mpsc::unbounded();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if ticks.unbounded_send(()).is_err() {
+                    break;
+                }
+            }
+        });
+        while inbox.next().await.is_some() {
+            let _ = output.send(()).await;
+        }
+    })
+}
+
 pub fn subscription() -> impl Stream<Item = Event> {
     stream::channel(100, async |mut output| {
         let (events, mut inbox) = futures_mpsc::unbounded();
