@@ -4,6 +4,7 @@ use std::rc::Rc;
 use crate::error::Error;
 use crate::list::List;
 use crate::macros::Macro;
+use crate::patterns;
 use crate::symbol::Symbol;
 use crate::value::Value;
 use crate::vm::Globals;
@@ -16,27 +17,23 @@ pub struct Expander<'a> {
 fn param_names(params: &Value) -> Vec<Symbol> {
     match params {
         Value::Symbol(s) => vec![*s],
-        Value::List(l) => l
-            .iter()
-            .filter_map(|p| match p {
-                Value::Symbol(s) if &*s.name() != "&" => Some(*s),
-                _ => None,
-            })
-            .collect(),
+        Value::List(l) => l.iter().flat_map(patterns::names).collect(),
         _ => Vec::new(),
     }
 }
 
-fn binding_pairs(bindings: &Value) -> Vec<(Option<Symbol>, Vec<Value>)> {
+fn binding_pairs(bindings: &Value) -> Vec<(Option<Value>, Vec<Symbol>, Vec<Value>)> {
     let Value::List(items) = bindings else { return Vec::new() };
     items
         .iter()
         .map(|b| match b {
             Value::List(pair) => match pair.first() {
-                Some(Value::Symbol(name)) => (Some(*name), pair.iter().skip(1).cloned().collect()),
-                _ => (None, pair.iter().cloned().collect()),
+                Some(binder) if matches!(binder, Value::Symbol(_)) || patterns::is_pattern(binder) => {
+                    (Some(binder.clone()), patterns::names(binder), pair.iter().skip(1).cloned().collect())
+                }
+                _ => (None, Vec::new(), pair.iter().cloned().collect()),
             },
-            other => (None, vec![other.clone()]),
+            other => (None, Vec::new(), vec![other.clone()]),
         })
         .collect()
 }
@@ -112,19 +109,40 @@ impl<'a> Expander<'a> {
         Ok(())
     }
 
-    fn define_name(&self, form: &Value) -> Option<Symbol> {
-        let Value::List(l) = form else { return None };
-        if &*self.special(l.first()?)?.name() != "define" {
-            return None;
+    fn define_names(&self, form: &Value) -> Vec<Symbol> {
+        let Value::List(l) = form else { return Vec::new() };
+        if !l.first().and_then(|h| self.special(h)).is_some_and(|s| &*s.name() == "define") {
+            return Vec::new();
         }
-        match l.iter().nth(1)? {
-            Value::Symbol(name) => Some(*name),
-            Value::List(signature) => match signature.first()? {
-                Value::Symbol(name) => Some(*name),
-                _ => None,
+        match l.iter().nth(1) {
+            Some(Value::Symbol(name)) => vec![*name],
+            Some(Value::List(signature)) => match signature.first() {
+                Some(Value::Symbol(name)) => vec![*name],
+                _ => Vec::new(),
             },
-            _ => None,
+            Some(pattern) if patterns::is_pattern(pattern) => patterns::names(pattern),
+            _ => Vec::new(),
         }
+    }
+
+    fn expand_clause(&mut self, clause: &Value) -> Result<Value, Error> {
+        let Value::List(l) = clause else { return self.expand(clause) };
+        let parts: Vec<Value> = l.iter().cloned().collect();
+        let Some(pattern) = parts.first() else { return Ok(clause.clone()) };
+        let guarded = matches!(parts.get(1), Some(Value::Keyword(k)) if &*k.name() == "when");
+        let body_at = if guarded { 3 } else { 1 };
+        let expanded = self.with_scope(patterns::names(pattern), |e| {
+            let mut out = Vec::new();
+            if guarded {
+                out.push(parts[1].clone());
+                if let Some(guard) = parts.get(2) {
+                    out.push(e.expand(guard)?);
+                }
+            }
+            out.extend(e.expand_body(parts.get(body_at..).unwrap_or(&[]))?);
+            Ok::<_, Error>(out)
+        })?;
+        Ok(Value::list(std::iter::once(pattern.clone()).chain(expanded)))
     }
 
     fn expand_body(&mut self, forms: &[Value]) -> Result<Vec<Value>, Error> {
@@ -132,7 +150,7 @@ impl<'a> Expander<'a> {
         for form in forms {
             self.flatten_body_form(form, &mut flat)?;
         }
-        let defined: Vec<Symbol> = flat.iter().filter_map(|f| self.define_name(f)).collect();
+        let defined: Vec<Symbol> = flat.iter().flat_map(|f| self.define_names(f)).collect();
         if let Some(scope) = self.scopes.last_mut() {
             scope.extend(defined);
         }
@@ -179,6 +197,17 @@ impl<'a> Expander<'a> {
                 _ => self.expand_all(items.iter())?,
             },
             "let" | "let*" | "loop" => self.expand_let(&sym.name(), &items)?,
+            "match" => {
+                let mut out = Vec::new();
+                let mut rest = items.iter();
+                if let Some(subject) = rest.next() {
+                    out.push(self.expand(subject)?);
+                }
+                for clause in rest {
+                    out.push(self.expand_clause(clause)?);
+                }
+                out
+            }
             "try" => {
                 let mut out = Vec::new();
                 for item in &items {
@@ -269,15 +298,15 @@ impl<'a> Expander<'a> {
         let pairs = binding_pairs(bindings);
         let mut names: Vec<Symbol> = name.into_iter().collect();
         let mut expanded_bindings = Vec::new();
-        for (bound, inits) in &pairs {
+        for (binder, bound, inits) in &pairs {
             let inits = if form == "let*" {
                 self.with_scope(names.clone(), |e| e.expand_all(inits.iter()))?
             } else {
                 self.expand_all(inits.iter())?
             };
-            if let Some(bound) = bound {
-                names.push(*bound);
-                expanded_bindings.push(Value::list(std::iter::once(Value::Symbol(*bound)).chain(inits)));
+            if let Some(binder) = binder {
+                names.extend(bound.iter().copied());
+                expanded_bindings.push(Value::list(std::iter::once(binder.clone()).chain(inits)));
             } else {
                 expanded_bindings.push(Value::list(inits));
             }

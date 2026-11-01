@@ -98,6 +98,12 @@ fn date_columns_are_inferred_sorted_and_filtered() {
 }
 
 #[test]
+fn rows_destructure_in_lambda_parameters() {
+    assert_eq!(with_people("(vec (map (lambda ({:keys [name age]}) (str name \":\" age)) t))"), "[\"Ada:36\" \"Bob:41\"]");
+    assert_eq!(with_people("(let (([{:name first-name} & _] (rows t))) first-name)"), "\"Ada\"");
+}
+
+#[test]
 fn text_functions_work_on_table_columns() {
     assert_eq!(
         with_people("(rows (assoc t :label (format \"{} ({})\" (:name t) (:age t))))"),

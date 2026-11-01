@@ -1028,6 +1028,50 @@ fn date_functions_broadcast_over_date_arrays() {
 }
 
 #[test]
+fn vectors_and_maps_destructure_in_let_define_and_parameters() {
+    assert_eq!(eval("(let (([a b & rest] [1 2 3 4])) [a b rest])"), "[1 2 [3 4]]");
+    assert_eq!(eval("(let (([a [b c] :as all] [1 [2 3]])) [a b c all])"), "[1 2 3 [1 [2 3]]]");
+    assert_eq!(eval("(let (([a b c] [1])) [a b c])"), "[1 nil nil]");
+    assert_eq!(eval("(let (({:keys [x y] :or {y 10} :as m} {:x 1})) [x y m])"), "[1 10 {:x 1}]");
+    assert_eq!(
+        eval("(let (({:name n :address {:street street}} {:name \"Ada\" :address {:street \"Main\"}})) [n street])"),
+        "[\"Ada\" \"Main\"]"
+    );
+    assert_eq!(eval("(let* (([a b] [1 2]) (c (+ a b))) c)"), "3");
+    assert_eq!(eval("(define [lo hi] [1 9]) (- hi lo)"), "8");
+    assert_eq!(eval("(define {:keys [host port]} {:host \"h\" :port 80}) (str host \":\" port)"), "\"h:80\"");
+    assert_eq!(eval("(define (dist [x1 y1] [x2 y2]) (+ (abs (- x2 x1)) (abs (- y2 y1)))) (dist [0 0] [3 4])"), "7");
+    assert_eq!(eval("((lambda ({:keys [a]} & [first-rest]) [a first-rest]) {:a 1} 2 3)"), "[1 2]");
+    assert_eq!(eval("(let loop (([x & more] [1 2 3]) (acc 0)) (if x (loop more (+ acc x)) acc))"), "6");
+    assert_eq!(eval("(loop (([a b] [1 2]) (n 0)) (if (= n 3) [a b] (recur [b (+ a b)] (+ n 1))))"), "[5 8]");
+    assert_eq!(eval("(let (([a b] '(1 2)) ([c] #[7 8]) ([d] \"hi\") ([e] nil)) [a b c d e])"), "[1 2 7 \"h\" nil]");
+    assert_eq!(eval("(let (([_ b] [1 2])) b)"), "2");
+    assert_eq!(eval("(define (f [a b]) (define [c d] [b a]) [c d]) (f [1 2])"), "[2 1]");
+    assert_eq!(eval("(let (([a b] 5)) a)"), "error: cannot destructure 5 as a sequence");
+    assert_eq!(eval("(let (({:keys [a]} 5)) a)"), "error: cannot destructure 5 as a map");
+    assert!(eval("(let (([a 1] [1 2])) a)").contains("cannot bind to 1"));
+}
+
+#[test]
+fn match_tests_and_destructures_values() {
+    let shape = "(define (area s) (match s ([:circle r] (* 3 r r)) ([:rect w h] (* w h)) ({:keys [side]} (* side side)) (else 0)))";
+    assert_eq!(eval(&format!("{shape} [(area [:circle 2]) (area [:rect 2 3]) (area {{:side 4}}) (area \"blob\")]")), "[12 6 16 0]");
+    assert_eq!(
+        eval("(match [1 2 3] ([a b] :when (> a b) \"desc\") ([a b] \"pair\") ([a & more] :when (> (count more) 1) (str \"long from \" a)) (_ \"other\"))"),
+        "\"long from 1\""
+    );
+    assert_eq!(eval("(match 5 (0 \"zero\") (n :when (odd? n) \"odd\") (_ \"even\"))"), "\"odd\"");
+    assert_eq!(eval("(match {:a 1 :b 2} ({:a x :b 2} (+ x 10)) (_ 0))"), "11");
+    assert_eq!(eval("(match {:a 1} ({:a x :b 2} (+ x 10)) ({:keys [b] :or {b 5}} b))"), "5");
+    assert_eq!(eval("(match '(1 (2 3)) ([x [y z]] (+ x y z)))"), "6");
+    assert_eq!(eval("[(match \"hi\" (\"ho\" 1) (\"hi\" 2)) (match 'x ('x :symbol) (_ :other)) (match nil (nil :none) (_ :some)) (match #2024-01-01 (#2024-01-01 :new-year) (_ :day))]"), "[2 :symbol :none :new-year]");
+    assert_eq!(eval("(match [1 2] ([a] a) ({:k v} v))"), "error: no match clause for [1 2]");
+    assert_eq!(eval("(match [1 2] ([a b c] 1))"), "error: no match clause for [1 2]");
+    assert!(eval("(match 1 (x))").contains("needs a body"));
+    assert_eq!(eval("(define (first-two [a b & _]) (match [a b] ([1 x] x) ([x 1] (- x)) (_ 0))) [(first-two [1 5 9]) (first-two [7 1]) (first-two [2 2])]"), "[5 -7 0]");
+}
+
+#[test]
 fn subtraction_accepts_an_array_first() {
     assert_eq!(eval("[(- #[3 4] 1) (- 10 #[3 4]) (- #[3 4] #[1 1])]"), "[#[2 3] #[7 6] #[2 3]]");
 }

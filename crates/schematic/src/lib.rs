@@ -9,6 +9,7 @@ mod interpreter;
 pub mod list;
 pub mod macros;
 pub mod map;
+pub mod patterns;
 pub mod reader;
 pub mod set;
 pub mod symbol;

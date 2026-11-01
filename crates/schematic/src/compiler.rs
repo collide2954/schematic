@@ -6,6 +6,7 @@ use crate::error::Error;
 use crate::expander::Expander;
 use crate::list::List;
 use crate::macros::{Macro, strip_aliases};
+use crate::patterns;
 use crate::symbol::Symbol;
 use crate::value::Value;
 use crate::vm::{Arity, Globals};
@@ -88,7 +89,7 @@ fn count_symbols(form: &Value, counts: &mut std::collections::HashMap<Symbol, us
     }
 }
 
-fn syntax_error(form: &str, message: &str) -> Error {
+pub(crate) fn syntax_error(form: &str, message: &str) -> Error {
     Error::syntax(format!("{form}: {message}"))
 }
 
@@ -271,7 +272,7 @@ impl Scan {
                             }
                             self.walk_all(&rest.rest(), depth + 1);
                         }
-                        _ => {}
+                        _ => self.walk_all(&rest.rest(), depth),
                     }
                     return;
                 }
@@ -644,14 +645,27 @@ impl<'a> Compiler<'a> {
                 "define" => return self.compile_define(&args, tail),
                 "set!" => return self.compile_set(&args, tail),
                 "begin" => return self.compile_sequence(&args, tail),
-                "let" => return self.compile_let(&args, tail, false),
-                "let*" => return self.compile_let(&args, tail, true),
+                "let" => {
+                    let args = patterns::rewrite_bindings("let", &args)?.unwrap_or(args);
+                    return self.compile_let(&args, tail, false);
+                }
+                "let*" => {
+                    let args = patterns::rewrite_bindings("let*", &args)?.unwrap_or(args);
+                    return self.compile_let(&args, tail, true);
+                }
+                "match" => {
+                    let form = patterns::rewrite_match(&args)?;
+                    return self.compile(&form, tail);
+                }
                 "and" => return self.compile_and_or(&args, tail, true),
                 "or" => return self.compile_and_or(&args, tail, false),
                 "cond" => return self.compile_cond(&args, tail),
                 "when" => return self.compile_when(&args, tail, true),
                 "unless" => return self.compile_when(&args, tail, false),
-                "loop" => return self.compile_loop(&args, tail),
+                "loop" => {
+                    let args = patterns::rewrite_bindings("loop", &args)?.unwrap_or(args);
+                    return self.compile_loop(&args, tail);
+                }
                 "recur" => return self.compile_recur(&args, tail),
                 "try" => return self.compile_try(&args, tail),
                 "call/ec" => return self.compile_call_ec(&args, tail),
@@ -672,6 +686,9 @@ impl<'a> Compiler<'a> {
     fn compile_lambda(&mut self, params: &Value, body: &List, name: Option<Symbol>) -> Result<(), Error> {
         if body.is_empty() {
             return Err(syntax_error("lambda", "expected a body"));
+        }
+        if let Some((params, body)) = patterns::rewrite_params(params, body)? {
+            return self.compile_lambda(&params, &body, name);
         }
         let (names, rest) = parse_params(params)?;
         let mut f = FunctionState::new(name);
@@ -700,11 +717,17 @@ impl<'a> Compiler<'a> {
         let expanded = self.expand_head(form)?;
         if let Value::List(l) = &expanded {
             if let Some(head) = l.first() {
-                if self.is_special(head).is_some_and(|s| &*s.name() == "begin") {
+                let special = self.is_special(head).map(|s| s.name());
+                if special.as_deref() == Some("begin") {
                     for inner in l.rest().iter() {
                         self.expand_body_form(inner, out)?;
                     }
                     return Ok(());
+                }
+                let rest = l.rest();
+                if special.as_deref() == Some("define") && rest.first().is_some_and(patterns::is_pattern) {
+                    let rewritten = patterns::rewrite_define(rest.first().unwrap(), &rest.rest())?;
+                    return self.expand_body_form(&rewritten, out);
                 }
             }
         }
@@ -1125,6 +1148,10 @@ impl<'a> Compiler<'a> {
                 };
                 self.compile_lambda(&Value::List(signature.rest()), &body, Some(*name))?;
                 *name
+            }
+            pattern if patterns::is_pattern(pattern) => {
+                let form = patterns::rewrite_define(pattern, &body)?;
+                return self.compile(&form, tail);
             }
             other => return Err(syntax_error("define", &format!("cannot define {other}"))),
         };
