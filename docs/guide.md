@@ -44,7 +44,10 @@ Ctrl+H, and grows the selection to the enclosing form with Ctrl+Shift+Up.
 An Outline tab lists the file's definitions, the menus at the top hold
 every action with its shortcut, and Ctrl+Shift+P opens a command palette
 that runs any of them by name; typing a colon and a number there jumps to
-that line.
+that line. The data pane sorts by a column header, filters rows, copies
+rows, exports a table as CSV, and plots a column's histogram from its
+header; the console finds text, copies any line, and saves its transcript
+as Markdown; and a Watch tab keeps expressions evaluated after every run.
 
 ## Expressions
 

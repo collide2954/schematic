@@ -101,7 +101,12 @@ values, and functions, sharing its pane with Files, Project, and Outline
 tabs; a data grid with numbers right-aligned; and a plots pane that walks
 through the session's charts, shows values on hover, and saves them as SVG.
 File, Edit, View, Run, and Help menus hold every action with its shortcut,
-and Ctrl+Shift+P opens a command palette that runs any of them by name.
+and Ctrl+Shift+P opens a command palette that runs any of them by name. The
+data grid sorts by a column, filters rows, copies rows as text, exports a
+table as CSV, and shows column statistics and histograms; the console has
+find, one-click copy, and transcripts saved and loaded as Markdown; a Watch
+tab re-evaluates expressions after every run; the interpreter can be
+restarted; and File has a New project dialog.
 A Help tab renders the guide and the reference with search, F1 looks up
 the name under the cursor, and a Project tab creates a project in the open
 folder, adds and removes packages, and restores them. The type checker runs
