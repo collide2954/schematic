@@ -105,6 +105,21 @@
 (check "match map" "3 points" (shape-name {:points [1 2 3]}))
 (check "match else" "something else" (shape-name 42))
 
+;; Charts
+(define units (bar-chart ["Oslo" "Rome" "Bern"] [42 17 5] {:title "Units"}))
+(check "plot?" true (plot? units))
+(check "bar text"
+       (str "Units\nOslo " (string-repeat "█" 40) " 42\nRome " (string-repeat "█" 16) " 17\nBern " (string-repeat "█" 5) " 5")
+       (str units))
+(define shop (table {:city ["Oslo" "Oslo" "Rome"]
+                     :year [2020 2021 2021]
+                     :units [12 30 7]
+                     :when [#2024-01-01 #2024-02-01 #2024-03-01]}))
+(check "grouped bars" true (plot? (bar-chart shop :city :units {:by :year})))
+(check "line over dates" true (string-contains? (str (line-chart shop :when :units)) "2024-01-01"))
+(check "histogram" true (string-starts-with? (str (histogram (:units shop) {:bins 2})) "7–18.5"))
+(check "svg" true (string-starts-with? (to-svg (scatter shop :year :units)) "<svg"))
+
 ;; Arrays
 (define prices #[10 20 30 nil])
 (check "array-type" :int (array-type prices))

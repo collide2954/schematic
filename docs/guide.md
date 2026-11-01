@@ -448,6 +448,32 @@ Join two tables on a shared column name:
 (read-csv "sales.csv")
 ```
 
+## Charts
+
+A chart is a value too. Printing one in the terminal draws it with text,
+Studio shows it in its Plots pane, and `save-plot` writes an SVG file:
+
+```scheme
+(bar-chart ["Oslo" "Rome" "Bern"] [42 17 5] {:title "Units"})
+; Units
+; Oslo ████████████████████████████████████████ 42
+; Rome ████████████████ 17
+; Bern █████ 5
+
+(define shop (table {:city ["Oslo" "Oslo" "Rome"]
+                     :year [2020 2021 2021]
+                     :units [12 30 7]
+                     :when [#2024-01-01 #2024-02-01 #2024-03-01]}))
+(bar-chart shop :city :units {:by :year})   ; grouped bars, one colour per year
+(line-chart shop :when :units)              ; dates along the x axis
+(histogram (:units shop) {:bins 2})
+(save-plot (scatter shop :year :units) "units.svg")
+```
+
+`bar-chart`, `line-chart`, and `scatter` take a table with two column
+keywords, or two plain collections. Missing values are skipped, and the
+options map accepts `:title`, `:x-label`, `:y-label`, and `:by`.
+
 ## When things go wrong
 
 Errors carry a map with `:kind` and `:message`, and `try` catches them:

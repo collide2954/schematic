@@ -244,6 +244,22 @@ array of strings, so a text column turns into a date column in one call.
 | `(newline)` | a line break |
 | `(exit [code])` | stop the program |
 
+## Charts
+
+| Function | Description |
+|---|---|
+| `(bar-chart data x y [opts])` | one bar per category in `x`; `data` is a table with two column keywords, or `x` and `y` are two collections |
+| `(line-chart data x y [opts])` | points joined in `x` order; `x` may hold numbers or dates |
+| `(scatter data x y [opts])` | points |
+| `(histogram data [:col] [opts])` | counts of numbers in equal-width bins, ten unless `:bins` says otherwise |
+| `(plot? x)` | test |
+| `(to-svg plot)`, `(save-plot plot path)` | the chart as a 640 by 400 SVG document, as a string or written to a file |
+
+Options are a map with `:title`, `:x-label`, `:y-label`, `:by` (a column
+whose values split the rows into series), and `:bins`. A chart is a value:
+printing it draws a text version, Schematic Studio shows it in the Plots
+pane, and missing values are left out.
+
 ## Errors
 
 | Function | Description |

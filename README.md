@@ -58,9 +58,11 @@ Early development. Working today:
 - Tables with `select`, `where`, `distinct`, `order-by`, `group-by`,
   `aggregate`, `window`, `pivot`, `unpivot`, `join`, `describe`, row
   appending, and CSV reading and writing
+- Charts: bar, line, scatter, and histogram as values that print as text,
+  save as SVG, and show in Studio's Plots pane
 - A REPL and file runner
 
-Next up: plotting-friendly output and more performance work.
+Next up: more performance work and richer charts.
 
 ## Running
 
@@ -81,8 +83,9 @@ Schematic Studio is a desktop workbench in the spirit of RStudio, built with
 Iced. Four resizable cards sit on a canvas: a script editor with syntax
 highlighting and bracket matching, a console with history, an environment
 pane that groups everything you have defined into data, values, and
-functions, and a data viewer that shows tables, arrays, and maps as a grid
-with numbers right-aligned. It has its own light and dark themes and bundles
+functions, a data viewer that shows tables, arrays, and maps as a grid
+with numbers right-aligned, and a plots pane that draws charts and saves
+them as SVG. It has its own light and dark themes and bundles
 the Inter and JetBrains Mono fonts, so it looks the same everywhere. The
 interpreter runs on its own thread, so the window stays responsive and a
 runaway loop can be stopped.
