@@ -119,6 +119,25 @@ fn rounded(radius: f32) -> Border {
     Border { radius: radius.into(), ..Border::default() }
 }
 
+pub const UI: f32 = 12.5;
+pub const META: f32 = 12.0;
+pub const FINE: f32 = 11.5;
+pub const GLYPH: f32 = 14.0;
+pub const CODE: f32 = 13.5;
+pub const CONSOLE: f32 = 13.0;
+pub const MONO: f32 = 12.5;
+pub const CONTROL: [u16; 2] = [3, 8];
+pub const TOOL: [u16; 2] = [4, 8];
+pub const FIELD_PAD: [u16; 2] = [4, 8];
+pub const ROW: [u16; 2] = [3, 12];
+pub const ITEM: [u16; 2] = [5, 12];
+pub const HEAD: [u16; 2] = [6, 12];
+pub const BAR: [u16; 2] = [6, 12];
+pub const CELL: [u16; 2] = [2, 4];
+pub const GLYPH_PAD: [u16; 2] = [0, 8];
+pub const FIELD: f32 = 240.0;
+pub const FIELD_SMALL: f32 = 160.0;
+
 fn filled(color: Color) -> container::Style {
     container::Style { background: Some(color.into()), ..container::Style::default() }
 }
@@ -227,6 +246,10 @@ pub fn popup(theme: &Theme) -> container::Style {
         blur_radius: 12.0,
     };
     container::Style { border: Border { color: t.line, width: 1.0, radius: 6.0.into() }, shadow, ..filled(t.surface) }
+}
+
+pub fn cell(selected: bool) -> impl Fn(&Theme) -> container::Style {
+    move |theme| if selected { filled(fade(tones(theme).accent, 0.12)) } else { container::Style::default() }
 }
 
 pub fn code_block(theme: &Theme) -> container::Style {
