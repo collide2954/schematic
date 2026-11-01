@@ -122,7 +122,13 @@ Start page lists recent files and projects. Files dropped on the window
 open, files changed on disk reload (or say so, when they have unsaved
 edits), and saving keeps the previous version in a backups folder. Plots
 zoom with the wheel, pan by dragging, show a crosshair, copy as SVG, and
-line up as thumbnails when there are several. It has light, dark, warm,
+line up as thumbnails when there are several. Notebooks are `.scm` files
+with `;; %%` cell markers (`;; %% text` for Markdown cells): Studio shows
+them as cells that run one at a time, keeps each cell's output beneath it
+and in a `.scm.out` sidecar, and exports them as HTML or Markdown, while the
+CLI runs them as plain scripts. File → Import CSV loads a file into a
+table, and the Environment tab offers Describe, Watch, and Copy name for
+the selected binding. It has light, dark, warm,
 and high-contrast themes and bundles the Inter and JetBrains Mono fonts,
 so it looks the same everywhere. The interpreter runs on its own thread,
 so the window stays responsive and a runaway loop can be stopped.

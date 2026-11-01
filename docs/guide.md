@@ -53,6 +53,17 @@ sessions; Ctrl+, opens the Settings tab, Ctrl+= and Ctrl+- resize the code,
 a Start page lists recent files and projects, files changed on disk are
 reloaded, and plots zoom with the wheel, pan by dragging, and copy as SVG.
 
+A notebook is an ordinary `.scm` file whose cells are separated by `;; %%`
+lines; a cell that starts with `;; %% text` holds Markdown in comment lines.
+Studio opens such a file as cells: Ctrl+Enter runs the cell under the
+cursor, Shift+Enter runs it and moves on, each cell keeps its printed text,
+results, errors, and charts beneath it, and those outputs are saved next to
+the file in `name.scm.out`. File → New notebook starts one, File → Export
+notebook writes it as an HTML page or Markdown, and `schematic run` still
+runs the whole file top to bottom, because the markers are comments. File →
+Import CSV reads a file into a table named after it, and the Environment
+tab offers Describe, Watch, and Copy name for whatever is selected.
+
 ## Expressions
 
 Everything is an expression written in parentheses with the operation first:
