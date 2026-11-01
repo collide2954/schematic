@@ -16,6 +16,7 @@ pub enum Kind {
     Bracket(u8),
     Match,
     Problem,
+    Found,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -29,6 +30,7 @@ pub struct LineState {
 pub struct Marks {
     pub pair: Option<[(usize, usize); 2]>,
     pub problems: Vec<(usize, Range<usize>)>,
+    pub found: Vec<(usize, Range<usize>)>,
 }
 
 fn overlay(tokens: &mut Vec<(Range<usize>, Kind)>, range: Range<usize>, kind: Kind) {
@@ -245,10 +247,11 @@ impl Highlighter for Schematic {
                 }
             }
         }
-        for (problem_line, range) in &self.marks.problems {
+        let overlays = self.marks.found.iter().map(|m| (m, Kind::Found)).chain(self.marks.problems.iter().map(|m| (m, Kind::Problem)));
+        for ((marked_line, range), kind) in overlays {
             let range = range.start.min(line.len())..range.end.min(line.len());
-            if *problem_line == self.current && !range.is_empty() {
-                overlay(&mut out, range, Kind::Problem);
+            if *marked_line == self.current && !range.is_empty() {
+                overlay(&mut out, range, kind);
             }
         }
         self.current += 1;
@@ -277,6 +280,7 @@ pub fn format(kind: &Kind, theme: &Theme) -> Format<Font> {
         Kind::Bracket(depth) => (t.brackets[*depth as usize % 3], None),
         Kind::Match => (t.accent, Some(fonts::MONO_BOLD)),
         Kind::Problem => (t.danger, Some(fonts::MONO_BOLD)),
+        Kind::Found => (t.warning, Some(fonts::MONO_BOLD)),
     };
     Format { color: Some(color), font }
 }
@@ -369,7 +373,7 @@ mod tests {
 
     #[test]
     fn marked_brackets_highlight_as_a_match() {
-        let marks = Marks { pair: Some([(0, 3), (1, 5)]), problems: Vec::new() };
+        let marks = Marks { pair: Some([(0, 3), (1, 5)]), problems: Vec::new(), found: Vec::new() };
         let mut h = Schematic::new(&marks);
         assert_eq!(h.highlight_line("(a #[1").collect::<Vec<_>>(), [(0..1, Kind::Bracket(0)), (3..5, Kind::Match), (5..6, Kind::Number)]);
         assert_eq!(h.highlight_line("   2])").collect::<Vec<_>>(), [(3..4, Kind::Number), (4..5, Kind::Bracket(1)), (5..6, Kind::Match)]);
@@ -380,7 +384,7 @@ mod tests {
 
     #[test]
     fn problems_overlay_the_tokens_on_their_line() {
-        let marks = Marks { pair: None, problems: vec![(0, 15..17), (1, 1..3), (1, 40..50)] };
+        let marks = Marks { pair: None, problems: vec![(0, 15..17), (1, 1..3), (1, 40..50)], found: Vec::new() };
         let mut h = Schematic::new(&marks);
         assert_eq!(
             h.highlight_line("(string-upcase 42)").collect::<Vec<_>>(),

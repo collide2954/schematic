@@ -1,5 +1,194 @@
 use std::ops::Range;
 
+use crate::highlight::SPECIALS;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Context {
+    pub before: Option<char>,
+    pub after: Option<char>,
+    pub in_string: bool,
+    pub in_comment: bool,
+}
+
+struct Scan {
+    openers: Vec<usize>,
+    in_string: bool,
+    in_comment: bool,
+}
+
+fn scan(text: &str, offset: usize) -> Scan {
+    let bytes = text.as_bytes();
+    let end = offset.min(bytes.len());
+    let mut scan = Scan { openers: Vec::new(), in_string: false, in_comment: false };
+    let mut i = 0;
+    while i < end {
+        match bytes[i] {
+            b';' => match text[i..].find('\n') {
+                Some(n) if i + n < end => i += n + 1,
+                _ => {
+                    scan.in_comment = true;
+                    i = end;
+                }
+            },
+            b'#' if bytes.get(i + 1) == Some(&b'|') => match text[i + 2..].find("|#") {
+                Some(n) if i + 4 + n <= end => i += 4 + n,
+                _ => {
+                    scan.in_comment = true;
+                    i = end;
+                }
+            },
+            b'"' => {
+                let mut j = i + 1;
+                loop {
+                    if j >= end {
+                        scan.in_string = true;
+                        i = end;
+                        break;
+                    }
+                    match bytes[j] {
+                        b'\\' => j += 2,
+                        b'"' => {
+                            i = j + 1;
+                            break;
+                        }
+                        _ => j += 1,
+                    }
+                }
+            }
+            b'(' | b'[' | b'{' => {
+                scan.openers.push(i);
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                scan.openers.pop();
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    scan
+}
+
+pub fn context_at(text: &str, offset: usize) -> Context {
+    let offset = offset.min(text.len());
+    let scan = scan(text, offset);
+    Context {
+        before: text[..offset].chars().next_back(),
+        after: text[offset..].chars().next(),
+        in_string: scan.in_string,
+        in_comment: scan.in_comment,
+    }
+}
+
+fn column_of(text: &str, index: usize) -> usize {
+    let line_start = text[..index].rfind('\n').map_or(0, |n| n + 1);
+    text[line_start..index].chars().count()
+}
+
+fn is_token_end(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';')
+}
+
+pub fn indent_for(text: &str, offset: usize) -> usize {
+    let offset = offset.min(text.len());
+    let Some(&open) = scan(text, offset).openers.last() else { return 0 };
+    let column = column_of(text, open);
+    if text.as_bytes()[open] != b'(' {
+        return column + 1;
+    }
+    let line = text[open + 1..offset].split('\n').next().unwrap_or("");
+    let trimmed = line.trim_start();
+    let head_len = trimmed.find(is_token_end).unwrap_or(trimmed.len());
+    let head = &trimmed[..head_len];
+    if head.is_empty() {
+        return column + 1;
+    }
+    if SPECIALS.contains(&head) || head == "ns" {
+        return column + 2;
+    }
+    let after_head = trimmed[head_len..].trim_start();
+    if after_head.is_empty() || after_head.starts_with(';') {
+        return column + 1;
+    }
+    column + 1 + line[..line.len() - after_head.len()].chars().count()
+}
+
+pub fn reindent(text: &str, lines: Option<Range<usize>>) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let body = line.trim_start();
+        let state = scan(&out, out.len());
+        let chosen = lines.as_ref().is_none_or(|range| range.contains(&i));
+        if !chosen || state.in_string || state.in_comment {
+            out.push_str(line);
+            continue;
+        }
+        if body.is_empty() {
+            continue;
+        }
+        let indent = indent_for(&out, out.len());
+        out.extend(std::iter::repeat_n(' ', indent));
+        out.push_str(body);
+    }
+    out
+}
+
+pub fn find_all(text: &str, query: &str, case: bool) -> Vec<(usize, usize)> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    if case {
+        return text.match_indices(query).map(|(i, found)| (i, i + found.len())).collect();
+    }
+    let fold = |c: char| c.to_lowercase().next().unwrap_or(c);
+    let hay: Vec<(usize, char)> = text.char_indices().map(|(i, c)| (i, fold(c))).collect();
+    let needle: Vec<char> = query.chars().map(fold).collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        if hay[i..i + needle.len()].iter().zip(&needle).all(|((_, a), b)| a == b) {
+            let start = hay[i].0;
+            let last = hay[i + needle.len() - 1].0;
+            out.push((start, last + text[last..].chars().next().map_or(1, char::len_utf8)));
+            i += needle.len();
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+pub fn toggle_comment(text: &str, first: usize, last: usize) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let top = lines.len().saturating_sub(1);
+    let targets: Vec<usize> = (first.min(top)..=last.min(top)).filter(|&i| !lines[i].trim().is_empty()).collect();
+    if targets.is_empty() {
+        return text.to_string();
+    }
+    let lead = |line: &str| line.len() - line.trim_start().len();
+    let commented = targets.iter().all(|&i| lines[i].trim_start().starts_with(';'));
+    let rewritten: Vec<String> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            if !targets.contains(&i) {
+                return line.to_string();
+            }
+            let at = lead(line);
+            if commented {
+                let body = line[at..].trim_start_matches(';');
+                format!("{}{}", &line[..at], body.strip_prefix(' ').unwrap_or(body))
+            } else {
+                format!("{};; {}", &line[..at], &line[at..])
+            }
+        })
+        .collect();
+    rewritten.join("\n")
+}
+
 fn finish(forms: &mut Vec<Range<usize>>, start: &mut Option<usize>, end: usize) {
     if let Some(s) = start.take() {
         forms.push(s..end);
@@ -267,6 +456,66 @@ mod tests {
         assert_eq!(symbol_at("'é x", 2), None);
         assert_eq!(symbol_at("", 0), None);
         assert_eq!(symbol_at("ab", 9), Some("ab"));
+    }
+
+    #[test]
+    fn indentation_follows_the_innermost_open_form() {
+        assert_eq!(indent_for("x", 1), 0);
+        assert_eq!(indent_for("(define (f x)", 13), 2);
+        assert_eq!(indent_for("(when c\n", 8), 2);
+        assert_eq!(indent_for("(+ 1", 4), 3);
+        assert_eq!(indent_for("(foo", 4), 1);
+        assert_eq!(indent_for("(foo ; (\n", 9), 1);
+        assert_eq!(indent_for("[1 2", 4), 1);
+        assert_eq!(indent_for("{:a 1", 5), 1);
+        assert_eq!(indent_for("(let ((x 1))\n  (bar", 19), 3);
+        assert_eq!(indent_for("(f (g 1)\n", 9), 3);
+        assert_eq!(indent_for("(define x \"(\"\n", 14), 2);
+        assert_eq!(indent_for("(f a\n   b)", 4), 3);
+        assert_eq!(indent_for("((make-adder 1)\n", 16), 1);
+        assert_eq!(indent_for("(ns app\n", 8), 2);
+        assert_eq!(indent_for("(f \"é\" 1\n", 10), 3);
+    }
+
+    #[test]
+    fn reindenting_rewrites_leading_whitespace_only() {
+        let messy = "(define (f x)\n(let ((y 1))\n      (+ x\ny)))\n\n   \n(define s \"a\n   b\")\n  x";
+        let tidy = "(define (f x)\n  (let ((y 1))\n    (+ x\n       y)))\n\n\n(define s \"a\n   b\")\nx";
+        assert_eq!(reindent(messy, None), tidy);
+        assert_eq!(reindent(messy, Some(2..3)), "(define (f x)\n(let ((y 1))\n  (+ x\ny)))\n\n   \n(define s \"a\n   b\")\n  x");
+        assert_eq!(reindent("#| a\n   b |#\n  (f)", None), "#| a\n   b |#\n(f)");
+    }
+
+    #[test]
+    fn comment_toggling_adds_and_removes_semicolons() {
+        assert_eq!(toggle_comment("(a)\n  (b)\n\n(c)", 0, 1), ";; (a)\n  ;; (b)\n\n(c)");
+        assert_eq!(toggle_comment(";; (a)\n  ;; (b)\n\n(c)", 0, 2), "(a)\n  (b)\n\n(c)");
+        assert_eq!(toggle_comment("; x\n;y", 0, 1), "x\ny");
+        assert_eq!(toggle_comment("  (a)\n(b)", 0, 1), "  ;; (a)\n;; (b)");
+        assert_eq!(toggle_comment("", 0, 0), "");
+        assert_eq!(toggle_comment("(a)", 5, 9), ";; (a)");
+    }
+
+    #[test]
+    fn finding_ignores_case_unless_asked() {
+        assert_eq!(find_all("aAa", "a", false), [(0, 1), (1, 2), (2, 3)]);
+        assert_eq!(find_all("aAa", "a", true), [(0, 1), (2, 3)]);
+        assert_eq!(find_all("ÉcolE école", "école", false), [(0, 6), (7, 13)]);
+        assert_eq!(find_all("abc", "", true), []);
+        assert_eq!(find_all("aaa", "aa", true), [(0, 2)]);
+        assert_eq!(find_all("aaa", "aa", false), [(0, 2)]);
+    }
+
+    #[test]
+    fn the_context_knows_strings_comments_and_neighbours() {
+        assert_eq!(context_at("(a)", 1), Context { before: Some('('), after: Some('a'), in_string: false, in_comment: false });
+        assert_eq!(context_at("\"ab", 2), Context { before: Some('a'), after: Some('b'), in_string: true, in_comment: false });
+        assert_eq!(context_at("\"a\\\"b\" c", 7), Context { before: Some(' '), after: Some('c'), in_string: false, in_comment: false });
+        assert!(context_at("x ; note", 5).in_comment);
+        assert!(!context_at("x ; note\ny", 9).in_comment);
+        assert!(context_at("#| a", 4).in_comment);
+        assert_eq!(context_at("", 0), Context::default());
+        assert_eq!(context_at("é", 2).before, Some('é'));
     }
 
     #[test]
