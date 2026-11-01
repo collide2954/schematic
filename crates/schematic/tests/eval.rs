@@ -38,6 +38,21 @@ fn eval(src: &str) -> String {
 }
 
 #[test]
+fn type_annotations_are_ignored_when_running() {
+    assert_eq!(eval("(define (area [r : float]) : float (* r r)) (area 2.0)"), "4.0");
+    assert_eq!(eval("((lambda ([x : int] [y : int]) : int (+ x y)) 1 2)"), "3");
+    assert_eq!(eval("(define total : int 5) total"), "5");
+    assert_eq!(eval("(let (([n : int] 2) ([s : string] \"ab\")) (string-repeat s n))"), "\"abab\"");
+    assert_eq!(eval("(let* (([n : int] 2) (m (* n n))) m)"), "4");
+    assert_eq!(eval("(loop (([i : int] 0)) (if (= i 3) i (recur (+ i 1))))"), "3");
+    assert_eq!(eval("(let next (([i : int] 0) (acc [])) (if (= i 2) acc (next (+ i 1) (conj acc i))))"), "[0 1]");
+    assert_eq!(eval("(match 5 ([n : int] (* n 2)))"), "10");
+    assert_eq!(eval("(define (f [[a b] : [int]]) (+ a b)) (f [1 2])"), "3");
+    assert_eq!(eval("(define [p : int] 7) p"), "7");
+    assert_eq!(eval("(define (g) : (or int nil) nil) (g)"), "nil");
+}
+
+#[test]
 fn user_globals_are_listed_in_definition_order() {
     let mut interp = Interpreter::new();
     assert!(interp.user_globals().next().is_none());

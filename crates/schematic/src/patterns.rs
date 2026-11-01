@@ -46,6 +46,29 @@ pub fn is_pattern(value: &Value) -> bool {
     matches!(value, Value::Vector(_) | Value::Map(_))
 }
 
+pub fn annotated(value: &Value) -> Option<(&Value, &Value)> {
+    let Value::Vector(items) = value else { return None };
+    let mut items = items.iter();
+    match (items.next(), items.next(), items.next(), items.next()) {
+        (Some(binder), Some(Value::Symbol(colon)), Some(kind), None) if &*colon.root().name() == ":" => Some((binder, kind)),
+        _ => None,
+    }
+}
+
+pub fn binder(value: &Value) -> &Value {
+    annotated(value).map_or(value, |(inner, _)| inner)
+}
+
+pub fn without_return_type(body: &List) -> Result<List, Error> {
+    if !matches!(body.first(), Some(Value::Symbol(s)) if &*s.root().name() == ":") {
+        return Ok(body.clone());
+    }
+    if body.len() < 3 {
+        return Err(syntax_error("define", "expected a type and a body after :"));
+    }
+    Ok(body.rest().rest())
+}
+
 fn quoted(form: &Value) -> Option<&Value> {
     let Value::List(l) = form else { return None };
     (l.len() == 2 && is_symbol(l.first()?, "quote")).then(|| l.iter().nth(1)).flatten()
@@ -232,7 +255,7 @@ fn parse_map(form: &str, map: &Map) -> Result<MapPattern, Error> {
 }
 
 fn bind_sub(form: &str, sub: &Value, init: Value, mode: Mode, out: &mut Bindings) -> Result<(), Error> {
-    match sub {
+    match binder(sub) {
         Value::Symbol(s) if &*s.name() == "_" => Ok(()),
         Value::Symbol(s) => {
             out.push((*s, init));
@@ -249,7 +272,7 @@ fn bind_sub(form: &str, sub: &Value, init: Value, mode: Mode, out: &mut Bindings
 }
 
 fn destructure(form: &str, pattern: &Value, source: &Value, mode: Mode, out: &mut Bindings) -> Result<(), Error> {
-    match pattern {
+    match binder(pattern) {
         Value::Symbol(s) => {
             if &*s.name() != "_" {
                 out.push((*s, source.clone()));
@@ -283,7 +306,7 @@ fn destructure(form: &str, pattern: &Value, source: &Value, mode: Mode, out: &mu
 }
 
 fn tests(form: &str, pattern: &Value, source: &Value, out: &mut Vec<Value>) -> Result<(), Error> {
-    match pattern {
+    match binder(pattern) {
         Value::Symbol(_) => {}
         Value::Vector(items) => {
             let seq = parse_seq(form, items)?;
@@ -334,7 +357,7 @@ fn body_form(forms: &[Value]) -> Value {
 
 pub fn names(pattern: &Value) -> Vec<Symbol> {
     fn collect(pattern: &Value, out: &mut Vec<Symbol>) {
-        match pattern {
+        match binder(pattern) {
             Value::Symbol(s) if !matches!(&*s.name(), "&" | "_") => out.push(*s),
             Value::Vector(items) => items.iter().for_each(|item| collect(item, out)),
             Value::Map(map) => {
@@ -378,6 +401,9 @@ pub fn rewrite_bindings(form: &str, args: &List) -> Result<Option<List>, Error> 
             _ => Vec::new(),
         };
         match pair.as_slice() {
+            [pattern, init] if matches!(binder(pattern), Value::Symbol(_)) => {
+                outer.push(list([binder(pattern).clone(), (*init).clone()]));
+            }
             [pattern, init] if is_pattern(pattern) => {
                 let temp = fresh("p");
                 outer.push(list([temp.clone(), (*init).clone()]));
@@ -410,13 +436,16 @@ pub fn rewrite_params(params: &Value, body: &List) -> Result<Option<(Value, List
     let mut renamed = Vec::new();
     let mut inner = Vec::new();
     for item in items.iter() {
-        if is_pattern(item) {
+        if is_pattern(binder(item)) {
             let temp = fresh("p");
             renamed.push(temp.clone());
             destructure("lambda", item, &temp, Mode::Bind, &mut inner)?;
         } else {
-            renamed.push(item.clone());
+            renamed.push(binder(item).clone());
         }
+    }
+    if inner.is_empty() {
+        return Ok(Some((Value::list(renamed), body.clone())));
     }
     let body = list([sym("let*"), binding_list(&inner)].into_iter().chain(body.iter().cloned()));
     Ok(Some((Value::list(renamed), std::iter::once(body).collect())))

@@ -695,6 +695,7 @@ impl<'a> Compiler<'a> {
     }
 
     fn compile_lambda(&mut self, params: &Value, body: &List, name: Option<Symbol>) -> Result<(), Error> {
+        let body = &patterns::without_return_type(body)?;
         if body.is_empty() {
             return Err(syntax_error("lambda", "expected a body"));
         }
@@ -1135,6 +1136,7 @@ impl<'a> Compiler<'a> {
             return Err(syntax_error("define", "expected a name"));
         };
         let body = args.rest();
+        let body = if matches!(target, Value::Symbol(_)) { patterns::without_return_type(&body)? } else { body };
         let defined = match target {
             Value::Symbol(name) => Some(*name),
             Value::List(signature) => match signature.first() {
