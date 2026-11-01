@@ -96,6 +96,7 @@ pub enum Side {
     Environment,
     Files,
     Project,
+    Outline,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,6 +288,7 @@ pub struct Studio {
     pub help: Option<Help>,
     pub completion: Option<Completion>,
     pub find: Option<Find>,
+    pub wrap: bool,
     pub editor_width: f32,
     pub editor_height: f32,
     pub side: Side,
@@ -390,6 +392,9 @@ pub enum Message {
     FindReplace,
     FindReplaceAll,
     FindClose,
+    ExpandSelection,
+    JumpTo(usize),
+    ToggleWrap,
 }
 
 pub fn find_id() -> Id {
@@ -637,6 +642,7 @@ impl Studio {
             help: None,
             completion: None,
             find: None,
+            wrap: false,
             editor_width: 0.0,
             editor_height: 0.0,
             side: Side::Environment,
@@ -912,6 +918,35 @@ impl Studio {
                 let doc = self.doc_mut();
                 doc.marks = marks_for(doc);
                 operation::focus(editor_text_id())
+            }
+            Message::ExpandSelection => {
+                let doc = self.doc_mut();
+                let text = doc.content.text();
+                let cursor = doc.content.cursor();
+                let a = forms::offset_of(&text, cursor.position.line, cursor.position.column);
+                let b = cursor.selection.map_or(a, |other| forms::offset_of(&text, other.line, other.column));
+                let Some(range) = forms::enclosing(&text, a.min(b), a.max(b)) else { return Task::none() };
+                let (from_line, from_column) = forms::position_of(&text, range.start);
+                let (to_line, to_column) = forms::position_of(&text, range.end);
+                let position = Position { line: to_line, column: to_column };
+                doc.content.move_to(text_editor::Cursor { position, selection: Some(Position { line: from_line, column: from_column }) });
+                doc.last_edit = None;
+                doc.marks = marks_for(doc);
+                Task::none()
+            }
+            Message::JumpTo(offset) => {
+                self.tab = Tab::Doc(self.current);
+                let doc = self.doc_mut();
+                let text = doc.content.text();
+                let (line, column) = forms::position_of(&text, offset);
+                doc.content.move_to(text_editor::Cursor { position: Position { line, column }, selection: None });
+                doc.last_edit = None;
+                doc.marks = marks_for(doc);
+                Task::batch([self.follow_cursor(), operation::focus(editor_text_id())])
+            }
+            Message::ToggleWrap => {
+                self.wrap = !self.wrap;
+                Task::none()
             }
             Message::ToggleComment => {
                 let (text, cursor) = (self.doc().content.text(), self.doc().content.cursor());
@@ -1444,7 +1479,8 @@ impl Studio {
                 self.side = match n {
                     3 => Side::Environment,
                     4 => Side::Files,
-                    _ => Side::Project,
+                    5 => Side::Project,
+                    _ => Side::Outline,
                 };
                 Task::none()
             }
@@ -1829,6 +1865,29 @@ mod tests {
         assert!(studio.find.is_none() && studio.doc().marks.found.is_empty());
         let _ = studio.update(Message::Undo);
         assert_eq!(studio.doc().content.text(), "(qux 1)\n(Foo 2)\n(bar foo)\n");
+        let _ = view::view(&studio);
+    }
+
+    #[test]
+    fn the_outline_jumps_and_the_selection_expands() {
+        let mut studio = Studio::new();
+        studio.doc_mut().content = text_editor::Content::with_text("(ns app)\n\n(define (f a)\n  (+ a 1))\n");
+        let _ = studio.update(Message::ShowSide(Side::Outline));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::JumpTo(10));
+        assert_eq!(studio.doc().content.cursor().position.line, 2);
+        let _ = studio.update(Message::Edit(Action::Move(Motion::Down)));
+        let _ = studio.update(Message::Edit(Action::Move(Motion::Right)));
+        let _ = studio.update(Message::Edit(Action::Move(Motion::Right)));
+        let _ = studio.update(Message::Edit(Action::Move(Motion::Right)));
+        let _ = studio.update(Message::ExpandSelection);
+        assert_eq!(studio.doc().content.selection().as_deref(), Some("+"));
+        let _ = studio.update(Message::ExpandSelection);
+        assert_eq!(studio.doc().content.selection().as_deref(), Some("(+ a 1)"));
+        let _ = studio.update(Message::ExpandSelection);
+        assert_eq!(studio.doc().content.selection().as_deref(), Some("(define (f a)\n  (+ a 1))"));
+        let _ = studio.update(Message::ToggleWrap);
+        assert!(studio.wrap);
         let _ = view::view(&studio);
     }
 

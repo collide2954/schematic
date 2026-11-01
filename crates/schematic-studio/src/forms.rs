@@ -349,7 +349,7 @@ pub fn offset_of(text: &str, line: usize, column: usize) -> usize {
     text.len()
 }
 
-pub fn symbol_at(text: &str, offset: usize) -> Option<&str> {
+pub fn symbol_range_at(text: &str, offset: usize) -> Option<Range<usize>> {
     let offset = offset.min(text.len());
     if !text.is_char_boundary(offset) {
         return None;
@@ -357,7 +357,90 @@ pub fn symbol_at(text: &str, offset: usize) -> Option<&str> {
     let delimiter = |c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | '"' | ';' | ',' | '\'' | '`' | '~' | '@');
     let start = text[..offset].rfind(delimiter).map_or(0, |i| i + text[i..].chars().next().map_or(1, char::len_utf8));
     let end = text[offset..].find(delimiter).map_or(text.len(), |i| offset + i);
-    (start < end).then(|| &text[start..end])
+    (start < end).then_some(start..end)
+}
+
+pub fn symbol_at(text: &str, offset: usize) -> Option<&str> {
+    symbol_range_at(text, offset).map(|range| &text[range])
+}
+
+pub fn enclosing(text: &str, start: usize, end: usize) -> Option<Range<usize>> {
+    if start == end
+        && let Some(symbol) = symbol_range_at(text, start)
+        && (symbol.start < start || symbol.end > end) {
+            return Some(symbol);
+        }
+    let bytes = text.as_bytes();
+    let mut best: Option<Range<usize>> = None;
+    for (open, close) in bracket_pairs(text) {
+        let mut from = open;
+        while from > 0 && matches!(bytes[from - 1], b'\'' | b'`' | b'~' | b'@' | b'#') {
+            from -= 1;
+        }
+        let range = from..close + 1;
+        let around = range.start <= start && end <= range.end && (range.start < start || range.end > end);
+        if around && best.as_ref().is_none_or(|b| range.len() < b.len()) {
+            best = Some(range);
+        }
+    }
+    best
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutlineKind {
+    Namespace,
+    Function,
+    Value,
+    Macro,
+}
+
+impl OutlineKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            OutlineKind::Namespace => "ns",
+            OutlineKind::Function => "fn",
+            OutlineKind::Value => "value",
+            OutlineKind::Macro => "macro",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OutlineItem {
+    pub line: usize,
+    pub offset: usize,
+    pub label: String,
+    pub kind: OutlineKind,
+}
+
+pub fn outline(text: &str) -> Vec<OutlineItem> {
+    use schematic::Value;
+    let mut out = Vec::new();
+    for range in top_level_forms(text) {
+        let Ok(Value::List(form)) = schematic::reader::read_str(&text[range.clone()]) else { continue };
+        let items: Vec<&Value> = form.iter().collect();
+        let (Some(Value::Symbol(head)), Some(target)) = (items.first(), items.get(1)) else { continue };
+        let (label, kind) = match (&*head.name(), target) {
+            ("ns", Value::Symbol(name)) => (name.to_string(), OutlineKind::Namespace),
+            ("define-syntax", Value::Symbol(name)) => (name.to_string(), OutlineKind::Macro),
+            ("define", Value::List(signature)) => match signature.first() {
+                Some(Value::Symbol(name)) => (name.to_string(), OutlineKind::Function),
+                _ => continue,
+            },
+            ("define", Value::Symbol(name)) => {
+                let lambda = matches!(items.get(2), Some(Value::List(value)) if matches!(value.first(), Some(Value::Symbol(s)) if &*s.name() == "lambda"));
+                (name.to_string(), if lambda { OutlineKind::Function } else { OutlineKind::Value })
+            }
+            ("define", pattern) if schematic::patterns::is_pattern(pattern) => {
+                let names: Vec<String> = schematic::patterns::names(pattern).iter().map(ToString::to_string).collect();
+                (names.join(" "), OutlineKind::Value)
+            }
+            _ => continue,
+        };
+        let (line, _) = position_of(text, range.start);
+        out.push(OutlineItem { line, offset: range.start, label, kind });
+    }
+    out
 }
 
 pub fn position_of(text: &str, offset: usize) -> (usize, usize) {
@@ -494,6 +577,40 @@ mod tests {
         assert_eq!(toggle_comment("  (a)\n(b)", 0, 1), "  ;; (a)\n;; (b)");
         assert_eq!(toggle_comment("", 0, 0), "");
         assert_eq!(toggle_comment("(a)", 5, 9), ";; (a)");
+    }
+
+    #[test]
+    fn expanding_the_selection_climbs_the_forms() {
+        let src = "(a (b c) '(d))";
+        assert_eq!(enclosing(src, 4, 4), Some(4..5));
+        assert_eq!(enclosing(src, 4, 5), Some(3..8));
+        assert_eq!(enclosing(src, 3, 8), Some(0..14));
+        assert_eq!(enclosing(src, 0, 14), None);
+        assert_eq!(enclosing(src, 11, 11), Some(11..12));
+        assert_eq!(enclosing(src, 11, 12), Some(9..13));
+        assert_eq!(enclosing(src, 9, 13), Some(0..14));
+        assert_eq!(enclosing("x y", 1, 1), Some(0..1));
+        assert_eq!(enclosing("x #[1 2]", 4, 5), Some(2..8));
+        assert_eq!(enclosing("", 0, 0), None);
+    }
+
+    #[test]
+    fn outlines_list_the_top_level_definitions() {
+        let src = "(ns app)\n(define x 1)\n(define (f a) a)\n(define-syntax m (syntax-rules () ((_) 1)))\n(define [p q] [1 2])\n(f 1)\n(define double (lambda (x) x))\n(define";
+        let found = outline(src);
+        let items: Vec<(usize, usize, &str, OutlineKind)> = found.iter().map(|i| (i.line, i.offset, i.label.as_str(), i.kind)).collect();
+        assert_eq!(
+            items,
+            [
+                (0, 0, "app", OutlineKind::Namespace),
+                (1, 9, "x", OutlineKind::Value),
+                (2, 22, "f", OutlineKind::Function),
+                (3, 39, "m", OutlineKind::Macro),
+                (4, 83, "p q", OutlineKind::Value),
+                (6, 110, "double", OutlineKind::Function),
+            ]
+        );
+        assert!(outline("").is_empty());
     }
 
     #[test]

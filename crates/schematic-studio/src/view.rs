@@ -45,6 +45,7 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
                 Side::Environment => (side_tabs(studio), None, environment(studio)),
                 Side::Files => (side_tabs(studio), Some(file_controls(studio)), files(studio)),
                 Side::Project => (side_tabs(studio), Some(project_controls(studio)), project(studio)),
+                Side::Outline => (side_tabs(studio), None, outline(studio)),
             },
             PaneKind::Viewer => {
                 let grid = studio.grid.as_ref();
@@ -212,7 +213,35 @@ fn side_tabs(studio: &Studio) -> Vec<TabItem> {
         tab("Environment", Side::Environment, environment_label(studio)),
         tab("Files", Side::Files, studio.root.as_deref().map(folder_name)),
         tab("Project", Side::Project, studio.project.as_ref().map(|p| p.name.clone())),
+        tab("Outline", Side::Outline, None),
     ]
+}
+
+fn outline(studio: &Studio) -> Element<'_, Message> {
+    let items = forms::outline(&studio.doc().content.text());
+    if items.is_empty() {
+        return hint("Top-level definitions of the current file are listed here; click one to jump to it.");
+    }
+    let current = studio.doc().content.cursor().position.line;
+    let at = items.iter().rposition(|item| item.line <= current);
+    let mut list = Column::new().width(Length::Fill).padding(Padding { top: 4.0, right: 0.0, bottom: 8.0, left: 0.0 });
+    for (i, item) in items.into_iter().enumerate() {
+        let kind: TextStyle = match item.kind {
+            forms::OutlineKind::Function | forms::OutlineKind::Macro => theme::accent,
+            forms::OutlineKind::Namespace => theme::warn,
+            forms::OutlineKind::Value => theme::muted,
+        };
+        let content = row![
+            text(item.kind.label()).size(11).style(kind).width(44),
+            text(item.label).font(fonts::MONO).size(12.5).style(theme::strong),
+            space::horizontal(),
+            text(format!("{}", item.line + 1)).size(11).style(theme::faint),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center);
+        list = list.push(button(content).padding([3, 12]).width(Length::Fill).style(theme::row(at == Some(i))).on_press(Message::JumpTo(item.offset)));
+    }
+    scrollable(list).height(Length::Fill).style(theme::scroll).into()
 }
 
 fn project_controls(studio: &Studio) -> Element<'_, Message> {
@@ -434,6 +463,7 @@ fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messag
             Key::Character(c) if command && c.eq_ignore_ascii_case("y") => Some(Message::Redo),
             Key::Character(c) if command && c == "/" => Some(Message::ToggleComment),
             Key::Character(c) if command && shift && c.eq_ignore_ascii_case("f") => Some(Message::Reindent),
+            Key::Named(key::Named::ArrowUp) if command && shift => Some(Message::ExpandSelection),
             _ => None,
         };
         if let Some(message) = global {
@@ -581,7 +611,7 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
         .line_height(LineHeight::Absolute(Pixels(LINE_HEIGHT)))
         .padding(Padding { top: EDITOR_PAD, right: 12.0, bottom: EDITOR_PAD, left: 6.0 })
         .height(Length::Shrink)
-        .wrapping(text::Wrapping::None)
+        .wrapping(if studio.wrap { text::Wrapping::Word } else { text::Wrapping::None })
         .style(theme::editor)
         .highlight_with::<highlight::Schematic>(doc.marks.clone(), highlight::format)
         .key_binding(editor_binding(studio));
