@@ -866,7 +866,7 @@ impl Studio {
 
     pub fn with_settings(settings: Settings) -> Studio {
         let layout = settings.layout.as_ref().map(settings::configuration).unwrap_or_else(default_layout);
-        let mut studio = Studio {
+        Studio {
             panes: pane_grid::State::with_configuration(layout),
             docs: vec![Document::untitled()],
             current: 0,
@@ -922,9 +922,7 @@ impl Studio {
             running: false,
             theme: theme::named(&settings.theme),
             status: "Starting the interpreter".to_string(),
-        };
-        studio.note("Welcome to Schematic Studio. Ctrl+Enter runs the form at the cursor, Ctrl+Shift+Enter runs the whole file, F1 looks up the name at the cursor.");
-        studio
+        }
     }
 
     fn boot() -> (Studio, Task<Message>) {
@@ -1397,7 +1395,7 @@ impl Studio {
                 Task::none()
             }
             Message::About => {
-                self.note(&format!("Schematic Studio {}. A workbench for Schematic: {WEBSITE}", env!("CARGO_PKG_VERSION")));
+                self.note(&format!("Schematic Studio {} · {WEBSITE}", env!("CARGO_PKG_VERSION")));
                 operation::snap_to(console_id(), RelativeOffset::END)
             }
             Message::Quit => {
@@ -1955,7 +1953,7 @@ impl Studio {
                 self.interrupt = Some(flag);
                 self.namespace = "user".to_string();
                 self.status = "Ready".to_string();
-                self.note("Interpreter restarted; every definition is gone.");
+                self.note("Interpreter restarted.");
                 operation::snap_to(console_id(), RelativeOffset::END)
             }
             Event::Finished(elapsed) => {
@@ -2802,7 +2800,7 @@ mod tests {
         let _ = studio.on_event(Event::Output("a".into()));
         let _ = studio.on_event(Event::Output("b\n".into()));
         let _ = studio.on_event(Event::Result("1".into()));
-        let texts: Vec<&str> = studio.console.iter().skip(1).map(|l| l.text.as_str()).collect();
+        let texts: Vec<&str> = studio.console.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, ["ab\n", "1"]);
     }
 

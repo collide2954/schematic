@@ -60,10 +60,10 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
         };
         let maximized = studio.panes.maximized().is_some();
         let fold = tip(
-            small(if maximized { "⤡" } else { "⤢" }, Some(if maximized { Message::RestorePanes } else { Message::Maximize(*kind) })),
-            if maximized { "Restore the layout" } else { "Maximize this pane" },
+            glyph_button(if maximized { Glyph::Shrink } else { Glyph::Expand }, Some(if maximized { Message::RestorePanes } else { Message::Maximize(*kind) })),
+            if maximized { "Restore" } else { "Maximize" },
         );
-        let hide = tip(small("–", Some(Message::TogglePane(*kind))), "Hide this pane (View menu shows it again)");
+        let hide = tip(glyph_button(Glyph::Minus, Some(Message::TogglePane(*kind))), "Hide");
         let pane_buttons = row![fold, hide].spacing(0);
         let controls: Element<'_, Message> = match controls {
             Some(controls) => row![controls, pane_buttons].spacing(6).align_y(Alignment::Center).into(),
@@ -145,7 +145,7 @@ fn dropdown(studio: &Studio, menu: Menu) -> Element<'_, Message> {
 
 fn palette_layer<'a>(studio: &'a Studio, palette: &'a Palette) -> Element<'a, Message> {
     let found = commands::matching(studio, &palette.query);
-    let input = text_input("Type a command, or : and a line number", &palette.query)
+    let input = text_input("Command, or :line", &palette.query)
         .id(palette_id())
         .on_input(Message::PaletteQuery)
         .on_submit(Message::PaletteRun(None))
@@ -194,7 +194,7 @@ fn strip<'a>(tabs: Vec<TabItem>, controls: Option<Element<'a, Message>>) -> Elem
             .on_press_maybe(tab.select);
         let mut inner = Row::new().align_y(Alignment::Center).height(Length::Fill).push(pick);
         if let Some(close) = tab.close {
-            let cross = button(text("×").size(theme::GLYPH).font(fonts::UI_MEDIUM)).padding([0, 6]).style(theme::ghost).on_press(close);
+            let cross = button(icon(Glyph::Close, Ink::Muted)).padding([0, 4]).style(theme::ghost).on_press(close);
             inner = inner.push(container(cross).padding(Padding { top: 0.0, right: 4.0, bottom: 0.0, left: 0.0 }));
         }
         bar = bar.push(container(inner).height(Length::Fill).style(theme::tab_shell(tab.active)));
@@ -208,6 +208,10 @@ fn strip<'a>(tabs: Vec<TabItem>, controls: Option<Element<'a, Message>>) -> Elem
 
 fn small<'a>(label: &'a str, message: Option<Message>) -> Element<'a, Message> {
     button(text(label).font(fonts::UI_MEDIUM).size(theme::META)).padding(theme::CONTROL).style(theme::ghost).on_press_maybe(message).into()
+}
+
+fn glyph_button<'a>(glyph: Glyph, message: Option<Message>) -> Element<'a, Message> {
+    button(icon(glyph, Ink::Muted)).padding([3, 5]).style(theme::ghost).on_press_maybe(message).into()
 }
 
 fn tip<'a>(content: impl Into<Element<'a, Message>>, hint: &'a str) -> Element<'a, Message> {
@@ -344,7 +348,7 @@ fn console_controls(studio: &Studio) -> Element<'_, Message> {
                 .padding(theme::CONTROL)
                 .style(theme::field)
                 .width(theme::FIELD_SMALL);
-            row![field, small("×", Some(Message::ConsoleFind(false)))].spacing(2).align_y(Alignment::Center).into()
+            row![field, glyph_button(Glyph::Close, Some(Message::ConsoleFind(false)))].spacing(2).align_y(Alignment::Center).into()
         }
         None => small("Find", Some(Message::ConsoleFind(true))),
     };
@@ -354,7 +358,7 @@ fn console_controls(studio: &Studio) -> Element<'_, Message> {
 fn outline(studio: &Studio) -> Element<'_, Message> {
     let items = forms::outline(&studio.doc().content.text());
     if items.is_empty() {
-        return hint("Top-level definitions of the current file are listed here; click one to jump to it.");
+        return hint("No definitions.");
     }
     let current = studio.doc().content.cursor().position.line;
     let at = items.iter().rposition(|item| item.line <= current);
@@ -414,12 +418,10 @@ fn naming_row<'a>(label: &'a str, placeholder: &'a str, value: &'a str) -> Eleme
 fn project(studio: &Studio) -> Element<'_, Message> {
     let mut top = Column::new().width(Length::Fill);
     if let Some(naming) = studio.naming.as_ref().filter(|n| n.kind == NamingKind::Project) {
-        top = top.push(naming_row("Project name", "a folder name, like report", &naming.text)).push(line());
+        top = top.push(naming_row("Project name", "folder name", &naming.text)).push(line());
     }
     let Some(info) = &studio.project else {
-        let mut column = top.push(hint(
-            "No project.scm in this folder or above it. A project names its packages in project.scm, pins them in project.lock, and keeps their sources in packages/.",
-        ));
+        let mut column = top.push(hint("No project.scm here or above."));
         let mut actions = row![small("New project…", Some(Message::NewProject))].spacing(2);
         if studio.root.is_some() {
             actions = actions.push(small("Create a project here", Some(Message::CreateProject)));
@@ -445,7 +447,7 @@ fn project(studio: &Studio) -> Element<'_, Message> {
         list = list.push(naming_row("Add", "name, name@version, or name ../path", &naming.text)).push(line());
     }
     if info.dependencies.is_empty() {
-        return list.push(hint("No packages yet. Add one by name from the registry, or as name ../path for a local folder.")).into();
+        return list.push(hint("No packages.")).into();
     }
     let heading = |label: &'static str| text(label).size(theme::FINE).font(fonts::UI_MEDIUM).style(theme::muted);
     let columns = row![
@@ -493,7 +495,7 @@ fn file_controls(studio: &Studio) -> Element<'_, Message> {
 fn files(studio: &Studio) -> Element<'_, Message> {
     let Some(root) = &studio.root else {
         let open = container(small("Open a folder…", Some(Message::OpenFolder))).padding(theme::GLYPH_PAD);
-        return column![hint("Browse, open, and manage the files of a folder here."), open].into();
+        return column![hint("No folder open."), open].into();
     };
     let header = row![
         text(folder_name(root)).size(theme::UI).font(fonts::UI_MEDIUM),
@@ -678,7 +680,10 @@ fn workspace(studio: &Studio) -> Element<'_, Message> {
 }
 
 fn setting<'a>(label: &'a str, note: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
-    let words = column![text(label).size(theme::UI).font(fonts::UI_MEDIUM), text(note).size(theme::FINE).style(theme::muted)].spacing(2).width(Length::Fill);
+    let mut words = Column::new().push(text(label).size(theme::UI).font(fonts::UI_MEDIUM)).spacing(2).width(Length::Fill);
+    if !note.is_empty() {
+        words = words.push(text(note).size(theme::FINE).style(theme::muted));
+    }
     row![words, control].spacing(16).align_y(Alignment::Center).into()
 }
 
@@ -714,21 +719,21 @@ fn settings_page(studio: &Studio) -> Element<'_, Message> {
     .align_y(Alignment::Center);
     let mut page = column![
         heading("Appearance"),
-        setting("Theme", "Colors for the whole window", themes.into()),
-        setting("Interface size", "Scales every control and label", scale.into()),
-        setting("Code size", "Editor and console text; Ctrl+= and Ctrl+- change it too", zoom.into()),
+        setting("Theme", "", themes.into()),
+        setting("Interface size", "", scale.into()),
+        setting("Code size", "Ctrl+= and Ctrl+-", zoom.into()),
         heading("Editor"),
-        setting("Word wrap", "Wrap long lines instead of scrolling sideways", toggle(studio.wrap, Message::ToggleWrap)),
+        setting("Word wrap", "", toggle(studio.wrap, Message::ToggleWrap)),
         heading("Files"),
-        setting("Reopen files", "Open the files from the last session when Studio starts", toggle(studio.restore, Message::ToggleRestore)),
-        setting("Keep backups", "Keep the previous version of a file in the backups folder when saving over it", toggle(studio.backups, Message::ToggleBackups)),
+        setting("Reopen files at start", "", toggle(studio.restore, Message::ToggleRestore)),
+        setting("Keep backups", "Previous versions, kept when saving over a file", toggle(studio.backups, Message::ToggleBackups)),
     ]
     .spacing(14)
     .padding(Padding { top: 8.0, right: 20.0, bottom: 24.0, left: 20.0 })
     .max_width(680);
     if studio.persistent
         && let Some(path) = settings::path() {
-            page = page.push(text(format!("Settings are kept in {}", path.display())).size(theme::FINE).style(theme::faint));
+            page = page.push(text(format!("Kept in {}", path.display())).size(theme::FINE).style(theme::faint));
         }
     scrollable(page).width(Length::Fill).height(Length::Fill).style(theme::scroll).into()
 }
@@ -753,8 +758,8 @@ fn find_bar<'a>(studio: &'a Studio, find: &'a Find) -> Element<'a, Message> {
     let mut first = row![
         query,
         text(where_at).size(theme::META).style(theme::muted).width(90),
-        small("↑", (count > 0).then_some(Message::FindStep(-1))),
-        small("↓", (count > 0).then_some(Message::FindStep(1))),
+        glyph_button(Glyph::Up, (count > 0).then_some(Message::FindStep(-1))),
+        glyph_button(Glyph::Down, (count > 0).then_some(Message::FindStep(1))),
         tip(case, "Match case"),
     ]
     .spacing(6)
@@ -762,7 +767,7 @@ fn find_bar<'a>(studio: &'a Studio, find: &'a Find) -> Element<'a, Message> {
     if !find.replacing {
         first = first.push(small("Replace…", Some(Message::FindOpen(true))));
     }
-    first = first.push(space::horizontal()).push(small("×", Some(Message::FindClose)));
+    first = first.push(space::horizontal()).push(glyph_button(Glyph::Close, Some(Message::FindClose)));
     let mut bar = Column::new().push(first).spacing(6).padding(theme::BAR);
     if find.replacing {
         let replacement = text_input("Replace with", &find.replacement)
@@ -805,7 +810,6 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
     let code = text_editor(&doc.content)
         .id(editor_text_id())
         .on_action(Message::Edit)
-        .placeholder("Open a script or start typing. Ctrl+Enter runs the form at the cursor.")
         .font(fonts::MONO)
         .size(studio.code_size())
         .line_height(LineHeight::Absolute(Pixels(line_height)))
@@ -958,7 +962,7 @@ fn document(page: Page, dark: bool) -> Element<'static, Message> {
 fn matches<'a>(query: &str, theme: &Theme) -> Element<'a, Message> {
     let found = docs::search(query);
     if found.is_empty() {
-        return hint("Nothing in the reference matches.");
+        return hint("No matches.");
     }
     let mut column = Column::new().spacing(16).padding(Padding { top: 8.0, right: 20.0, bottom: 24.0, left: 20.0 }).max_width(760);
     for entry in found.into_iter().take(40) {
@@ -976,7 +980,7 @@ fn matches<'a>(query: &str, theme: &Theme) -> Element<'a, Message> {
 
 fn help(studio: &Studio) -> Element<'_, Message> {
     let Some(help) = &studio.help else {
-        return hint("Press F1 on a name to look it up.");
+        return hint("No page open.");
     };
     let dark = theme::is_dark(&studio.theme);
     let page = |label: &'static str, page: Page| {
@@ -1017,7 +1021,7 @@ fn console(studio: &Studio) -> Element<'_, Message> {
         };
         let mut row = row![container(text(marker).font(fonts::MONO_BOLD).size(size).style(marker_style)).width(14), body].spacing(8);
         if line.kind != LineKind::Note {
-            let copy = button(text("⧉").size(theme::FINE).style(theme::faint)).padding([0, 4]).style(theme::ghost).on_press(Message::CopyText(content.to_string()));
+            let copy = button(icon(Glyph::Copy, Ink::Muted)).padding([0, 4]).style(theme::ghost).on_press(Message::CopyText(content.to_string()));
             row = row.push(tip(copy, "Copy"));
         }
         row.into()
@@ -1030,7 +1034,6 @@ fn console(studio: &Studio) -> Element<'_, Message> {
     let input = text_editor(&studio.input)
         .id(console_text_id())
         .on_action(Message::Input)
-        .placeholder("Type an expression and press Enter")
         .font(fonts::MONO)
         .size(size)
         .padding(Padding { top: 7.0, right: 0.0, bottom: 7.0, left: 0.0 })
@@ -1057,7 +1060,7 @@ fn console(studio: &Studio) -> Element<'_, Message> {
 fn environment(studio: &Studio) -> Element<'_, Message> {
     let groups = studio.groups();
     if groups.is_empty() {
-        return hint("Nothing defined yet. Values you define are listed here; click one to open it in the data pane.");
+        return hint("Nothing defined.");
     }
     let selected = studio.grid.as_ref().map(|g| g.name.as_str());
     let heading = |label: &'static str| text(label).size(theme::FINE).font(fonts::UI_MEDIUM).style(theme::muted);
@@ -1097,12 +1100,10 @@ fn pager(grid: &Grid) -> Element<'_, Message> {
     let first = grid.offset + usize::from(!grid.rows.is_empty());
     let last = grid.offset + grid.rows.len();
     let label = text(format!("{first}–{last} of {}", grid.total)).size(theme::META).style(theme::muted);
-    let previous = button(text("‹").size(theme::GLYPH)).padding(theme::GLYPH_PAD).style(theme::ghost);
-    let next = button(text("›").size(theme::GLYPH)).padding(theme::GLYPH_PAD).style(theme::ghost);
     row![
         label,
-        previous.on_press_maybe((grid.offset > 0).then_some(Message::Page(-1))),
-        next.on_press_maybe((grid.offset + PAGE < grid.total).then_some(Message::Page(1))),
+        glyph_button(Glyph::Left, (grid.offset > 0).then_some(Message::Page(-1))),
+        glyph_button(Glyph::Right, (grid.offset + PAGE < grid.total).then_some(Message::Page(1))),
     ]
     .spacing(4)
     .align_y(Alignment::Center)
@@ -1113,7 +1114,7 @@ fn data_header<'a>(studio: &'a Studio, grid: &'a Grid) -> Element<'a, Message> {
     let filter = text_input("Filter rows", &studio.grid_filter).on_input(Message::GridFilter).size(theme::META).padding(theme::CONTROL).style(theme::field).width(theme::FIELD_SMALL);
     let copy = small("Copy", (!grid.rows.is_empty()).then_some(Message::CopyRows));
     let csv = small("CSV…", studio.table_shown().then_some(Message::ExportCsv));
-    row![filter, tip(copy, "Copy the selected rows, or the whole page, as tab-separated text"), csv, space::horizontal(), pager(grid)]
+    row![filter, tip(copy, "Copy rows"), csv, space::horizontal(), pager(grid)]
         .spacing(6)
         .align_y(Alignment::Center)
         .padding(HEADER)
@@ -1122,7 +1123,7 @@ fn data_header<'a>(studio: &'a Studio, grid: &'a Grid) -> Element<'a, Message> {
 
 fn viewer(studio: &Studio) -> Element<'_, Message> {
     let Some(grid) = &studio.grid else {
-        return hint("Click a name in the environment to view it here.");
+        return hint("Nothing selected.");
     };
     column![data_header(studio, grid), line(), grid_table(studio, grid)].into()
 }
@@ -1146,7 +1147,7 @@ fn grid_table<'a>(studio: &'a Studio, grid: &'a Grid) -> Element<'a, Message> {
         let head: Element<'_, Message> = if stats.is_empty() { head.into() } else { tip(head, stats) };
         let mut header = Row::new().align_y(Alignment::Center).spacing(2).push(head);
         if numeric && sortable {
-            header = header.push(tip(small("▥", Some(Message::PlotColumn(name.clone()))), "Histogram of this column"));
+            header = header.push(tip(glyph_button(Glyph::Bars, Some(Message::PlotColumn(name.clone()))), "Histogram"));
         }
         let longest = grid.rows.iter().map(|row| row[c].chars().count()).max().unwrap_or(0).max(name.chars().count() + 2);
         let width = (longest as f32 * 7.6 + 24.0).clamp(56.0, 360.0);
@@ -1170,10 +1171,10 @@ fn watch_controls(_studio: &Studio) -> Element<'_, Message> {
 fn watch(studio: &Studio) -> Element<'_, Message> {
     let mut list = Column::new().width(Length::Fill);
     if let Some(naming) = studio.naming.as_ref().filter(|n| n.kind == NamingKind::Watch) {
-        list = list.push(naming_row("Watch", "an expression, like (count t)", &naming.text)).push(line());
+        list = list.push(naming_row("Watch", "expression", &naming.text)).push(line());
     }
     if studio.watches.is_empty() {
-        return list.push(hint("Watched expressions are evaluated again after every run. Add one with + Watch.")).into();
+        return list.push(hint("No watches.")).into();
     }
     for (i, source) in studio.watches.iter().enumerate() {
         let found = studio.watched.iter().find(|w| w.source == *source);
@@ -1185,7 +1186,7 @@ fn watch(studio: &Studio) -> Element<'_, Message> {
         let content = row![
             container(code(source, &studio.theme, 12.5)).width(Length::FillPortion(2)),
             container(value).width(Length::FillPortion(3)),
-            small("×", Some(Message::RemoveWatch(i))),
+            glyph_button(Glyph::Close, Some(Message::RemoveWatch(i))),
         ]
         .spacing(10)
         .align_y(Alignment::Start)
@@ -1202,16 +1203,15 @@ fn plot_controls(studio: &Studio) -> Element<'_, Message> {
         return save;
     }
     let position = text(format!("{} of {count}", studio.plot_at + 1)).size(theme::META).style(theme::muted);
-    let back = button(text("‹").size(theme::GLYPH)).padding(theme::GLYPH_PAD).style(theme::ghost).on_press_maybe((studio.plot_at > 0).then_some(Message::PlotBack));
-    let forward = button(text("›").size(theme::GLYPH)).padding(theme::GLYPH_PAD).style(theme::ghost);
-    let forward = forward.on_press_maybe((studio.plot_at + 1 < count).then_some(Message::PlotForward));
+    let back = glyph_button(Glyph::Left, (studio.plot_at > 0).then_some(Message::PlotBack));
+    let forward = glyph_button(Glyph::Right, (studio.plot_at + 1 < count).then_some(Message::PlotForward));
     row![position, back, forward, save].spacing(4).align_y(Alignment::Center).into()
 }
 
 fn plots(studio: &Studio) -> Element<'_, Message> {
     match studio.plot() {
         Some(plot) => canvas(Chart { plot }).width(Length::Fill).height(Length::Fill).into(),
-        None => hint("Charts appear here. Try (bar-chart t :city :total) or (histogram (:amount t))."),
+        None => hint("No charts."),
     }
 }
 

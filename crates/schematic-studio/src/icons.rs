@@ -14,6 +14,16 @@ pub enum Glyph {
     Save,
     Sun,
     Moon,
+    Expand,
+    Shrink,
+    Minus,
+    Close,
+    Copy,
+    Bars,
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +111,35 @@ impl<Message> Program<Message> for Icon {
                 frame.fill(&Path::circle(Point::new(8.0, 8.0), 5.8), color);
                 frame.fill(&Path::circle(Point::new(10.6, 6.0), 5.0), t.surface);
             }
+            Glyph::Expand => {
+                frame.stroke(&polyline(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]), stroke());
+                frame.stroke(&polyline(&[(13.0, 9.0), (13.0, 13.0), (9.0, 13.0)]), stroke());
+                frame.stroke(&Path::line(Point::new(3.5, 3.5), Point::new(12.5, 12.5)), stroke());
+            }
+            Glyph::Shrink => {
+                frame.stroke(&polyline(&[(2.5, 6.5), (6.5, 6.5), (6.5, 2.5)]), stroke());
+                frame.stroke(&polyline(&[(13.5, 9.5), (9.5, 9.5), (9.5, 13.5)]), stroke());
+                frame.stroke(&Path::line(Point::new(3.0, 3.0), Point::new(6.5, 6.5)), stroke());
+                frame.stroke(&Path::line(Point::new(9.5, 9.5), Point::new(13.0, 13.0)), stroke());
+            }
+            Glyph::Minus => frame.stroke(&Path::line(Point::new(3.5, 8.0), Point::new(12.5, 8.0)), stroke()),
+            Glyph::Close => {
+                frame.stroke(&Path::line(Point::new(4.0, 4.0), Point::new(12.0, 12.0)), stroke());
+                frame.stroke(&Path::line(Point::new(12.0, 4.0), Point::new(4.0, 12.0)), stroke());
+            }
+            Glyph::Copy => {
+                frame.stroke(&Path::rectangle(Point::new(5.5, 5.5), Size::new(7.5, 8.0)), stroke().with_width(1.4));
+                frame.stroke(&polyline(&[(3.5, 10.0), (3.0, 10.0), (3.0, 2.5), (10.5, 2.5), (10.5, 3.5)]), stroke().with_width(1.4));
+            }
+            Glyph::Bars => {
+                frame.fill_rectangle(Point::new(2.5, 9.0), Size::new(3.0, 4.5), color);
+                frame.fill_rectangle(Point::new(6.5, 4.0), Size::new(3.0, 9.5), color);
+                frame.fill_rectangle(Point::new(10.5, 6.5), Size::new(3.0, 7.0), color);
+            }
+            Glyph::Up => frame.stroke(&polyline(&[(4.5, 10.0), (8.0, 6.0), (11.5, 10.0)]), stroke()),
+            Glyph::Down => frame.stroke(&polyline(&[(4.5, 6.0), (8.0, 10.0), (11.5, 6.0)]), stroke()),
+            Glyph::Left => frame.stroke(&polyline(&[(10.0, 4.5), (6.0, 8.0), (10.0, 11.5)]), stroke()),
+            Glyph::Right => frame.stroke(&polyline(&[(6.0, 4.5), (10.0, 8.0), (6.0, 11.5)]), stroke()),
         }
         vec![frame.into_geometry()]
     }
@@ -112,7 +151,25 @@ mod tests {
 
     #[test]
     fn every_glyph_builds_an_element() {
-        let glyphs = [Glyph::Play, Glyph::PlayAll, Glyph::Stop, Glyph::Open, Glyph::Save, Glyph::Sun, Glyph::Moon];
+        let glyphs = [
+            Glyph::Play,
+            Glyph::PlayAll,
+            Glyph::Stop,
+            Glyph::Open,
+            Glyph::Save,
+            Glyph::Sun,
+            Glyph::Moon,
+            Glyph::Expand,
+            Glyph::Shrink,
+            Glyph::Minus,
+            Glyph::Close,
+            Glyph::Copy,
+            Glyph::Bars,
+            Glyph::Up,
+            Glyph::Down,
+            Glyph::Left,
+            Glyph::Right,
+        ];
         let elements: Vec<Element<'_, ()>> = glyphs.into_iter().map(|glyph| icon(glyph, Ink::Text)).collect();
         assert_eq!(elements.len(), glyphs.len());
     }
