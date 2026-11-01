@@ -20,6 +20,8 @@
 </header>
 <main class="{{ page.class | default: 'prose' }}">
 {{ content }}
+{% if page.url == "/guide.html" %}<p class="pager"><a href="reference.html">Next: the reference →</a></p>{% endif %}
+{% if page.url == "/reference.html" %}<p class="pager"><a href="guide.html">← Back to the guide</a></p>{% endif %}
 </main>
 <footer>
   <span>Apache-2.0</span>
