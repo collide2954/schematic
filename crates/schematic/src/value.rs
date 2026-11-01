@@ -7,6 +7,7 @@ use crate::date;
 use crate::error::Error;
 use crate::list::List;
 use crate::map::Map;
+use crate::plot::Plot;
 use crate::set::Set;
 use crate::symbol::Symbol;
 use crate::table::Table;
@@ -29,6 +30,7 @@ pub enum Value {
     Set(Rc<Set>),
     Array(Rc<Array>),
     Table(Rc<Table>),
+    Plot(Rc<Plot>),
     Closure(Rc<Closure>),
     Native(Rc<Native>),
     Cell(Rc<RefCell<Value>>),
@@ -95,6 +97,7 @@ impl Value {
             Value::Set(_) => "set",
             Value::Array(_) => "array",
             Value::Table(_) => "table",
+            Value::Plot(_) => "plot",
             Value::Closure(_) | Value::Native(_) | Value::Escape(_) => "function",
             Value::Cell(_) => "cell",
             Value::Signal(_) => "signal",
@@ -181,6 +184,7 @@ impl Value {
             Value::Table(t) => t.columns().fold(mix(TAG_TABLE), |h, (name, column)| {
                 mix(h ^ Value::Keyword(name).hash_code() ^ Value::Array(column.clone()).hash_code())
             }),
+            Value::Plot(p) => mix(Rc::as_ptr(p) as usize as u64 ^ TAG_POINTER),
             Value::Closure(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
             Value::Native(n) => mix(Rc::as_ptr(n) as usize as u64 ^ TAG_POINTER),
             Value::Cell(c) => mix(Rc::as_ptr(c) as usize as u64 ^ TAG_POINTER),
@@ -209,6 +213,7 @@ impl PartialEq for Value {
             (Set(a), Set(b)) => Rc::ptr_eq(a, b) || a == b,
             (Array(a), Array(b)) => Rc::ptr_eq(a, b) || a == b,
             (Table(a), Table(b)) => Rc::ptr_eq(a, b) || a == b,
+            (Plot(a), Plot(b)) => Rc::ptr_eq(a, b) || a == b,
             (Closure(a), Closure(b)) => Rc::ptr_eq(a, b),
             (Native(a), Native(b)) => Rc::ptr_eq(a, b),
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
@@ -290,6 +295,7 @@ impl Value {
             Value::Set(s) => write_seq(f, "#{", s.iter(), "}", readable),
             Value::Array(a) => a.format(f, readable),
             Value::Table(t) => t.format(f),
+            Value::Plot(p) => f.write_str(&p.text()),
             Value::Closure(c) => match c.proto.name {
                 Some(name) => write!(f, "#<procedure {name}>"),
                 None => f.write_str("#<procedure>"),

@@ -11,6 +11,7 @@ mod dates;
 mod functional;
 mod io;
 pub mod math;
+mod plots;
 mod stats;
 mod strings;
 mod tables;
@@ -26,6 +27,7 @@ pub fn install(globals: &mut Globals) {
     stats::install(globals);
     tables::install(globals);
     csv::install(globals);
+    plots::install(globals);
 }
 
 fn native(globals: &mut Globals, name: &'static str, arity: Arity, func: PureFn) {

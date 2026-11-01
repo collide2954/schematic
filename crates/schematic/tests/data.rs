@@ -98,6 +98,20 @@ fn date_columns_are_inferred_sorted_and_filtered() {
 }
 
 #[test]
+fn charts_read_table_columns_and_groups() {
+    let ages = format!("Ada {} 36\nBob {} 41", "█".repeat(35), "█".repeat(40));
+    assert_eq!(with_people("(str (bar-chart t :name :age))"), format!("{ages:?}"));
+    let sales = "(define s (table {:city [\"Oslo\" \"Oslo\" \"Rome\"] :year [2020 2021 2021] :units [12 30 7] :when [#2024-01-01 #2024-02-01 #2024-03-01]}))";
+    let grouped = format!("Oslo 2020 {} 12\nOslo 2021 {} 30\nRome 2021 {} 7", "█".repeat(16), "█".repeat(40), "█".repeat(9));
+    assert_eq!(eval(&format!("{sales} (str (bar-chart s :city :units {{:by :year}}))")), format!("{grouped:?}"));
+    let lines = eval(&format!("{sales} (str (line-chart s :when :units {{:by :city}}))"));
+    assert!(lines.contains('•') && lines.contains('○') && lines.contains("• Oslo") && lines.contains("○ Rome"), "{lines}");
+    assert!(lines.contains("2024-01-01") && lines.contains("2024-03-01"), "{lines}");
+    assert!(eval(&format!("{sales} (line-chart s :nope :units)")).contains("nope"));
+    assert_eq!(eval(&format!("{sales} (str (histogram s :units {{:bins 2}}))")), format!("{:?}", format!("7–18.5  {} 2\n18.5–30 {} 1", "█".repeat(40), "█".repeat(20))));
+}
+
+#[test]
 fn rows_destructure_in_lambda_parameters() {
     assert_eq!(with_people("(vec (map (lambda ({:keys [name age]}) (str name \":\" age)) t))"), "[\"Ada:36\" \"Bob:41\"]");
     assert_eq!(with_people("(let (([{:name first-name} & _] (rows t))) first-name)"), "\"Ada\"");

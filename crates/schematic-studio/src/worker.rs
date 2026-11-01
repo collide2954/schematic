@@ -6,6 +6,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use iced::futures::channel::mpsc as futures_mpsc;
 use iced::futures::{SinkExt, Stream, StreamExt};
 use iced::stream;
+use schematic::plot::Plot;
 use schematic::reader::read_all;
 use schematic::value::Shown;
 use schematic::vm::Arity;
@@ -42,6 +43,7 @@ pub enum Event {
     Error(String),
     Environment(Vec<Binding>),
     Grid(Grid),
+    Plot(Plot),
     Finished,
 }
 
@@ -52,6 +54,7 @@ impl PartialEq for Event {
             (Output(a), Output(b)) | (Result(a), Result(b)) | (Error(a), Error(b)) => a == b,
             (Environment(a), Environment(b)) => a == b,
             (Grid(a), Grid(b)) => a == b,
+            (Plot(a), Plot(b)) => a == b,
             (Finished, Finished) => true,
             _ => false,
         }
@@ -98,6 +101,7 @@ pub fn run(mut interp: Interpreter, requests: Receiver<Request>, mut emit: impl 
                 emit(Event::Finished);
             }
             Request::Inspect { name, offset, limit } => match interp.global(&name) {
+                Some(Value::Plot(plot)) => emit(Event::Plot((**plot).clone())),
                 Some(value) => emit(Event::Grid(grid(&name, value, offset, limit))),
                 None => emit(Event::Error(format!("{name} is not defined"))),
             },
@@ -112,6 +116,7 @@ fn execute(interp: &mut Interpreter, source: &str, show_results: bool, emit: &mu
     };
     for form in &forms {
         match interp.eval(form) {
+            Ok(Value::Plot(plot)) => emit(Event::Plot((*plot).clone())),
             Ok(Value::Nil) => {}
             Ok(value) if show_results => emit(Event::Result(value.to_string())),
             Ok(_) => {}
@@ -142,6 +147,7 @@ fn summarize(value: &Value) -> String {
             arity.to_string()
         }
         Value::Native(n) => n.arity.to_string(),
+        Value::Plot(p) => p.describe(),
         other => {
             let shown = other.to_string();
             let mut chars = shown.chars();
@@ -282,6 +288,19 @@ mod tests {
                 binding("n", "float", "2.5"),
             ]
         );
+    }
+
+    #[test]
+    fn plots_are_events_of_their_own() {
+        let events = drive(vec![
+            Request::Run { source: "(define p (bar-chart [\"a\"] [1])) p".into(), show_results: false },
+            Request::Inspect { name: "p".into(), offset: 0, limit: 10 },
+        ]);
+        assert!(matches!(&events[0], Event::Plot(plot) if plot.kind == schematic::plot::Kind::Bar), "{events:?}");
+        assert_eq!(events[1], Event::Environment(vec![binding("p", "plot", "bar chart with 1 bar")]));
+        assert_eq!(events[2], Event::Finished);
+        assert!(matches!(&events[3], Event::Plot(_)), "{events:?}");
+        assert_eq!(events.len(), 4);
     }
 
     #[test]

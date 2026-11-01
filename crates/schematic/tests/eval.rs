@@ -1072,6 +1072,46 @@ fn match_tests_and_destructures_values() {
 }
 
 #[test]
+fn charts_are_values_that_print_as_text() {
+    let bars = "(bar-chart [\"Oslo\" \"Rome\" \"Bern\"] [42 17 5] {:title \"Units\"})";
+    assert_eq!(eval(&format!("[(plot? {bars}) (plot? 1)]")), "[true false]");
+    let expected = format!("Units\nOslo {} 42\nRome {} 17\nBern {} 5", "█".repeat(40), "█".repeat(16), "█".repeat(5));
+    assert_eq!(eval(&format!("(str {bars})")), format!("{expected:?}"));
+    let histogram = format!("1–3 {} 3\n3–5 {} 3\n5–7  0\n7–9 {} 1", "█".repeat(40), "█".repeat(40), "█".repeat(13));
+    assert_eq!(eval("(str (histogram [1 2 2 3 3 3 9] {:bins 4}))"), format!("{histogram:?}"));
+    let scatter = eval("(str (scatter [1 2 3] [1 2 3] {:title \"Diagonal\"}))");
+    assert_eq!(scatter.matches('•').count(), 3);
+    assert!(scatter.starts_with("\"Diagonal\\n3 |") && scatter.contains("\\n1 |•"), "{scatter}");
+    assert!(scatter.ends_with(&format!("1{}3\"", " ".repeat(38))), "{scatter}");
+    let line = eval("(str (line-chart [1 2 3] [1 2 3]))");
+    assert_eq!(line.matches('•').count(), 3);
+    assert!(line.matches('·').count() > 10, "{line}");
+    assert!(eval("(str (line-chart [#2024-01-01 #2024-01-31] [1 2]))").contains("2024-01-01"));
+    assert_eq!(eval("(bar-chart [1 2] [1])"), "error: bar-chart expects x and y of the same length, got 2 and 1");
+    assert_eq!(eval("(histogram [\"a\"])"), "error: histogram expects numbers, got \"a\"");
+    assert_eq!(eval("(bar-chart 5 6)"), "error: bar-chart expects a table or a collection, got 5");
+    assert_eq!(eval("(histogram [1 2] {:bins 0})"), "error: histogram expects a positive number of bins");
+}
+
+#[test]
+fn charts_render_to_svg() {
+    let svg = eval("(to-svg (bar-chart [\"a\" \"b\"] [1 2] {:title \"T\" :y-label \"count\"}))");
+    assert!(svg.starts_with("\"<svg xmlns=\\\"http://www.w3.org/2000/svg\\\" width=\\\"640\\\" height=\\\"400\\\""), "{svg}");
+    assert_eq!(svg.matches("<rect").count(), 2);
+    assert!(svg.contains(">a<") && svg.contains(">b<") && svg.contains(">T<") && svg.contains(">count<"));
+    let scatter = eval("(to-svg (scatter [1 2] [3 4]))");
+    assert_eq!(scatter.matches("<circle").count(), 2);
+    let line = eval("(to-svg (line-chart [1 2 3] [1 4 9] {:by nil}))");
+    assert_eq!(line.matches("<polyline").count(), 1);
+    let dir = std::env::temp_dir().join(format!("schematic-plot-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("chart.svg").display().to_string().replace('\\', "/");
+    assert_eq!(eval(&format!("(save-plot (histogram [1 2 3]) \"{path}\")")), "nil");
+    assert!(std::fs::read_to_string(&path).unwrap().starts_with("<svg"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn subtraction_accepts_an_array_first() {
     assert_eq!(eval("[(- #[3 4] 1) (- 10 #[3 4]) (- #[3 4] #[1 1])]"), "[#[2 3] #[7 6] #[2 3]]");
 }

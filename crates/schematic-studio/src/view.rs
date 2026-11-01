@@ -2,11 +2,13 @@ use iced::keyboard::{Key, key};
 use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::text_editor::{Binding, KeyPress, Status};
 use iced::widget::{
-    Column, button, column, container, pane_grid, row, rule, scrollable, space, table, text, text_editor, tooltip,
+    Column, button, canvas, column, container, pane_grid, row, rule, scrollable, space, table, text, text_editor,
+    tooltip,
 };
 use iced::{Alignment, Element, Font, Length, Padding, Theme};
 
 use crate::app::{LineKind, Message, PAGE, PaneKind, Studio, console_id};
+use crate::chart::Chart;
 use crate::theme::Tint;
 use crate::worker::Grid;
 use crate::{fonts, highlight, theme};
@@ -26,6 +28,12 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
                 PaneKind::Viewer => {
                     let grid = studio.grid.as_ref();
                     ("DATA", grid.map(|g| g.name.clone()), grid.map(pager), viewer(studio))
+                }
+                PaneKind::Plots => {
+                    let plot = studio.plot.as_ref();
+                    let subtitle = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
+                    let save = small("Save as SVG", theme::ghost, plot.map(|_| Message::SavePlot));
+                    ("PLOTS", subtitle, Some(save), plots(studio))
                 }
             };
         let mut header =
@@ -275,6 +283,13 @@ fn viewer(studio: &Studio) -> Element<'_, Message> {
     let body = table(columns, 0..grid.rows.len()).padding_x(10).padding_y(5);
     let both = Direction::Both { vertical: Scrollbar::default(), horizontal: Scrollbar::default() };
     scrollable(body).direction(both).width(Length::Fill).height(Length::Fill).style(theme::scroll).into()
+}
+
+fn plots(studio: &Studio) -> Element<'_, Message> {
+    match &studio.plot {
+        Some(plot) => canvas(Chart { plot }).width(Length::Fill).height(Length::Fill).into(),
+        None => hint("Charts appear here. Try (bar-chart t :city :total) or (histogram (:amount t))."),
+    }
 }
 
 fn hint(message: &str) -> Element<'_, Message> {

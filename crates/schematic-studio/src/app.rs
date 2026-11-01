@@ -7,6 +7,7 @@ use iced::widget::scrollable::RelativeOffset;
 use iced::widget::text_editor::{Action, Motion};
 use iced::widget::{Id, operation, pane_grid, text_editor};
 use iced::{Size, Subscription, Task, Theme, window};
+use schematic::plot::Plot;
 use schematic::reader::read_all;
 
 use crate::highlight::Marks;
@@ -21,6 +22,7 @@ pub enum PaneKind {
     Console,
     Environment,
     Viewer,
+    Plots,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +78,7 @@ pub struct Studio {
     pub draft: String,
     pub bindings: Vec<Binding>,
     pub grid: Option<Grid>,
+    pub plot: Option<Plot>,
     pub worker: Option<Sender<Request>>,
     pub interrupt: Option<Arc<AtomicBool>>,
     pub running: bool,
@@ -102,6 +105,8 @@ pub enum Message {
     ClearConsole,
     Inspect(String),
     Page(i64),
+    SavePlot,
+    SavePlotTo(Option<PathBuf>),
     PaneResized(pane_grid::ResizeEvent),
     PaneDragged(pane_grid::DragEvent),
     ToggleTheme,
@@ -152,6 +157,12 @@ async fn save_file(current: Option<PathBuf>) -> Option<PathBuf> {
     Some(handle.path().to_path_buf())
 }
 
+async fn save_svg() -> Option<PathBuf> {
+    let dialog = rfd::AsyncFileDialog::new().add_filter("SVG image", &["svg"]).set_file_name("chart.svg").set_title("Save the plot as");
+    let handle = dialog.save_file().await?;
+    Some(handle.path().to_path_buf())
+}
+
 impl Studio {
     pub fn new() -> Studio {
         use pane_grid::{Axis, Configuration};
@@ -160,7 +171,12 @@ impl Studio {
             Axis::Vertical,
             0.62,
             split(Axis::Horizontal, 0.64, Configuration::Pane(PaneKind::Editor), Configuration::Pane(PaneKind::Console)),
-            split(Axis::Horizontal, 0.42, Configuration::Pane(PaneKind::Environment), Configuration::Pane(PaneKind::Viewer)),
+            split(
+                Axis::Horizontal,
+                0.34,
+                Configuration::Pane(PaneKind::Environment),
+                split(Axis::Horizontal, 0.5, Configuration::Pane(PaneKind::Viewer), Configuration::Pane(PaneKind::Plots)),
+            ),
         );
         let mut studio = Studio {
             panes: pane_grid::State::with_configuration(layout),
@@ -176,6 +192,7 @@ impl Studio {
             draft: String::new(),
             bindings: Vec::new(),
             grid: None,
+            plot: None,
             worker: None,
             interrupt: None,
             running: false,
@@ -299,6 +316,16 @@ impl Studio {
                     None => Task::none(),
                 }
             }
+            Message::SavePlot => Task::perform(save_svg(), Message::SavePlotTo),
+            Message::SavePlotTo(path) => {
+                if let (Some(path), Some(plot)) = (path, &self.plot) {
+                    self.status = match std::fs::write(&path, plot.svg()) {
+                        Ok(()) => format!("Saved {}", path.display()),
+                        Err(e) => format!("Cannot save {}: {e}", path.display()),
+                    };
+                }
+                Task::none()
+            }
             Message::PaneResized(pane_grid::ResizeEvent { split, ratio }) => {
                 self.panes.resize(split, ratio);
                 Task::none()
@@ -335,6 +362,10 @@ impl Studio {
             }
             Event::Grid(grid) => {
                 self.grid = Some(grid);
+                Task::none()
+            }
+            Event::Plot(plot) => {
+                self.plot = Some(plot);
                 Task::none()
             }
             Event::Finished => {
@@ -606,6 +637,24 @@ mod tests {
         assert_eq!(studio.input.text(), "(dra");
         let _ = studio.update(Message::HistoryForward);
         assert_eq!(studio.input.text(), "(dra");
+    }
+
+    #[test]
+    fn plots_arrive_in_their_own_pane() {
+        let mut studio = Studio::new();
+        assert!(studio.panes.iter().any(|(_, kind)| *kind == PaneKind::Plots));
+        let value = schematic::Interpreter::new().eval_str("(bar-chart [\"a\" \"b\"] [1 2] {:title \"T\"})").unwrap();
+        let schematic::Value::Plot(plot) = value else { panic!("{value}") };
+        let _ = studio.update(Message::Worker(Event::Plot((*plot).clone())));
+        assert_eq!(studio.plot.as_ref().map(|p| p.title.clone()), Some(Some("T".to_string())));
+        let _ = view::view(&studio);
+        let dir = std::env::temp_dir().join(format!("studio-plot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("chart.svg");
+        let _ = studio.update(Message::SavePlotTo(Some(target.clone())));
+        assert!(std::fs::read_to_string(&target).unwrap().starts_with("<svg"));
+        assert!(studio.status.starts_with("Saved"));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
