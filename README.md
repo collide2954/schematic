@@ -48,6 +48,9 @@ Early development. Working today:
 - A standard library of collection, string, numeric, and higher-order
   functions, with `format` placeholders and text functions that work on whole
   columns
+- Dates with a `#2024-03-15` literal, day arithmetic, parsing and formatting
+  patterns, truncation to week, month, quarter, or year, and date columns
+  inferred from CSV
 - Typed arrays with missing values, broadcasting arithmetic, statistics, and
   ordered helpers such as `lag`, `diff`, `rank`, `rolling`, and `running-sum`
 - Tables with `select`, `where`, `distinct`, `order-by`, `group-by`,
@@ -55,7 +58,7 @@ Early development. Working today:
   appending, and CSV reading and writing
 - A REPL and file runner
 
-Next up: dates and times, plotting-friendly output, and more performance work.
+Next up: plotting-friendly output, destructuring, and more performance work.
 
 ## Running
 

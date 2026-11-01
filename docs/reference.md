@@ -20,6 +20,7 @@ keywords, maps, vectors, sets, and arrays.
 | `{:k v, :k2 v2}` | map (commas are whitespace) |
 | `#{a b}` | set |
 | `#[1 2 nil]` | array |
+| `#2024-03-15` | date |
 | `'x`, `(quote x)` | quoted datum |
 | `` `(a ~b ~@c) `` | quasiquote with unquote and unquote-splicing |
 | `; text` | line comment |
@@ -148,12 +149,36 @@ Every function above also accepts an array of strings as its first argument
 and returns an array, with missing elements staying missing; `format`
 returns an array when any argument is one, repeating the scalars.
 
+## Dates
+
+A date is a calendar day without a time or zone. It reads as `#2024-03-15`,
+prints as `2024-03-15`, and sits in arrays and table columns like any other
+value. `(+ d n)` and `(- d n)` move by `n` days, `(- d1 d2)` counts the days
+between two dates, and `<`, `=`, `min`, `max`, `sort`, and `order-by` compare
+dates.
+
+| Function | Description |
+|---|---|
+| `(date "2024-03-15")`, `(date 2024 3 15)` | from an ISO string or from parts; a day that does not exist is an error |
+| `(date s pattern)` | parse with a pattern made of `yyyy`, `yy`, `M`, `MM`, `MMM`, `MMMM`, `d`, `dd`, `EEE`, `EEEE`; every other character must match |
+| `(date-format d pattern)` | the same pattern letters, with month and weekday names in English |
+| `(year d)`, `(month d)`, `(day d)`, `(weekday d)`, `(day-of-year d)`, `(quarter d)` | parts; `weekday` runs from 1 for Monday to 7 for Sunday |
+| `(date-trunc d unit)` | the first day of the `:week` (a Monday), `:month`, `:quarter`, or `:year` |
+| `(add-months d n)`, `(add-years d n)` | move by months or years, clamping to the last day of the month |
+| `(days-in-month d)`, `(leap-year? d-or-year)` | calendar facts |
+| `(date-range start end [unit])` | an array of dates from `start` to `end` inclusive, one per day or per `:week`, `:month`, `:quarter`, or `:year` |
+| `(today)` | the current date in UTC |
+| `(date? x)` | test |
+
+Every date function also accepts an array of dates, and `date` accepts an
+array of strings, so a text column turns into a date column in one call.
+
 ## Arrays
 
 | Function | Description |
 |---|---|
 | `(array coll)` | build an array; the element type is inferred and `nil` marks missing |
-| `(array-type a)` | `:int`, `:float`, `:bool`, or `:string` |
+| `(array-type a)` | `:int`, `:float`, `:bool`, `:string`, or `:date` |
 | `(count-missing a)`, `(drop-missing a)`, `(fill-missing a v)` | missing-value handling |
 | `(where coll mask)` | elements where the boolean array is true |
 | `(a i)`, `(a mask)`, `(a [i j])` | element, mask selection, or gather by positions |
@@ -192,7 +217,7 @@ returns an array when any argument is one, repeating the scalars.
 
 | Function | Description |
 |---|---|
-| `(read-csv path [{:sep ";"}])`, `(write-csv t path [opts])` | files; types are inferred per column and empty fields are missing |
+| `(read-csv path [{:sep ";"}])`, `(write-csv t path [opts])` | files; types are inferred per column, ISO dates included, and empty fields are missing |
 | `(parse-csv text [opts])`, `(to-csv t [opts])` | the same for strings |
 | `(print x...)`, `(println x...)` | human-readable output, strings without quotes |
 | `(prn x...)` | output in readable form, strings quoted |

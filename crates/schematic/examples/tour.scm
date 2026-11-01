@@ -75,6 +75,18 @@
 (check "starts-with array" #[true false] (string-starts-with? #["Ada" "Bob"] "A"))
 (check "format array" #["Ada (36)" "Bob (41)"] (format "{} ({})" #["Ada" "Bob"] #[36 41]))
 
+;; Dates
+(define d #2024-03-15)
+(check "date add" #2024-04-04 (+ d 20))
+(check "date diff" 17 (- #2024-04-01 d))
+(check "date compare" true (< d #2024-04-01))
+(check "weekday" 5 (weekday d))
+(check "date-format" "Friday, March 15" (date-format d "EEEE, MMMM d"))
+(check "date parse" #2024-03-15 (date "15/03/2024" "dd/MM/yyyy"))
+(check "date-trunc" #2024-03-01 (date-trunc d :month))
+(check "add-months" #2024-02-29 (add-months #2024-01-31 1))
+(check "date-range" #[#2024-01-30 #2024-01-31 #2024-02-01 #2024-02-02] (date-range #2024-01-30 #2024-02-02))
+
 ;; Arrays
 (define prices #[10 20 30 nil])
 (check "array-type" :int (array-type prices))

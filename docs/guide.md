@@ -227,6 +227,29 @@ string and returns an array, so a text column can be cleaned in one call:
 (format "{} ({})" #["Ada" "Bob"] #[36 41])  ; #["Ada (36)" "Bob (41)"]
 ```
 
+## Dates
+
+A date is written `#2024-03-15` and stands for a calendar day. Adding a
+number moves by days, subtracting two dates counts the days between them, and
+comparisons and sorting work as you would expect:
+
+```scheme
+(define d #2024-03-15)
+(+ d 20)                              ; #2024-04-04
+(- #2024-04-01 d)                     ; 17
+(< d #2024-04-01)                     ; true
+(weekday d)                           ; 5, a Friday
+(date-format d "EEEE, MMMM d")        ; "Friday, March 15"
+(date "15/03/2024" "dd/MM/yyyy")      ; #2024-03-15
+(date-trunc d :month)                 ; #2024-03-01
+(add-months #2024-01-31 1)            ; #2024-02-29
+(date-range #2024-01-30 #2024-02-02)  ; #[#2024-01-30 #2024-01-31 #2024-02-01 #2024-02-02]
+```
+
+A CSV column of ISO dates becomes a date column on its own, and every date
+function works on a whole column. Monthly totals are a `date-trunc` away:
+add the truncated column with `assoc`, then `aggregate` by it.
+
 ## Arrays
 
 Arrays hold many numbers (or booleans, or strings) of one type in a compact
