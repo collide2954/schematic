@@ -180,13 +180,23 @@ impl<'a> Reader<'a> {
             Some('[') => {
                 self.bump();
                 let items = self.read_items(']')?;
-                let literal = |v: &Value| matches!(v, Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_));
+                let literal = |v: &Value| {
+                    matches!(v, Value::Nil | Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Date(_) | Value::Str(_))
+                };
                 if items.iter().all(literal) {
                     return Array::from_values(items)
                         .map(|a| Value::Array(Rc::new(a)))
                         .map_err(|e| self.error(e.message()));
                 }
                 Ok(Value::list([Value::symbol("array"), Value::vector(items)]))
+            }
+            Some(c) if c.is_ascii_digit() => {
+                self.bump();
+                let token = self.read_token();
+                match crate::date::parse_iso(token) {
+                    Some(days) => Ok(Value::Date(days)),
+                    None => Err(self.error(format!("invalid date literal #{token}"))),
+                }
             }
             Some(c) => Err(self.error(format!("unknown dispatch `#{c}`"))),
             None => Err(self.incomplete("unexpected end of input after `#`")),

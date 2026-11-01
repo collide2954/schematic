@@ -96,6 +96,9 @@ pub fn infer(values: &[Option<&str>]) -> Vec<Value> {
     if present().all(|v| v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("false")) {
         return values.iter().map(|v| v.map_or(Value::Nil, |s| Value::Bool(s.eq_ignore_ascii_case("true")))).collect();
     }
+    if present().all(|v| crate::date::parse_iso(v).is_some()) {
+        return values.iter().map(|v| v.map_or(Value::Nil, |s| Value::Date(crate::date::parse_iso(s).unwrap()))).collect();
+    }
     values.iter().map(|v| v.map_or(Value::Nil, Value::string)).collect()
 }
 

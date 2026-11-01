@@ -95,6 +95,7 @@ fn pick(name: &str, a: &Value, b: &Value, wanted: Ordering) -> Result<Value, Err
     }
     let ordering = match (b, a) {
         (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Date(x), Value::Date(y)) => x.cmp(y),
         (x, y) => as_float(name, x)?.partial_cmp(&as_float(name, y)?).unwrap_or(Ordering::Equal),
     };
     Ok(if ordering == wanted { b.clone() } else { a.clone() })
@@ -111,7 +112,7 @@ fn extremum(name: &str, args: &[Value], wanted: Ordering) -> Result<Value, Error
         }
         return Ok(best.unwrap_or(Value::Nil));
     }
-    if !is_array(&args[0]) {
+    if !is_array(&args[0]) && !matches!(args[0], Value::Date(_)) {
         as_float(name, &args[0])?;
     }
     args[1..].iter().try_fold(args[0].clone(), |best, candidate| pick(name, &best, candidate, wanted))
@@ -211,6 +212,12 @@ fn arith(
         }
         return broadcast(a, b, &|x, y| arith(name, x, y, int_op, float_op));
     }
+    match (name, a, b) {
+        ("+" | "inc", Value::Date(d), Value::Int(n)) | ("+", Value::Int(n), Value::Date(d)) => return shift_date(*d, *n),
+        ("-" | "dec", Value::Date(d), Value::Int(n)) => return shift_date(*d, -*n),
+        ("-", Value::Date(x), Value::Date(y)) => return Ok(Value::Int(*x as i64 - *y as i64)),
+        _ => {}
+    }
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => int_op(*x, *y).map(Value::Int).ok_or_else(overflow),
         (Value::Int(x), Value::Float(y)) => Ok(Value::Float(float_op(*x as f64, *y))),
@@ -218,6 +225,10 @@ fn arith(
         (Value::Float(x), Value::Float(y)) => Ok(Value::Float(float_op(*x, *y))),
         (Value::Int(_) | Value::Float(_), other) | (other, _) => Err(not_a_number(name, other)),
     }
+}
+
+fn shift_date(days: i32, by: i64) -> Result<Value, Error> {
+    i32::try_from(days as i64 + by).map(Value::Date).map_err(|_| Error::new("value-error", "date out of range"))
 }
 
 fn add(args: &[Value]) -> Result<Value, Error> {
@@ -233,7 +244,6 @@ fn sub(args: &[Value]) -> Result<Value, Error> {
         return arith("-", &Value::Int(0), &args[0], i64::checked_sub, |a, b| a - b);
     }
     let (first, rest) = args.split_first().unwrap();
-    as_float("-", first)?;
     rest.iter().try_fold(first.clone(), |acc, x| arith("-", &acc, x, i64::checked_sub, |a, b| a - b))
 }
 
@@ -321,13 +331,14 @@ fn compare(name: &str, args: &[Value], accept: fn(Ordering) -> bool) -> Result<V
     for pair in args.windows(2) {
         let ordering = match (&pair[0], &pair[1]) {
             (Value::Int(a), Value::Int(b)) => Some(a.cmp(b)),
+            (Value::Date(a), Value::Date(b)) => Some(a.cmp(b)),
             (a, b) => as_float(name, a)?.partial_cmp(&as_float(name, b)?),
         };
         if !ordering.is_some_and(accept) {
             return Ok(Value::Bool(false));
         }
     }
-    if args.len() == 1 {
+    if args.len() == 1 && !matches!(args[0], Value::Date(_)) {
         as_float(name, &args[0])?;
     }
     Ok(Value::Bool(true))

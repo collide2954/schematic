@@ -11,6 +11,7 @@ pub enum Data {
     Int(Vec<i64>),
     Bool(Vec<bool>),
     Str(Vec<Rc<String>>),
+    Date(Vec<i32>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -28,7 +29,7 @@ impl Default for Data {
 const PRINT_LIMIT: usize = 20;
 
 fn mismatch(a: &Value, b: &Value) -> Error {
-    Error::type_error(format!("array elements must all be numbers, all booleans, or all strings, got {a} and {b}"))
+    Error::type_error(format!("array elements must all be numbers, all booleans, all strings, or all dates, got {a} and {b}"))
 }
 
 impl Array {
@@ -50,6 +51,7 @@ impl Array {
             Data::Int(v) => v.len(),
             Data::Bool(v) => v.len(),
             Data::Str(v) => v.len(),
+            Data::Date(v) => v.len(),
         }
     }
 
@@ -63,6 +65,7 @@ impl Array {
             Data::Int(_) => "int",
             Data::Bool(_) => "bool",
             Data::Str(_) => "string",
+            Data::Date(_) => "date",
         }
     }
 
@@ -94,6 +97,7 @@ impl Array {
             Data::Int(v) => Value::Int(v[index]),
             Data::Bool(v) => Value::Bool(v[index]),
             Data::Str(v) => Value::Str(v[index].clone()),
+            Data::Date(v) => Value::Date(v[index]),
         })
     }
 
@@ -111,6 +115,7 @@ impl Array {
             Value::Int(_) => Data::Int(vec![0; n]),
             Value::Bool(_) => Data::Bool(vec![false; n]),
             Value::Str(_) => Data::Str(vec![Rc::new(String::new()); n]),
+            Value::Date(_) => Data::Date(vec![0; n]),
             _ => Data::Float(vec![0.0; n]),
         };
     }
@@ -128,6 +133,7 @@ impl Array {
             Data::Int(v) => v.push(0),
             Data::Bool(v) => v.push(false),
             Data::Str(v) => v.push(Rc::new(String::new())),
+            Data::Date(v) => v.push(0),
         }
         self.missing.get_or_insert_with(|| vec![false; len]).push(true);
     }
@@ -149,6 +155,7 @@ impl Array {
             (Data::Float(v), Value::Float(x)) => v.push(*x),
             (Data::Bool(v), Value::Bool(b)) => v.push(*b),
             (Data::Str(v), Value::Str(s)) => v.push(s.clone()),
+            (Data::Date(v), Value::Date(d)) => v.push(*d),
             _ => return Err(mismatch(&self.representative(), &value)),
         }
         if let Some(m) = &mut self.missing {

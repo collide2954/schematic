@@ -46,6 +46,7 @@ pub fn compare_values(name: &str, a: &Value, b: &Value) -> Result<Ordering, Erro
         (_, Nil) => Some(Ordering::Greater),
         (Bool(x), Bool(y)) => Some(x.cmp(y)),
         (Int(x), Int(y)) => Some(x.cmp(y)),
+        (Date(x), Date(y)) => Some(x.cmp(y)),
         (Int(_) | Float(_), Int(_) | Float(_)) => Some(as_float(a).partial_cmp(&as_float(b)).unwrap_or(Ordering::Equal)),
         (Str(x), Str(y)) => Some(x.cmp(y)),
         (Keyword(x), Keyword(y)) | (Symbol(x), Symbol(y)) => Some(x.name().cmp(&y.name())),

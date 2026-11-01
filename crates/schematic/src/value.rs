@@ -3,6 +3,7 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::array::Array;
+use crate::date;
 use crate::error::Error;
 use crate::list::List;
 use crate::map::Map;
@@ -18,6 +19,7 @@ pub enum Value {
     Bool(bool),
     Int(i64),
     Float(f64),
+    Date(i32),
     Symbol(Symbol),
     Keyword(Symbol),
     Str(Rc<String>),
@@ -83,6 +85,7 @@ impl Value {
             Value::Bool(_) => "boolean",
             Value::Int(_) => "integer",
             Value::Float(_) => "float",
+            Value::Date(_) => "date",
             Value::Symbol(_) => "symbol",
             Value::Keyword(_) => "keyword",
             Value::Str(_) => "string",
@@ -145,6 +148,7 @@ const TAG_SET: u64 = 0x0a;
 const TAG_POINTER: u64 = 0x0b << 56;
 const TAG_ARRAY: u64 = 0x0c;
 const TAG_TABLE: u64 = 0x0d;
+const TAG_DATE: u64 = 0x0e << 56;
 
 impl Value {
     pub fn hash_code(&self) -> u64 {
@@ -157,6 +161,7 @@ impl Value {
                 None if x.is_nan() => mix(TAG_FLOAT),
                 None => mix(x.to_bits() ^ TAG_FLOAT),
             },
+            Value::Date(d) => mix(*d as i64 as u64 ^ TAG_DATE),
             Value::Symbol(s) => mix(s.id() as u64 ^ TAG_SYMBOL),
             Value::Keyword(s) => mix(s.id() as u64 ^ TAG_KEYWORD),
             Value::Str(s) => hash_bytes(s.as_bytes()),
@@ -194,6 +199,7 @@ impl PartialEq for Value {
             (Int(a), Int(b)) => a == b,
             (Float(a), Float(b)) => a == b,
             (Int(a), Float(b)) | (Float(b), Int(a)) => int_eq_float(*a, *b),
+            (Date(a), Date(b)) => a == b,
             (Symbol(a), Symbol(b)) => a == b,
             (Keyword(a), Keyword(b)) => a == b,
             (Str(a), Str(b)) => a == b,
@@ -261,6 +267,8 @@ impl Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Int(i) => write!(f, "{i}"),
             Value::Float(x) => write_float(f, *x),
+            Value::Date(d) if readable => write!(f, "#{}", date::iso(*d)),
+            Value::Date(d) => f.write_str(&date::iso(*d)),
             Value::Symbol(s) => write!(f, "{s}"),
             Value::Keyword(s) => write!(f, ":{s}"),
             Value::Str(s) if readable => write_string(f, s),

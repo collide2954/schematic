@@ -16,7 +16,7 @@ fn arrays_are_built_from_collections_and_infer_their_type() {
     assert_eq!(eval("(array [1 nil 3])"), "#[1 nil 3]");
     assert_eq!(eval("(array [])"), "#[]");
     assert_eq!(eval("(array '(1 2))"), "#[1 2]");
-    assert_eq!(eval("(array [1 \"a\"])"), "error: array elements must all be numbers, all booleans, or all strings, got 1 and \"a\"");
+    assert_eq!(eval("(array [1 \"a\"])"), "error: array elements must all be numbers, all booleans, all strings, or all dates, got 1 and \"a\"");
     assert_eq!(
         eval("[(array-type (array [1])) (array-type (array [1.0])) (array-type (array [true])) (array-type (array [\"s\"])) (array-type (array [nil]))]"),
         "[:int :float :bool :string :float]"
@@ -71,7 +71,7 @@ fn arrays_act_as_sequences() {
     assert_eq!(eval("[(count #[1 2 3]) (nth #[1 2 3] 1) (#[1 2 3] 0) (get #[1 2] 5) (first #[7 8]) (last #[1 2])]"), "[3 2 1 nil 7 2]");
     assert_eq!(eval("[(rest #[7 8 9]) (vec #[1 nil]) (map inc #[1 2]) (reduce + #[1 2 3]) (empty? #[]) (nth #[1 nil] 1)]"), "[(8 9) [1 nil] #[2 3] 6 true nil]");
     assert_eq!(eval("[(conj #[1 2] 3) (conj #[1] 2.5) (conj #[1] nil)]"), "[#[1 2 3] #[1.0 2.5] #[1 nil]]");
-    assert_eq!(eval("(conj #[1] \"a\")"), "error: array elements must all be numbers, all booleans, or all strings, got 1 and \"a\"");
+    assert_eq!(eval("(conj #[1] \"a\")"), "error: array elements must all be numbers, all booleans, all strings, or all dates, got 1 and \"a\"");
     assert_eq!(eval("[(count-missing #[1 nil nil]) (count-missing #[])]"), "[2 0]");
     assert_eq!(eval("(sort #[3 1 2])"), "#[1 2 3]");
     assert_eq!(eval("[(take 2 #[1 2 3]) (filter even? #[1 2 3 4]) (map str #[1 2]) (map (lambda (x) [x]) #[1]) (reverse #[1 2])]"), "[#[1 2] #[2 4] #[\"1\" \"2\"] [[1]] #[2 1]]");
@@ -81,6 +81,20 @@ const PEOPLE: &str = "(define t (table {:name [\"Ada\" \"Bob\"] :age [36 41]}))"
 
 fn with_people(src: &str) -> String {
     eval(&format!("{PEOPLE} {src}"))
+}
+
+#[test]
+fn date_columns_are_inferred_sorted_and_filtered() {
+    let t = "(define t (parse-csv \"when,amount\\n2024-03-15,10\\n2024-01-02,5\\n,7\"))";
+    assert_eq!(
+        eval(&format!("{t} [(array-type (:when t)) (rows (order-by t :when)) (nrows (where t (> (:when t) #2024-02-01))) (min (:when t))]")),
+        "[:date [{:when nil, :amount 7} {:when #2024-01-02, :amount 5} {:when #2024-03-15, :amount 10}] 1 #2024-01-02]"
+    );
+    assert_eq!(eval(&format!("{t} (to-csv (head t 1))")), "\"when,amount\\n2024-03-15,10\\n\"");
+    assert_eq!(
+        eval(&format!("{t} (rows (aggregate (assoc t :month (date-trunc (:when t) :month)) :month {{:total [sum :amount]}}))")),
+        "[{:month #2024-03-01, :total 10} {:month #2024-01-01, :total 5} {:month nil, :total 7}]"
+    );
 }
 
 #[test]
@@ -177,7 +191,7 @@ fn rows_append_to_tables_with_conj_into_and_concat() {
     assert_eq!(with_people("(define t2 (conj t {:name \"Cy\" :city \"Oslo\"})) [(columns t2) (:city t2) (:age t2)]"), "[[:name :age :city] #[nil nil \"Oslo\"] #[36 41 nil]]");
     assert_eq!(with_people("(:age (conj t {:name \"Cy\" :age 29.5}))"), "#[36.0 41.0 29.5]");
     assert_eq!(with_people("(conj t 5)"), "error: conj onto a table expects row maps, got 5");
-    assert_eq!(with_people("(conj t {:age \"old\"})"), "error: array elements must all be numbers, all booleans, or all strings, got 36 and \"old\"");
+    assert_eq!(with_people("(conj t {:age \"old\"})"), "error: array elements must all be numbers, all booleans, all strings, or all dates, got 36 and \"old\"");
     assert_eq!(with_people("[(nrows (into t [{:name \"Cy\"} {:name \"Di\"}])) (rows (reduce conj (table {}) [{:a 1} {:a 2 :b 3}]))]"), "[4 [{:a 1, :b nil} {:a 2, :b 3}]]");
     assert_eq!(with_people("(rows (concat t (table {:name [\"Cy\"] :age [29]})))"), "[{:name \"Ada\", :age 36} {:name \"Bob\", :age 41} {:name \"Cy\", :age 29}]");
     assert_eq!(with_people("(define t3 (concat t (table {:city [\"Oslo\"]}) [{:name \"Di\"}])) [(columns t3) (nrows t3) (:age t3) (:city t3)]"), "[[:name :age :city] 4 #[36 41 nil nil] #[nil nil \"Oslo\" nil]]");

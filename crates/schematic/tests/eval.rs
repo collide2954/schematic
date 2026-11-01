@@ -971,6 +971,68 @@ fn format_and_string_functions_broadcast_over_arrays() {
 }
 
 #[test]
+fn dates_are_values_with_a_literal_and_calendar_functions() {
+    let d = "(define d #2024-03-15)";
+    assert_eq!(eval("#2024-03-15"), "#2024-03-15");
+    assert_eq!(eval("[(str #2024-03-15) (format \"{:?} {}\" #2024-03-15 #2024-03-15) (date? #2024-03-15) (date? \"2024-03-15\")]"), "[\"2024-03-15\" \"#2024-03-15 2024-03-15\" true false]");
+    assert_eq!(
+        eval("[(date \"2024-03-15\") (date 2024 3 15) (date \"15/03/2024\" \"dd/MM/yyyy\") (date \"March 5, 2024\" \"MMMM d, yyyy\") (date \"5 jan 99\" \"d MMM yy\")]"),
+        "[#2024-03-15 #2024-03-15 #2024-03-15 #2024-03-05 #1999-01-05]"
+    );
+    assert_eq!(eval(&format!("{d} [(year d) (month d) (day d) (weekday d) (day-of-year d) (quarter d)]")), "[2024 3 15 5 75 1]");
+    assert_eq!(
+        eval(&format!("{d} [(+ d 20) (- d 15) (- #2024-04-01 d) (inc d) (dec d) (< d #2024-04-01) (= d (date \"2024-03-15\")) (max d #2023-01-01) (min #2023-01-01 d)]")),
+        "[#2024-04-04 #2024-02-29 17 #2024-03-16 #2024-03-14 true true #2024-03-15 #2023-01-01]"
+    );
+    assert_eq!(
+        eval(&format!("{d} [(date-format d \"dd MMM yyyy\") (date-format d \"EEEE, MMMM d\") (date-format d \"yy/M/d (EEE)\")]")),
+        "[\"15 Mar 2024\" \"Friday, March 15\" \"24/3/15 (Fri)\"]"
+    );
+    assert_eq!(
+        eval(&format!("{d} [(date-trunc d :month) (date-trunc d :week) (date-trunc d :quarter) (date-trunc d :year)]")),
+        "[#2024-03-01 #2024-03-11 #2024-01-01 #2024-01-01]"
+    );
+    assert_eq!(
+        eval(&format!("{d} [(add-months #2024-01-31 1) (add-months d -3) (add-years #2024-02-29 1) (days-in-month d) (leap-year? d) (leap-year? 1900)]")),
+        "[#2024-02-29 #2023-12-15 #2025-02-28 31 true false]"
+    );
+    assert_eq!(eval("(date-range #2024-01-30 #2024-02-02)"), "#[#2024-01-30 #2024-01-31 #2024-02-01 #2024-02-02]");
+    assert_eq!(eval("(date-range #2024-01-31 #2024-04-30 :month)"), "#[#2024-01-31 #2024-02-29 #2024-03-31 #2024-04-30]");
+    assert_eq!(eval("[(date-range #2024-01-01 #2024-01-20 :week) (count (date-range #2024-01-02 #2024-01-01))]"), "[#[#2024-01-01 #2024-01-08 #2024-01-15] 0]");
+    assert_eq!(eval("(sort [#2024-03-15 #2023-12-31 #2024-01-01])"), "[#2023-12-31 #2024-01-01 #2024-03-15]");
+    assert_eq!(eval("[(get {#2024-01-01 \"new year\"} #2024-01-01) (contains? #{#2024-01-01} (date 2024 1 1))]"), "[\"new year\" true]");
+    assert_eq!(eval("(date? (today))"), "true");
+    assert_eq!(eval("(date \"2024-02-30\")"), "error: date cannot read \"2024-02-30\" as a date");
+    assert_eq!(eval("(date \"15/03/2024\")"), "error: date cannot read \"15/03/2024\" as a date");
+    assert_eq!(eval("(date \"2024-03-15x\" \"yyyy-MM-dd\")"), "error: date cannot read \"2024-03-15x\" with the pattern \"yyyy-MM-dd\"");
+    assert_eq!(eval("(date 2024 2 30)"), "error: 2024-02-30 is not a valid date");
+    assert_eq!(eval("(date-trunc #2024-03-15 :hour)"), "error: date-trunc expects :week, :month, :quarter, or :year, got :hour");
+    assert_eq!(eval("(* #2024-03-15 2)"), "error: * expects numbers, got #2024-03-15");
+    assert_eq!(eval("(+ #2024-03-15 #2024-03-15)"), "error: + expects numbers, got #2024-03-15");
+    assert!(eval("#2024-13-01").contains("invalid date literal #2024-13-01"));
+}
+
+#[test]
+fn date_functions_broadcast_over_date_arrays() {
+    let ds = "(define ds #[#2024-01-01 #2024-02-15 nil])";
+    assert_eq!(
+        eval(&format!("{ds} [(array-type ds) (year ds) (+ ds 1) (- #2024-03-01 ds) (< ds #2024-02-01) (date-format ds \"MMM\")]")),
+        "[:date #[2024 2024 nil] #[#2024-01-02 #2024-02-16 nil] #[60 15 nil] #[true false nil] #[\"Jan\" \"Feb\" nil]]"
+    );
+    assert_eq!(
+        eval(&format!("{ds} [(date-trunc ds :month) (add-months ds 1) (month (date #[\"2024-05-01\" nil \"2023-01-09\"])) (day (date #[\"01.02.2024\"] \"dd.MM.yyyy\"))]")),
+        "[#[#2024-01-01 #2024-02-01 nil] #[#2024-02-01 #2024-03-15 nil] #[5 nil 1] #[1]]"
+    );
+    assert_eq!(eval(&format!("{ds} [(max ds) (min ds) (- ds #2024-01-01)]")), "[#2024-02-15 #2024-01-01 #[0 45 nil]]");
+    assert_eq!(eval("(array [#2024-01-01 1])"), "error: array elements must all be numbers, all booleans, all strings, or all dates, got #2024-01-01 and 1");
+}
+
+#[test]
+fn subtraction_accepts_an_array_first() {
+    assert_eq!(eval("[(- #[3 4] 1) (- 10 #[3 4]) (- #[3 4] #[1 1])]"), "[#[2 3] #[7 6] #[2 3]]");
+}
+
+#[test]
 fn padding_helpers() {
     assert_eq!(
         eval("[(string-pad-left \"7\" 3) (string-pad-left \"7\" 3 \"0\") (string-pad-right \"ab\" 4 \".\") (string-pad-left \"long\" 2) (string-pad-left #[\"7\" \"42\"] 3 \"0\")]"),
