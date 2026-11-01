@@ -1172,7 +1172,18 @@ fn facets_split_a_chart_into_small_multiples() {
     assert!(histogram.contains("── Rome ──") && histogram.matches("7–18.5").count() == 2, "{histogram}");
     let lines = eval(&format!("{s} (to-svg (line-chart s :year :units {{:facet :city}}))"));
     assert_eq!(lines.matches("<polyline").count(), 2, "{lines}");
+    assert_eq!(lines.matches(">Oslo<").count(), 1, "{lines}");
+    assert!(lines.matches(">units<").count() == 1 && lines.matches(">year<").count() == 1, "{lines}");
     assert_eq!(eval("(bar-chart [\"a\"] [1] {:facet :x})"), "error: bar-chart expects a table for :facet");
+}
+
+#[test]
+fn axes_prefer_whole_numbers_and_stacks_label_their_totals() {
+    let svg = eval("(to-svg (line-chart [2020 2021 2022] [1 2 3]))");
+    assert!(svg.contains(">2021<") && !svg.contains(".5<"), "{svg}");
+    let s = "(define s (table {:city [\"Oslo\" \"Oslo\" \"Rome\" \"Rome\"] :year [2020 2021 2020 2021] :units [12 30 7 9]}))";
+    let svg = eval(&format!("{s} (to-svg (bar-chart s :city :units {{:by :year :stack true :labels true}}))"));
+    assert!(svg.contains(">42<") && svg.contains(">16<") && !svg.contains(">12<"), "{svg}");
 }
 
 #[test]

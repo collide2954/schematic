@@ -226,6 +226,17 @@ pub fn shared_ranges(panels: &[Plot]) -> ((f64, f64), Option<(f64, f64)>) {
     (value, x)
 }
 
+fn whole(values: impl Iterator<Item = f64>) -> bool {
+    let mut any = false;
+    for value in values {
+        if value.fract() != 0.0 {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 fn translate(shape: Shape, dx: f32, dy: f32) -> Shape {
     let shift = |points: Vec<(f32, f32)>| points.into_iter().map(|(x, y)| (x + dx, y + dy)).collect();
     match shape {
@@ -300,6 +311,14 @@ impl Axis {
             }
         }
         Axis { lo, hi, ticks, step: 1.0, log: true }
+    }
+
+    fn whole(mut self) -> Axis {
+        if !self.log && self.step < 1.0 {
+            self.ticks = (self.lo.ceil() as i64..=self.hi.floor() as i64).map(|i| i as f64).collect();
+            self.step = 1.0;
+        }
+        self
     }
 
     fn place(&self, value: f64, from: f32, to: f32) -> f32 {
@@ -427,15 +446,44 @@ impl Plot {
             shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true });
             top = 32.0;
         }
+        let (top_label, bottom_label) = self.axis_labels();
+        if let Some(label) = top_label {
+            shapes.push(Self::text_shape(self.left_margin(), top + 11.0, label, 12.0, Anchor::Start, Paint::Muted));
+            top += 22.0;
+        }
+        let mut bottom = 0.0;
+        if let Some(label) = bottom_label {
+            shapes.push(Self::text_shape(width / 2.0, height - 10.0, label, 12.0, Anchor::Middle, Paint::Muted));
+            bottom = 18.0;
+        }
         let n = self.panels.len();
-        let cols = ((n as f32).sqrt().ceil() as usize).max(1);
+        let avail = height - top - bottom;
+        let room = |cols: usize| (width / cols as f32 - 82.0).min(avail / n.div_ceil(cols) as f32 - 64.0);
+        let square = ((n as f32).sqrt().ceil() as usize).max(1);
+        let cols = (1..=n)
+            .max_by(|a, b| room(*a).total_cmp(&room(*b)).then_with(|| a.abs_diff(square).cmp(&b.abs_diff(square)).reverse()))
+            .unwrap_or(1);
         let rows = n.div_ceil(cols);
-        let (cell_w, cell_h) = (width / cols as f32, (height - top) / rows as f32);
+        let (cell_w, cell_h) = (width / cols as f32, avail / rows as f32);
         for (i, panel) in self.panels.iter().enumerate() {
             let (dx, dy) = ((i % cols) as f32 * cell_w, top + (i / cols) as f32 * cell_h);
-            shapes.extend(panel.scene(cell_w, cell_h).shapes.into_iter().map(|shape| translate(shape, dx, dy)));
+            shapes.extend(panel.body_scene(cell_w, cell_h, true).shapes.into_iter().map(|shape| translate(shape, dx, dy)));
         }
         Scene { width, height, shapes }
+    }
+
+    fn axis_labels(&self) -> (Option<String>, Option<String>) {
+        let (value_label, category_label) = (self.y_label.clone(), self.x_label.clone());
+        if self.horizontal { (category_label, value_label) } else { (value_label, category_label) }
+    }
+
+    fn left_margin(&self) -> f32 {
+        if self.horizontal {
+            let longest = self.categories.iter().map(|c| c.chars().count()).max().unwrap_or(0) as f32;
+            20.0 + longest * 7.0
+        } else {
+            58.0
+        }
     }
 
     fn bar_rows(&self) -> Vec<(String, f64)> {
@@ -624,26 +672,32 @@ impl Plot {
     }
 
     pub fn scene(&self, width: f32, height: f32) -> Scene {
-        if !self.panels.is_empty() {
-            return self.panel_scene(width, height);
-        }
+        if self.panels.is_empty() { self.body_scene(width, height, false) } else { self.panel_scene(width, height) }
+    }
+
+    fn body_scene(&self, width: f32, height: f32, bare: bool) -> Scene {
         if self.kind == Kind::Pie {
             return self.pie_scene(width, height);
         }
         let mut shapes = Vec::new();
         let multi = self.series.len() > 1 && self.kind != Kind::Box;
-        let (value_label, category_label) = (self.y_label.clone(), self.x_label.clone());
-        let (top_label, bottom_label) =
-            if self.horizontal { (category_label.clone(), value_label.clone()) } else { (value_label.clone(), category_label.clone()) };
-        let top = 16.0 + if self.title.is_some() { 24.0 } else { 0.0 } + if multi || top_label.is_some() { 22.0 } else { 0.0 };
+        let (top_label, bottom_label) = if bare { (None, None) } else { self.axis_labels() };
+        let title_room = match (&self.title, bare) {
+            (None, _) => 0.0,
+            (Some(_), true) => 14.0,
+            (Some(_), false) => 24.0,
+        };
+        let legend_room = if multi || top_label.is_some() { 22.0 } else { 0.0 };
+        let (label_above, label_beside) = if self.labels { if self.horizontal { (0.0, 28.0) } else { (12.0, 0.0) } } else { (0.0, 0.0) };
+        let top = 16.0 + title_room + legend_room + label_above;
         let bottom = 34.0 + if bottom_label.is_some() { 18.0 } else { 0.0 };
-        let longest = self.categories.iter().map(|c| c.chars().count()).max().unwrap_or(0) as f32;
-        let left = if self.horizontal { 20.0 + longest * 7.0 } else { 58.0 };
-        let right = if self.dates { 40.0 } else { 24.0 };
+        let left = self.left_margin();
+        let right = if self.dates { 40.0 } else { 24.0 } + label_beside;
         let (x0, x1, y0, y1) = (left, width - right, top, height - bottom);
         let (plot_w, plot_h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
         if let Some(title) = &self.title {
-            shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true });
+            let (y, size) = if bare { (14.0, 13.0) } else { (18.0, 15.0) };
+            shapes.push(Shape::Text { x: width / 2.0, y, text: title.clone(), size, anchor: Anchor::Middle, paint: Paint::Text, bold: true });
         }
         if let Some(label) = top_label {
             shapes.push(Self::text_shape(x0, y0 - 11.0, label, 12.0, Anchor::Start, Paint::Muted));
@@ -654,11 +708,19 @@ impl Plot {
         let bars = matches!(self.kind, Kind::Bar | Kind::Histogram | Kind::Area);
         let (vlo, vhi) = self.value_extent();
         let value_count = (((if self.horizontal { plot_w } else { plot_h }) / 40.0) as usize).clamp(2, 6);
-        let value_axis = match (self.y_range, self.y_log) {
+        let mut value_axis = match (self.y_range, self.y_log) {
             (Some((lo, hi)), log) => Axis::fixed(lo, hi, value_count, log),
             (None, true) => Axis::log(vlo, vhi),
             (None, false) => Axis::numeric(vlo, vhi, value_count, bars),
         };
+        let whole_values = if self.kind == Kind::Box {
+            whole(self.boxes.iter().flat_map(|b| [b.low, b.q1, b.median, b.q3, b.high]))
+        } else {
+            whole(self.series.iter().flat_map(|s| s.ys.iter().copied()))
+        };
+        if whole_values {
+            value_axis = value_axis.whole();
+        }
         let baseline = if value_axis.log { value_axis.lo } else { 0.0 };
         let value_at = |v: f64| if self.horizontal { value_axis.place(v, x0, x1) } else { value_axis.place(v, y1, y0) };
         let value_text = |v: f64| format_tick(v, self.y_format.as_deref()).unwrap_or_else(|| number(v));
@@ -705,11 +767,14 @@ impl Plot {
                 let xs: Vec<f64> = self.series.iter().flat_map(|s| s.xs.iter().copied()).collect();
                 let (xmin, xmax) = xs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
                 let count = ((plot_w / if self.dates { 90.0 } else { 60.0 }) as usize).clamp(2, 6);
-                let x_axis = match (self.x_range, self.x_log) {
+                let mut x_axis = match (self.x_range, self.x_log) {
                     (Some((lo, hi)), log) => Axis::fixed(lo, hi, count, log),
                     (None, true) => Axis::log(xmin, xmax),
                     (None, false) => Axis::hugging(xmin, xmax, count),
                 };
+                if whole(xs.iter().copied()) {
+                    x_axis = x_axis.whole();
+                }
                 let sx = |x: f64| x_axis.place(x, x0, x1);
                 for tick in &x_axis.ticks {
                     let label = x_axis.label(*tick, self.dates, self.x_format.as_deref());
@@ -821,15 +886,25 @@ impl Plot {
                 if self.horizontal {
                     let row = y0 + c as f32 * group + offset;
                     shapes.push(Shape::Rect { x: a.min(b), y: row, w: (a - b).abs(), h: thickness, paint: Paint::Series(si), tip });
-                    if self.labels {
+                    if self.labels && !self.stacked {
                         shapes.push(Self::text_shape(a.max(b) + 5.0, row + thickness / 2.0, value_text(*y), 10.5, Anchor::Start, Paint::Muted));
                     }
                 } else {
                     let column = x0 + c as f32 * group + offset;
                     shapes.push(Shape::Rect { x: column, y: a.min(b), w: thickness, h: (a - b).abs(), paint: Paint::Series(si), tip });
-                    if self.labels {
+                    if self.labels && !self.stacked {
                         shapes.push(Self::text_shape(column + thickness / 2.0, a.min(b) - 8.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
                     }
+                }
+            }
+        }
+        if self.labels && self.stacked {
+            for (c, total) in positive.iter().enumerate().filter(|(_, total)| **total > baseline) {
+                let middle = group * 0.14 + slot.max(1.0) / 2.0;
+                if self.horizontal {
+                    shapes.push(Self::text_shape(value_at(*total) + 5.0, y0 + c as f32 * group + middle, value_text(*total), 10.5, Anchor::Start, Paint::Muted));
+                } else {
+                    shapes.push(Self::text_shape(x0 + c as f32 * group + middle, value_at(*total) - 8.0, value_text(*total), 10.5, Anchor::Middle, Paint::Muted));
                 }
             }
         }
@@ -1024,6 +1099,34 @@ mod tests {
         assert_eq!(plot.describe(), "histogram with 4 bins");
         assert_eq!(histogram(&[2.0, 2.0], 3).series[0].ys, [2.0, 0.0, 0.0]);
         assert_eq!(histogram(&[], 2).series[0].ys, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn facet_grids_fit_the_space_they_are_given() {
+        let mut plot = Plot::new(Kind::Bar);
+        for title in ["a", "b", "c"] {
+            let mut panel = Plot::new(Kind::Bar);
+            panel.title = Some(title.into());
+            panel.categories = vec!["x".into()];
+            panel.series = vec![Series { name: None, xs: vec![0.0], ys: vec![1.0] }];
+            plot.panels.push(panel);
+        }
+        let title_ys = |plot: &Plot, width: f32, height: f32| -> Vec<f32> {
+            let mut ys: Vec<f32> = plot
+                .scene(width, height)
+                .shapes
+                .iter()
+                .filter_map(|s| match s {
+                    Shape::Text { y, bold: true, .. } => Some(*y),
+                    _ => None,
+                })
+                .collect();
+            ys.dedup();
+            ys
+        };
+        assert_eq!(title_ys(&plot, 480.0, 220.0).len(), 1);
+        assert_eq!(title_ys(&plot, 640.0, 400.0).len(), 2);
+        assert_eq!(title_ys(&plot, 400.0, 900.0).len(), 3);
     }
 
     #[test]

@@ -332,11 +332,11 @@ fn chart(name: &str, kind: Kind, args: &[Value]) -> Result<Value, Error> {
         return Ok(Value::Plot(Rc::new(build(name, kind, base, &xs, &ys, by.as_deref(), None)?)));
     };
     let full = build(name, kind, base.clone(), &xs, &ys, by.as_deref(), None)?;
-    let mut parent = base;
-    parent.categories = full.categories.clone();
+    base.categories = full.categories.clone();
+    let mut parent = base.clone();
     for (label, rows) in facet_groups(&facet) {
         let sub_by = by.as_ref().map(|keys| pick(keys, &rows));
-        let mut panel = build(name, kind, parent.clone(), &pick(&xs, &rows), &pick(&ys, &rows), sub_by.as_deref(), Some(&full.categories))?;
+        let mut panel = build(name, kind, base.clone(), &pick(&xs, &rows), &pick(&ys, &rows), sub_by.as_deref(), Some(&full.categories))?;
         panel.title = Some(label);
         parent.panels.push(panel);
     }
