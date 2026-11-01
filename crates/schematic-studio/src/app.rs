@@ -13,6 +13,7 @@ use schematic::reader::read_all;
 
 use crate::completion::{self, Candidate};
 use crate::highlight::Marks;
+use crate::project::{self, ProjectInfo};
 use crate::worker::{self, Binding, Event, Grid, Request};
 use crate::{files, fonts, forms, theme, view};
 
@@ -92,6 +93,7 @@ pub enum Decision {
 pub enum Side {
     Environment,
     Files,
+    Project,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +101,7 @@ pub enum NamingKind {
     File,
     Folder,
     Rename(PathBuf),
+    Package,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +183,9 @@ pub struct Studio {
     pub entries: Vec<files::Entry>,
     pub selected: Option<PathBuf>,
     pub naming: Option<Naming>,
+    pub project: Option<ProjectInfo>,
+    pub picked_package: Option<String>,
+    pub busy: Option<String>,
     pub console: Vec<Line>,
     pub input: text_editor::Content,
     pub input_marks: Marks,
@@ -236,6 +242,11 @@ pub enum Message {
     DeleteEntry,
     DeleteDecided(PathBuf, bool),
     RefreshFiles,
+    CreateProject,
+    PickPackage(String),
+    RemovePackage(String),
+    RestoreProject,
+    ProjectDone(Result<(ProjectInfo, String), String>),
     RunForm,
     RunFile,
     Stop,
@@ -294,6 +305,10 @@ pub fn console_text_id() -> Id {
 
 fn file_name_of(path: &Path) -> String {
     path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string()
+}
+
+fn info_name(info: &ProjectInfo) -> String {
+    format!("{} in {}", info.name, info.root.display())
 }
 
 pub fn scroll_target(top: f32, bottom: f32, offset: f32, height: f32) -> Option<f32> {
@@ -405,6 +420,9 @@ impl Studio {
             entries: Vec::new(),
             selected: None,
             naming: None,
+            project: None,
+            picked_package: None,
+            busy: None,
             console: Vec::new(),
             input: text_editor::Content::new(),
             input_marks: Marks::default(),
@@ -453,6 +471,32 @@ impl Studio {
             Some(root) => files::listing(root, &self.expanded),
             None => Vec::new(),
         };
+        self.refresh_project();
+    }
+
+    fn refresh_project(&mut self) {
+        let start = self.root.clone().or_else(|| self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf));
+        self.project = start.as_deref().and_then(project::describe);
+        if let Some(project) = &self.project {
+            if self.picked_package.as_ref().is_some_and(|name| !project.dependencies.iter().any(|d| &d.name == name)) {
+                self.picked_package = None;
+            }
+        }
+    }
+
+    fn finish_project(&mut self, result: Result<(ProjectInfo, String), String>) {
+        self.busy = None;
+        match result {
+            Ok((info, message)) => {
+                self.project = Some(info);
+                self.status = message;
+            }
+            Err(message) => {
+                self.status = format!("Error: {message}");
+                self.refresh_project();
+            }
+        }
+        self.refresh_files();
     }
 
     fn naming_parent(&self) -> Option<PathBuf> {
@@ -473,18 +517,27 @@ impl Studio {
     fn confirm_naming(&mut self) -> Task<Message> {
         let Some(naming) = self.naming.take() else { return Task::none() };
         let name = naming.text.trim().to_string();
+        if naming.kind == NamingKind::Package {
+            if name.is_empty() {
+                self.status = "Name a package, as name, name@version, or name ../path".to_string();
+                return Task::none();
+            }
+            self.busy = Some(format!("Adding {name}"));
+            let root = naming.parent;
+            return Task::perform(async move { project::add(&root, &name) }, Message::ProjectDone);
+        }
         if !files::valid_name(&name) {
             self.status = "Names cannot be empty or contain slashes".to_string();
             return Task::none();
         }
         let target = naming.parent.join(&name);
         let verb = match &naming.kind {
-            NamingKind::File | NamingKind::Folder => "create",
+            NamingKind::File | NamingKind::Folder | NamingKind::Package => "create",
             NamingKind::Rename(_) => "rename",
         };
         let result = match &naming.kind {
             _ if target.exists() && naming.kind != NamingKind::Rename(target.clone()) => Err(format!("{name} already exists")),
-            NamingKind::File => std::fs::write(&target, "").map_err(|e| e.to_string()),
+            NamingKind::File | NamingKind::Package => std::fs::write(&target, "").map_err(|e| e.to_string()),
             NamingKind::Folder => std::fs::create_dir(&target).map_err(|e| e.to_string()),
             NamingKind::Rename(old) => match std::fs::rename(old, &target) {
                 Ok(()) => {
@@ -717,6 +770,7 @@ impl Studio {
             Message::StartNaming(kind) => {
                 let (parent, text) = match &kind {
                     NamingKind::Rename(path) => (path.parent().map(Path::to_path_buf), file_name_of(path)),
+                    NamingKind::Package => (self.project.as_ref().map(|p| p.root.clone()), String::new()),
                     _ => (self.naming_parent(), String::new()),
                 };
                 if let Some(parent) = parent {
@@ -753,6 +807,37 @@ impl Studio {
             Message::DeleteDecided(_, false) => Task::none(),
             Message::RefreshFiles => {
                 self.refresh_files();
+                Task::none()
+            }
+            Message::CreateProject => {
+                if let Some(root) = self.root.clone() {
+                    let created = project::create(&root).map(|info| {
+                        let message = format!("Created {}", info_name(&info));
+                        (info, message)
+                    });
+                    self.finish_project(created);
+                }
+                Task::none()
+            }
+            Message::PickPackage(name) => {
+                self.picked_package = Some(name);
+                Task::none()
+            }
+            Message::RemovePackage(name) => {
+                if let Some(root) = self.project.as_ref().map(|p| p.root.clone()) {
+                    self.finish_project(project::remove(&root, &name));
+                }
+                Task::none()
+            }
+            Message::RestoreProject => match self.project.as_ref().map(|p| p.root.clone()) {
+                Some(root) if self.busy.is_none() => {
+                    self.busy = Some("Restoring packages".to_string());
+                    Task::perform(async move { project::restore(&root) }, Message::ProjectDone)
+                }
+                _ => Task::none(),
+            },
+            Message::ProjectDone(result) => {
+                self.finish_project(result);
                 Task::none()
             }
             Message::RunForm => self.run_form(),
@@ -888,6 +973,7 @@ impl Studio {
         self.status = "Running".to_string();
         let mut load_path: Vec<PathBuf> = self.doc().path.as_deref().and_then(Path::parent).map(Path::to_path_buf).into_iter().collect();
         load_path.extend(self.root.clone());
+        load_path.extend(self.project.iter().flat_map(|p| p.load_path.clone()));
         let _ = worker.send(Request::Run { source, show_results, load_path });
         Task::none()
     }
@@ -1101,6 +1187,9 @@ impl Studio {
                     if let Some(parent) = path.parent() {
                         self.set_root(parent.to_path_buf());
                     }
+                }
+                if self.project.is_none() {
+                    self.project = path.parent().and_then(project::describe);
                 }
                 let content = text_editor::Content::with_text(&source.replace("\r\n", "\n"));
                 let doc = Document { path: Some(path), content, marks: Marks::default(), dirty: false, offset: 0.0 };
@@ -1355,6 +1444,47 @@ mod tests {
         let _ = studio.update(Message::Input(Action::Edit(Edit::Insert('c'))));
         let _ = studio.update(Message::CompleteClose);
         assert!(studio.completion.is_none());
+    }
+
+    #[test]
+    fn the_project_tab_shows_the_project_and_its_packages() {
+        let dir = scratch("project-tab");
+        std::fs::create_dir_all(dir.join("lib").join("src")).unwrap();
+        std::fs::write(dir.join("lib").join("src").join("lib.scm"), "(ns lib)").unwrap();
+        let app = dir.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        let mut studio = Studio::new();
+        let _ = studio.update(Message::OpenedFolder(Some(app.clone())));
+        let _ = studio.update(Message::ShowSide(Side::Project));
+        assert!(studio.project.is_none());
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::CreateProject);
+        assert_eq!(studio.project.as_ref().map(|p| p.name.as_str()), Some("app"));
+        assert!(app.join("project.scm").is_file() && studio.status.starts_with("Created app"));
+        assert!(studio.entries.iter().any(|e| e.name == "project.scm"));
+        let _ = studio.update(Message::StartNaming(NamingKind::Package));
+        assert_eq!(studio.naming.as_ref().map(|n| n.parent.clone()), Some(app.clone()));
+        let _ = studio.update(Message::Naming("lib ../lib".into()));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::ConfirmNaming);
+        assert_eq!(studio.busy.as_deref(), Some("Adding lib ../lib"));
+        let _ = view::view(&studio);
+        let added = project::add(&app, "lib ../lib").unwrap();
+        let _ = studio.update(Message::ProjectDone(Ok(added)));
+        assert!(studio.busy.is_none() && studio.status == "Added lib");
+        assert_eq!(studio.project.as_ref().map(|p| p.dependencies.len()), Some(1));
+        let _ = studio.update(Message::PickPackage("lib".into()));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::ProjectDone(Err("boom".into())));
+        assert_eq!(studio.status, "Error: boom");
+        assert_eq!(studio.project.as_ref().map(|p| p.dependencies.len()), Some(1));
+        let _ = studio.update(Message::RemovePackage("lib".into()));
+        assert_eq!((studio.project.as_ref().map(|p| p.dependencies.len()), studio.picked_package.clone()), (Some(0), None));
+        let _ = studio.update(Message::StartNaming(NamingKind::Package));
+        let _ = studio.update(Message::ConfirmNaming);
+        assert!(studio.busy.is_none() && studio.status.starts_with("Name a package"));
+        let _ = view::view(&studio);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

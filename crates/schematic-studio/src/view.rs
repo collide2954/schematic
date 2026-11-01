@@ -44,6 +44,7 @@ pub fn view(studio: &Studio) -> Element<'_, Message> {
             PaneKind::Environment => match studio.side {
                 Side::Environment => (side_tabs(studio), None, environment(studio)),
                 Side::Files => (side_tabs(studio), Some(file_controls(studio)), files(studio)),
+                Side::Project => (side_tabs(studio), Some(project_controls(studio)), project(studio)),
             },
             PaneKind::Viewer => {
                 let grid = studio.grid.as_ref();
@@ -198,23 +199,110 @@ fn folder_name(path: &Path) -> String {
 }
 
 fn side_tabs(studio: &Studio) -> Vec<TabItem> {
-    let files = studio.side == Side::Files;
+    let tab = |label: &str, side: Side, detail: Option<String>| TabItem {
+        label: label.to_string(),
+        detail: if studio.side == side { detail } else { None },
+        active: studio.side == side,
+        select: Some(Message::ShowSide(side)),
+        close: None,
+    };
     vec![
-        TabItem {
-            label: "Environment".to_string(),
-            detail: if files { None } else { environment_label(studio) },
-            active: !files,
-            select: Some(Message::ShowSide(Side::Environment)),
-            close: None,
-        },
-        TabItem {
-            label: "Files".to_string(),
-            detail: if files { studio.root.as_deref().map(folder_name) } else { None },
-            active: files,
-            select: Some(Message::ShowSide(Side::Files)),
-            close: None,
-        },
+        tab("Environment", Side::Environment, environment_label(studio)),
+        tab("Files", Side::Files, studio.root.as_deref().map(folder_name)),
+        tab("Project", Side::Project, studio.project.as_ref().map(|p| p.name.clone())),
     ]
+}
+
+fn project_controls(studio: &Studio) -> Element<'_, Message> {
+    let ready = studio.project.is_some() && studio.busy.is_none();
+    let picked = studio.picked_package.clone().filter(|_| ready);
+    row![
+        small("Add…", ready.then_some(Message::StartNaming(NamingKind::Package))),
+        small("Remove", picked.map(Message::RemovePackage)),
+        small("Restore", ready.then_some(Message::RestoreProject)),
+    ]
+    .spacing(2)
+    .into()
+}
+
+fn naming_row<'a>(label: &'a str, placeholder: &'a str, value: &'a str) -> Element<'a, Message> {
+    let field = text_input(placeholder, value)
+        .id(naming_id())
+        .on_input(Message::Naming)
+        .on_submit(Message::ConfirmNaming)
+        .size(12.5)
+        .padding([4, 8])
+        .style(theme::field)
+        .width(Length::Fill);
+    row![
+        text(label).size(12).style(theme::muted),
+        field,
+        small("OK", Some(Message::ConfirmNaming)),
+        small("Cancel", Some(Message::CancelNaming)),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .padding([6, 12])
+    .into()
+}
+
+fn project(studio: &Studio) -> Element<'_, Message> {
+    let Some(info) = &studio.project else {
+        let mut column = Column::new().push(hint(
+            "No project.scm in this folder or above it. A project names its packages in project.scm, pins them in project.lock, and keeps their sources in packages/.",
+        ));
+        if studio.root.is_some() {
+            column = column.push(container(small("Create a project here", Some(Message::CreateProject))).padding([0, 8]));
+        }
+        return column.into();
+    };
+    let header = row![
+        text(&info.name).size(12.5).font(fonts::UI_MEDIUM),
+        text(&info.version).size(12).style(theme::muted),
+        space::horizontal(),
+        small("Open main", Some(Message::PickEntry(info.main.clone()))),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center)
+    .padding(Padding { top: 4.0, right: 6.0, bottom: 4.0, left: 12.0 });
+    let mut list = Column::new().push(header).push(line()).width(Length::Fill);
+    if let Some(busy) = &studio.busy {
+        list = list.push(container(text(format!("{busy}…")).size(12).style(theme::accent)).padding([6, 12]));
+    }
+    if let Some(naming) = studio.naming.as_ref().filter(|n| n.kind == NamingKind::Package) {
+        list = list.push(naming_row("Add", "name, name@version, or name ../path", &naming.text)).push(line());
+    }
+    if info.dependencies.is_empty() {
+        return list.push(hint("No packages yet. Add one by name from the registry, or as name ../path for a local folder.")).into();
+    }
+    let heading = |label: &'static str| text(label).size(11.5).font(fonts::UI_MEDIUM).style(theme::muted);
+    let columns = row![
+        heading("Package").width(Length::FillPortion(3)),
+        heading("Version").width(72),
+        heading("Status").width(Length::FillPortion(2)),
+    ]
+    .spacing(10)
+    .padding(Padding { top: 6.0, right: 12.0, bottom: 5.0, left: 12.0 });
+    list = list.push(columns).push(line());
+    for dependency in &info.dependencies {
+        let style: TextStyle = match dependency.status {
+            schematic::project::Status::Vendored | schematic::project::Status::Local => theme::fine,
+            schematic::project::Status::Changed | schematic::project::Status::Unlocked => theme::warn,
+            schematic::project::Status::Missing => theme::alarm,
+        };
+        let content = row![
+            text(&dependency.name).font(fonts::MONO).size(12.5).style(theme::strong).width(Length::FillPortion(3)),
+            text(dependency.version.clone().unwrap_or_default()).size(12).style(theme::muted).width(72),
+            text(dependency.status.label()).size(12).style(style).width(Length::FillPortion(2)),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+        let picked = studio.picked_package.as_deref() == Some(dependency.name.as_str());
+        list = list.push(
+            button(content).padding([3, 12]).width(Length::Fill).style(theme::row(picked)).on_press(Message::PickPackage(dependency.name.clone())),
+        );
+    }
+    scrollable(list.padding(Padding { top: 0.0, right: 0.0, bottom: 8.0, left: 0.0 })).height(Length::Fill).style(theme::scroll).into()
 }
 
 fn file_controls(studio: &Studio) -> Element<'_, Message> {
@@ -245,30 +333,13 @@ fn files(studio: &Studio) -> Element<'_, Message> {
     .align_y(Alignment::Center)
     .padding(Padding { top: 4.0, right: 6.0, bottom: 4.0, left: 12.0 });
     let mut list = Column::new().push(header).push(line()).width(Length::Fill);
-    if let Some(naming) = &studio.naming {
+    if let Some(naming) = studio.naming.as_ref().filter(|n| n.kind != NamingKind::Package) {
         let label = match naming.kind {
-            NamingKind::File => "New file",
             NamingKind::Folder => "New folder",
             NamingKind::Rename(_) => "Rename to",
+            _ => "New file",
         };
-        let field = text_input("name", &naming.text)
-            .id(naming_id())
-            .on_input(Message::Naming)
-            .on_submit(Message::ConfirmNaming)
-            .size(12.5)
-            .padding([4, 8])
-            .style(theme::field)
-            .width(Length::Fill);
-        let entry = row![
-            text(label).size(12).style(theme::muted),
-            field,
-            small("OK", Some(Message::ConfirmNaming)),
-            small("Cancel", Some(Message::CancelNaming)),
-        ]
-        .spacing(8)
-        .align_y(Alignment::Center)
-        .padding([6, 12]);
-        list = list.push(entry).push(line());
+        list = list.push(naming_row(label, "name", &naming.text)).push(line());
     }
     for entry in &studio.entries {
         let chevron = match (entry.dir, entry.expanded) {

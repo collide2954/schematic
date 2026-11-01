@@ -316,6 +316,14 @@ pub fn alarm(theme: &Theme) -> text::Style {
     text::Style { color: Some(tones(theme).danger) }
 }
 
+pub fn fine(theme: &Theme) -> text::Style {
+    text::Style { color: Some(tones(theme).success) }
+}
+
+pub fn warn(theme: &Theme) -> text::Style {
+    text::Style { color: Some(tones(theme).warning) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
