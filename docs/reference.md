@@ -151,7 +151,7 @@ when the elements allow it, and anything else gives a vector.
 | Function | Description |
 |---|---|
 | `(str x...)` | concatenate display forms; `nil` contributes nothing |
-| `(format template x...)` | fill `{}` placeholders; `{1}` picks by position, `{{` is a literal brace, and `{:spec}` takes, in order, a fill character with an alignment (`<`, `>`, `^`), `0` for zero padding, a width, `,` for thousands separators, `.` and a precision, and a type: `e` scientific, `%` percentage, `?` readable form |
+| `(format template x...)` | fill `{}` placeholders; `{1}` picks by position, a brace written twice stands for itself, and `{:spec}` takes, in order, a fill character with an alignment (`<`, `>`, `^`), `0` for zero padding, a width, `,` for thousands separators, `.` and a precision, and a type: `e` scientific, `%` percentage, `?` readable form |
 | `(string-length s)` | number of characters |
 | `(substring s start [end])` | by character position |
 | `(string-split s [sep])` | split on a separator, or on whitespace |

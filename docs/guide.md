@@ -246,7 +246,7 @@ After the colon come, in order, a fill character with an alignment (`<`,
 `>`, or `^`), a width, `,` for thousands separators, `.` and a precision, and
 a type: `e` for scientific notation, `%` for a percentage, `?` for the
 readable form with strings quoted. `{0}` and `{1}` pick arguments by
-position, and `{{` writes a literal brace. `printf` prints a formatted string
+position, and a brace written twice stands for itself. `printf` prints a formatted string
 exactly as given, and `string-pad-left` and `string-pad-right` pad to a width.
 
 Every string function accepts an array of strings in place of a single
