@@ -49,12 +49,12 @@ Oslo  2020     12
 <h2>Overview</h2>
 <ul>
   <li>Typed arrays. Arithmetic and comparisons broadcast over every element, <code>nil</code> marks a missing value, and statistics skip it.</li>
-  <li>Tables with <code>select</code>, <code>where</code>, <code>group-by</code>, <code>aggregate</code>, <code>window</code>, <code>pivot</code>, and <code>join</code>, plus CSV in and out with inferred column types.</li>
+  <li>Tables with <code>select</code>, <code>where</code>, <code>group-by</code>, <code>aggregate</code>, <code>window</code>, <code>pivot</code>, and <code>join</code>, plus CSV and JSON in and out with inferred column types.</li>
   <li>Dates with a literal and calendar math; <code>format</code> with precision, alignment, and separators; regular expressions and raw <code>#"..."</code> strings.</li>
   <li>Charts as values: bars, lines, points, histograms, and more. They print as text in the terminal, save as SVG, and draw in Studio.</li>
   <li>Scheme's forms with proper tail calls, hygienic <code>syntax-rules</code>, destructuring, <code>match</code>, escape continuations, and <code>try</code> with <code>finally</code>.</li>
   <li>Namespaces, projects, and packages from a small registry, with licenses checked against what the project allows.</li>
-  <li>A type checker, notebooks in plain <code>.scm</code> files, Git integration, and a desktop workbench.</li>
+  <li>A type checker, notebooks in plain <code>.scm</code> files, Git integration, and a desktop workbench with a Claude-backed assistant.</li>
   <li>A bytecode VM in Rust. Errors name the function and the value it rejected, and integers never overflow silently.</li>
 </ul>
 
@@ -130,11 +130,12 @@ Oslo  2020     12
 
 <div class="example">
   <h3>Charts</h3>
-  <p>A chart is a value. In the terminal it draws itself with text; in Studio it draws in the Plots pane; <code>save-plot</code> writes an SVG.</p>
+  <p>A chart is a value built from layers. In the terminal it draws itself with text; the goal line, legends, and a right axis appear in the SVG that <code>save-plot</code> writes and in Studio's Plots pane.</p>
 <pre class="highlight"><code>(histogram #[<span class="m">3</span> <span class="m">5</span> <span class="m">4</span> <span class="m">8</span> <span class="m">9</span> <span class="m">7</span> <span class="m">12</span> <span class="m">11</span> <span class="m">14</span> <span class="m">13</span>] {<span class="ss">:bins</span> <span class="m">4</span>})
 
-(bar-chart sales <span class="ss">:city</span> <span class="ss">:units</span>
-           {<span class="ss">:by</span> <span class="ss">:year</span> <span class="ss">:title</span> <span class="s">"Units by city"</span>})</code></pre>
+(-&gt; (bars sales <span class="ss">:city</span> <span class="ss">:units</span> {<span class="ss">:by</span> <span class="ss">:year</span>})
+    (hline <span class="m">20</span> <span class="s">"goal"</span>)
+    (title <span class="s">"Units by city"</span>))</code></pre>
 <pre class="out"><code>3–5.75    ████████████████████████████████████████ 3
 5.75–8.5  ███████████████████████████ 2
 8.5–11.25 ███████████████████████████ 2
@@ -146,7 +147,7 @@ Rome 2021 █████████ 7</code></pre>
 </div>
 
 <h2>Schematic Studio</h2>
-<p>Studio is a desktop workbench built with Iced: an editor, a console, an environment pane, a data grid, plots, notebooks, a Git pane, and a project view in one window. Ctrl+Enter runs the form under the cursor and steps to the next one; Ctrl+Shift+Enter runs the whole file. The interpreter runs on its own thread, so Stop interrupts a runaway loop, and any pane detaches into a window of its own.</p>
+<p>Studio is a desktop workbench built with Iced: an editor, a console, an environment pane, a data grid, plots, notebooks, a Git pane, and a project view in one window. Ctrl+Enter runs the form under the cursor and steps to the next one; Ctrl+Shift+Enter runs the whole file. The interpreter runs on its own thread, so Stop interrupts a runaway loop, and any pane detaches into a window of its own. An Assistant pane talks to a Claude model with your API key: it sees the open file, the console, and the environment, runs code in the session once you allow it, and proposes edits that you apply from a diff.</p>
 <img src="studio.png" alt="Schematic Studio with a script, a console, the environment pane, a data grid, and a bar chart" width="1280" height="820" loading="lazy">
 
 <h2>Install</h2>
@@ -154,7 +155,7 @@ Rome 2021 █████████ 7</code></pre>
 cd schematic
 cargo run --release -p schematic            # the REPL
 cargo run --release -p schematic-studio     # Studio</code></pre>
-<p>The language crate has no dependencies. Studio adds Iced and a file-dialog crate. Schematic is early and changes often: new functions arrive most weeks, and a name occasionally changes.</p>
+<p>Prebuilt binaries for Windows, macOS, and Linux are on the <a href="https://github.com/collide2954/schematic/releases">releases page</a>. The language crate has no dependencies. Studio adds Iced and a file-dialog crate. Schematic is early and changes often: new functions arrive most weeks, and a name occasionally changes.</p>
 
 <h2>Documentation</h2>
 <ul>

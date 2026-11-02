@@ -77,8 +77,11 @@ Early development. Working today:
 - A gradual type checker: `schematic check` and Studio's editor report
   certain mistakes without running anything, inferring types from the code
   and from optional `[name : type]` annotations
-
-Next up: a text round with character functions and regular expressions.
+- JSON in and out with `parse-json`, `to-json`, `read-json`, and `write-json`
+- In Studio, an Assistant pane backed by a Claude model and your own API
+  key: it sees the open file, the console, and the environment, runs code
+  in the session once you allow it, proposes edits that you apply from a
+  diff, and suggests the next lines as you type
 
 ## Running
 
@@ -137,9 +140,15 @@ table, and the Environment tab offers Describe, Watch, and Copy name for
 the selected binding. A Git tab drives the `git` on your path: branch and
 upstream position, staged and unstaged changes with stage, unstage, and
 discard, one-line commits, pull, push, recent commits, diffs in a tab, and
-change letters next to files in the Files tab. It has light, dark, warm,
-and high-contrast themes and bundles the Inter and JetBrains Mono fonts,
-so it looks the same everywhere. The interpreter runs on its own thread,
+change letters next to files in the Files tab. An Assistant pane (Ctrl+9)
+talks to a Claude model through `curl` with your own API key: chips choose
+what goes with a question (the open file, the selection, the console, the
+environment, the project's files), the model can run code in the session
+once you allow it, describe bindings, read project files, and propose edits
+that open as diffs, and with completions on it suggests the next lines
+after a pause. It has light, dark, warm, and high-contrast themes and
+bundles the Inter and JetBrains Mono fonts, so it looks the same
+everywhere. The interpreter runs on its own thread,
 so the window stays responsive and a runaway loop can be stopped.
 
 ```

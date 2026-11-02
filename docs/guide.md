@@ -47,9 +47,10 @@ An Outline tab lists the file's definitions, the menus at the top hold
 every action with its shortcut, and Ctrl+Shift+P opens a command palette
 that runs any of them by name; typing a colon and a number there jumps to
 that line. The data pane sorts by a column header, filters rows, copies
-rows, exports a table as CSV, and plots a column's histogram from its
-header; the console finds text, copies any line, and saves its transcript
-as Markdown; and a Watch tab keeps expressions evaluated after every run.
+rows, exports a table as CSV, and plots a histogram of the column it is
+sorted by; the console finds text, copies a clicked line, and saves its
+transcript as Markdown; and a Watch tab keeps expressions evaluated after
+every run.
 Studio remembers its theme, sizes, layout, open files, and watches between
 sessions; Ctrl+, opens the Settings tab, Ctrl+= and Ctrl+- resize the code,
 a Start page lists recent files and projects, files changed on disk are
@@ -72,6 +73,22 @@ behind its upstream, lists staged and unstaged changes, stages, unstages,
 or discards a file, commits with a one-line message, pulls, pushes, and
 shows recent commits. Clicking a change opens its diff in a tab, and the
 Files tab marks changed files with the same letters git uses.
+
+The Assistant pane (Ctrl+9) talks to a Claude model through the `curl` on
+your path, with an API key you enter once under Preferences or set as
+`ANTHROPIC_API_KEY`; the key is kept in `credentials.scm` beside the
+settings, never in a project. The chips above the composer choose what goes
+with a question: the open file, the selection, the last console lines, the
+environment's names and table columns, and the project's file list, and
+nothing is sent until you press Enter. The model can run code in your
+session, describe a binding, read project files, and propose an edit. Each
+run waits for a go-ahead unless you allow it for the session or turn the
+question off in Preferences, and a proposed edit opens as a diff that you
+apply or discard. The Assistant menu asks two ready-made questions, Explain
+the selection and Fix the last error, and with completions on, a smaller
+model suggests the next lines after a pause: Tab accepts, Esc dismisses. The
+reference goes along as the system prompt, cached between turns, so the
+model writes Schematic rather than Clojure.
 
 ## Expressions
 

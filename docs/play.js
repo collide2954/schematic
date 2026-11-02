@@ -40,7 +40,9 @@
           :year [2020 2021 2021 2021]
           :units [12 7 nil 30]}))
 
-(bar-chart sales :city :units {:by :year :title "Units by city"})
+(-> (bars sales :city :units {:by :year})
+    (hline 20 "goal")
+    (title "Units by city"))
 
 (histogram #[3 5 4 8 9 7 12 11 14 13] {:bins 4})`,
   };
