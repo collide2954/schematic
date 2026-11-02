@@ -193,6 +193,19 @@ td code { white-space: nowrap; }
 
 .pager { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line); }
 
+.filter {
+  display: block;
+  width: 100%;
+  max-width: 20rem;
+  margin: 0 0 1.2rem;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--bg);
+  color: var(--text);
+}
+
 @media (max-width: 52rem) {
   .example, .play-body { grid-template-columns: 1fr; }
   .play-code { border-right: 0; border-bottom: 1px solid var(--line); min-height: 13rem; }
