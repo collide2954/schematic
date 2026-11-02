@@ -17,3 +17,6 @@ inherits = "release"
 opt-level = "s"
 panic = "abort"
 strip = true
+
+[patch.crates-io]
+cosmic-text = { git = "https://github.com/collide2954/cosmic-text", rev = "38e6578f9a533b1889b033266421ba946b6a8c38" }
