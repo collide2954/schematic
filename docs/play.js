@@ -50,7 +50,7 @@
   const status = root.querySelector(".play-status");
   const runButton = root.querySelector(".play-run");
   const resetButton = root.querySelector(".play-reset");
-  const chips = Array.from(root.querySelectorAll("[data-example]"));
+  const picker = root.querySelector(".play-example");
 
   let worker = null;
   let pending = null;
@@ -102,7 +102,7 @@
   async function run() {
     if (running) return;
     running = true;
-    status.textContent = "Running…";
+    status.textContent = "Running";
     runButton.disabled = true;
     const text = await ask("eval", code.value);
     show(text);
@@ -119,14 +119,13 @@
 
   function load(name) {
     code.value = EXAMPLES[name];
-    chips.forEach((chip) => chip.classList.toggle("on", chip.dataset.example === name));
     touched = false;
     run();
   }
 
   runButton.addEventListener("click", run);
   resetButton.addEventListener("click", reset);
-  chips.forEach((chip) => chip.addEventListener("click", () => load(chip.dataset.example)));
+  picker.addEventListener("change", () => load(picker.value));
 
   code.addEventListener("input", () => { touched = true; });
   code.addEventListener("keydown", (event) => {
@@ -141,24 +140,9 @@
     }
   });
 
-  document.querySelectorAll(".example pre.highlight").forEach((pre) => {
-    const button = document.createElement("button");
-    button.className = "try";
-    button.type = "button";
-    button.textContent = "Try it";
-    button.addEventListener("click", () => {
-      code.value = pre.textContent.trim();
-      chips.forEach((chip) => chip.classList.remove("on"));
-      touched = true;
-      root.scrollIntoView({ behavior: "smooth", block: "start" });
-      run();
-    });
-    pre.appendChild(button);
-  });
-
   const warm = () => {
     startWorker();
-    status.textContent = "Loading the interpreter…";
+    status.textContent = "Loading the interpreter";
     ask("eval", "nil").then(() => {
       status.textContent = "";
       if (!touched) run();

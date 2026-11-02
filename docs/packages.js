@@ -85,9 +85,7 @@
   const card = (name, pkg) => {
     const versions = Object.keys(pkg.versions || {}).sort(newest);
     const latest = versions[0];
-    const command = el("code", null, `schematic add ${name}`);
-    const add = el("p", { class: "add" }, command);
-    if (window.copyButton) add.append(window.copyButton(() => command.textContent));
+    const add = el("p", { class: "add" }, el("code", null, `schematic add ${name}`));
     return el("article", { class: "package" },
       el("h3", null, el("a", { href: sourceOf(pkg, pkg.versions?.[latest]) }, name), latest && el("span", { class: "version" }, latest), pkg.license && el("span", { class: "license" }, pkg.license)),
       el("p", null, pkg.description || ""),

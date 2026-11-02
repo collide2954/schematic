@@ -4,33 +4,27 @@ title: Schematic
 class: landing
 play: true
 ---
-<section class="hero">
-  <div class="hero-text">
-    <span class="eyebrow">Open source · Apache-2.0 · written in Rust</span>
-    <h1>A small Lisp for working with data.</h1>
-    <p class="lead">Schematic has Scheme's shape and Clojure's literals, with typed arrays, tables, dates, and charts built in. Write a few forms at the prompt, step through a script in Schematic Studio, and get answers you can read.</p>
-    <p class="actions">
-      <a class="button" href="guide.html">Read the guide</a>
-      <a class="button quiet" href="https://github.com/collide2954/schematic">Source on GitHub</a>
-    </p>
+<h1>Schematic</h1>
+<p>Schematic is a small Lisp for working with data. It keeps the shape of Scheme, borrows Clojure's literals and immutable collections, and adds typed arrays, column tables, dates, and charts. It is written in Rust with no dependencies, and it ships as a command-line interpreter and as a desktop workbench, Schematic Studio.</p>
+
+<h2 id="try">Try it</h2>
+<div id="play" class="play">
+  <div class="play-bar">
+    <label>Example
+      <select class="play-example">
+        <option value="tables" selected>Tables</option>
+        <option value="arrays">Arrays</option>
+        <option value="dates">Dates</option>
+        <option value="patterns">Patterns</option>
+        <option value="charts">Charts</option>
+      </select>
+    </label>
+    <span class="play-status"></span>
+    <button type="button" class="play-reset">Reset</button>
+    <button type="button" class="play-run">Run</button>
   </div>
-  <div id="play" class="play">
-    <div class="play-bar">
-      <div class="chips">
-        <button type="button" data-example="tables" class="on">Tables</button>
-        <button type="button" data-example="arrays">Arrays</button>
-        <button type="button" data-example="dates">Dates</button>
-        <button type="button" data-example="patterns">Patterns</button>
-        <button type="button" data-example="charts">Charts</button>
-      </div>
-      <div class="play-actions">
-        <span class="play-status"></span>
-        <button type="button" class="play-reset">Reset</button>
-        <button type="button" class="play-run">Run <kbd>Ctrl+↵</kbd></button>
-      </div>
-    </div>
-    <div class="play-body">
-<textarea class="play-code" spellcheck="false" aria-label="Schematic code">(define sales
+  <div class="play-body">
+<textarea class="play-code" spellcheck="false" aria-label="Code">(define sales
   (table {:city ["Oslo" "Rome" "Bern" "Oslo"]
           :year [2020 2021 2021 2021]
           :units [12 7 nil 30]}))
@@ -48,46 +42,28 @@ city  year  units
 Oslo  2021     30
 Oslo  2020     12
 (2 rows, 3 columns)</pre>
-    </div>
-    <p class="play-note">This runs in your browser: the same interpreter, compiled to WebAssembly. Edit anything and press Run.</p>
   </div>
-</section>
+</div>
+<p class="small">Ctrl+Enter runs the code. The interpreter is compiled to WebAssembly and runs in the page.</p>
 
-<section class="features">
-  <div>
-    <h2>Columns, not loops</h2>
-    <p>Arithmetic and comparisons broadcast over typed arrays, <code>nil</code> marks a missing value, and statistics skip it without being told.</p>
-  </div>
-  <div>
-    <h2>Tables that read in order</h2>
-    <p><code>select</code>, <code>where</code>, <code>group-by</code>, <code>aggregate</code>, <code>window</code>, <code>pivot</code>, and <code>join</code>, with CSV in and out and column types inferred.</p>
-  </div>
-  <div>
-    <h2>Dates and text</h2>
-    <p>Dates have a literal and calendar math. <code>format</code> fills placeholders with precision, alignment, and thousands separators, regular expressions take raw <code>#"..."</code> strings, and every string function works on a whole column.</p>
-  </div>
-  <div>
-    <h2>Charts as values</h2>
-    <p>Bar, line, scatter, and histogram charts print as text in the terminal, save as SVG, and draw in Studio. Group with <code>:by</code>, label with <code>:title</code>.</p>
-  </div>
-  <div>
-    <h2>A real Lisp</h2>
-    <p>Proper tail calls, hygienic <code>syntax-rules</code>, destructuring and <code>match</code>, escape continuations, and <code>try</code> with <code>finally</code>, on a bytecode VM.</p>
-  </div>
-  <div>
-    <h2>Honest about mistakes</h2>
-    <p>Errors name the function and the value it did not like, integers never overflow silently, and only <code>nil</code> and <code>false</code> count as false.</p>
-  </div>
-</section>
+<h2>Overview</h2>
+<ul>
+  <li>Typed arrays. Arithmetic and comparisons broadcast over every element, <code>nil</code> marks a missing value, and statistics skip it.</li>
+  <li>Tables with <code>select</code>, <code>where</code>, <code>group-by</code>, <code>aggregate</code>, <code>window</code>, <code>pivot</code>, and <code>join</code>, plus CSV in and out with inferred column types.</li>
+  <li>Dates with a literal and calendar math; <code>format</code> with precision, alignment, and separators; regular expressions and raw <code>#"..."</code> strings.</li>
+  <li>Charts as values: bars, lines, points, histograms, and more. They print as text in the terminal, save as SVG, and draw in Studio.</li>
+  <li>Scheme's forms with proper tail calls, hygienic <code>syntax-rules</code>, destructuring, <code>match</code>, escape continuations, and <code>try</code> with <code>finally</code>.</li>
+  <li>Namespaces, projects, and packages from a small registry, with licenses checked against what the project allows.</li>
+  <li>A type checker, notebooks in plain <code>.scm</code> files, Git integration, and a desktop workbench.</li>
+  <li>A bytecode VM in Rust. Errors name the function and the value it rejected, and integers never overflow silently.</li>
+</ul>
 
-<section class="section">
-  <span class="eyebrow">A short tour</span>
-  <h2>Five things you can do before lunch</h2>
-  <p class="lead">Every result below is what the interpreter prints. Press Try it on any of them to load it into the playground above.</p>
+<h2>Examples</h2>
+<p>Each block shows what the interpreter prints.</p>
 
-  <div class="example">
-    <h3>Arrays do the looping</h3>
-    <p>An operation on an array applies to every element. Missing values stay missing, and masks select.</p>
+<div class="example">
+  <h3>Arrays</h3>
+  <p>An operation on an array applies to every element. Missing values stay missing, and a mask selects.</p>
 <pre class="highlight"><code>(<span class="k">define</span> prices #[<span class="m">10</span> <span class="m">20</span> <span class="m">30</span> nil])
 (* prices <span class="m">1.25</span>)
 (mean prices)
@@ -98,11 +74,11 @@ Oslo  2020     12
 20.0
 #[20 30]
 #["OSLO" nil "ROME"]</code></pre>
-  </div>
+</div>
 
-  <div class="example">
-    <h3>Tables, one verb at a time</h3>
-    <p>Each table function takes a table and returns one, so questions compose left to right.</p>
+<div class="example">
+  <h3>Tables</h3>
+  <p>Each table function takes a table and returns one, so a question reads left to right.</p>
 <pre class="highlight"><code>(<span class="k">define</span> sales
   (table {<span class="ss">:city</span> [<span class="s">"Oslo"</span> <span class="s">"Rome"</span> <span class="s">"Bern"</span> <span class="s">"Oslo"</span>]
           <span class="ss">:year</span> [<span class="m">2020</span> <span class="m">2021</span> <span class="m">2021</span> <span class="m">2021</span>]
@@ -116,11 +92,11 @@ city  year  units
 Oslo  2021     30
 Oslo  2020     12
 <span class="r">(2 rows, 3 columns)</span></code></pre>
-  </div>
+</div>
 
-  <div class="example">
-    <h3>Dates and formatting</h3>
-    <p>A date is a value with its own literal. Subtract two to count days, truncate to a month, format with a pattern.</p>
+<div class="example">
+  <h3>Dates and formatting</h3>
+  <p>A date is a value with its own literal. Subtract two to count days, truncate to a month, format with a pattern.</p>
 <pre class="highlight"><code>(<span class="k">define</span> d #2024-03-15)
 (date-format d <span class="s">"EEEE, d MMMM yyyy"</span>)
 (date-trunc d <span class="ss">:month</span>)
@@ -133,11 +109,11 @@ Oslo  2020     12
 17
 #[#2024-01-30 #2024-01-31 #2024-02-01 #2024-02-02]
 "Oslo sold 42,000 units (25.6%)"</code></pre>
-  </div>
+</div>
 
-  <div class="example">
-    <h3>Take values apart</h3>
-    <p>Vector and map patterns bind names in <code>let</code>, <code>define</code>, and parameter lists. <code>match</code> picks the first clause that fits.</p>
+<div class="example">
+  <h3>Destructuring and match</h3>
+  <p>Vector and map patterns bind names in <code>let</code>, <code>define</code>, and parameter lists. <code>match</code> takes the first clause that fits.</p>
 <pre class="highlight"><code>(<span class="k">define</span> (shape-name shape)
   (<span class="k">match</span> shape
     ([<span class="ss">:circle</span> r] (format <span class="s">"circle, radius {}"</span> r))
@@ -148,22 +124,17 @@ Oslo  2020     12
 (map shape-name [[<span class="ss">:circle</span> <span class="m">2</span>] [<span class="ss">:rect</span> <span class="m">3</span> <span class="m">3</span>] [<span class="ss">:rect</span> <span class="m">2</span> <span class="m">5</span>] <span class="m">42</span>])
 (<span class="k">let</span> (([first &amp; more] [<span class="m">1</span> <span class="m">2</span> <span class="m">3</span>])) [first more])</code></pre>
 <pre class="out"><code><span class="r">shape-name</span>
-
-
-
-
-
-
 ["circle, radius 2" "square of side 3" "2 by 5 rectangle" "something else"]
 [1 [2 3]]</code></pre>
-  </div>
+</div>
 
-  <div class="example">
-    <h3>Charts you can print</h3>
-    <p>A chart is a value. In the terminal it draws itself with text; in Studio it draws in the Plots pane; <code>save-plot</code> writes an SVG.</p>
+<div class="example">
+  <h3>Charts</h3>
+  <p>A chart is a value. In the terminal it draws itself with text; in Studio it draws in the Plots pane; <code>save-plot</code> writes an SVG.</p>
 <pre class="highlight"><code>(histogram #[<span class="m">3</span> <span class="m">5</span> <span class="m">4</span> <span class="m">8</span> <span class="m">9</span> <span class="m">7</span> <span class="m">12</span> <span class="m">11</span> <span class="m">14</span> <span class="m">13</span>] {<span class="ss">:bins</span> <span class="m">4</span>})
 
-(bar-chart sales <span class="ss">:city</span> <span class="ss">:units</span> {<span class="ss">:by</span> <span class="ss">:year</span> <span class="ss">:title</span> <span class="s">"Units by city"</span>})</code></pre>
+(bar-chart sales <span class="ss">:city</span> <span class="ss">:units</span>
+           {<span class="ss">:by</span> <span class="ss">:year</span> <span class="ss">:title</span> <span class="s">"Units by city"</span>})</code></pre>
 <pre class="out"><code>3–5.75    ████████████████████████████████████████ 3
 5.75–8.5  ███████████████████████████ 2
 8.5–11.25 ███████████████████████████ 2
@@ -172,36 +143,23 @@ Units by city
 Oslo 2020 ████████████████ 12
 Oslo 2021 ████████████████████████████████████████ 30
 Rome 2021 █████████ 7</code></pre>
-  </div>
-</section>
+</div>
 
-<section class="section">
-  <span class="eyebrow">Schematic Studio</span>
-  <h2>A workbench, not just a prompt</h2>
-  <p class="lead">An editor, a console, an environment pane, a data grid, and plots, side by side in one window. It is built with Iced and ships as part of the repository.</p>
-  <div class="studio">
-    <img src="studio.png" alt="Schematic Studio showing a script, a console, an environment pane, a data grid, and a bar chart" width="1280" height="820" loading="lazy">
-    <ul class="callouts">
-      <li><strong>Run the form under the cursor</strong><span>Ctrl+Enter evaluates it and steps to the next one. Ctrl+Shift+Enter runs the whole file.</span></li>
-      <li><strong>See what you have</strong><span>Everything you define is listed as data, values, or functions. Click a name to open it in the grid.</span></li>
-      <li><strong>Plots beside the code</strong><span>Charts draw as they are made, zoom with the wheel, and copy or save as SVG with one click.</span></li>
-      <li><strong>Always responsive</strong><span>The interpreter runs on its own thread, and Stop interrupts a runaway loop.</span></li>
-    </ul>
-  </div>
-</section>
+<h2>Schematic Studio</h2>
+<p>Studio is a desktop workbench built with Iced: an editor, a console, an environment pane, a data grid, plots, notebooks, a Git pane, and a project view in one window. Ctrl+Enter runs the form under the cursor and steps to the next one; Ctrl+Shift+Enter runs the whole file. The interpreter runs on its own thread, so Stop interrupts a runaway loop, and any pane detaches into a window of its own.</p>
+<img src="studio.png" alt="Schematic Studio with a script, a console, the environment pane, a data grid, and a bar chart" width="1280" height="820" loading="lazy">
 
-<section class="section">
-  <span class="eyebrow">Try it</span>
-  <h2>Up and running in a minute</h2>
+<h2>Install</h2>
 <pre><code>git clone https://github.com/collide2954/schematic
 cd schematic
 cargo run --release -p schematic            # the REPL
 cargo run --release -p schematic-studio     # Studio</code></pre>
-  <p>The language crate has no dependencies at all. Studio adds Iced and a file-dialog crate. Schematic is early and moving quickly, so expect new functions often and the occasional renamed one.</p>
-  <div class="next">
-    <a href="guide.html"><strong>Guide</strong><span>From the first expression to tables and charts, for newcomers to both Scheme and Clojure.</span></a>
-    <a href="reference.html"><strong>Reference</strong><span>Every special form, pattern, and built-in function on one page.</span></a>
-    <a href="packages.html"><strong>Packages</strong><span>What the registry holds, how to add a package to a project, and how to publish one.</span></a>
-    <a href="https://github.com/collide2954/schematic"><strong>GitHub</strong><span>Source, tests, and the checked tour script that keeps the guide honest.</span></a>
-  </div>
-</section>
+<p>The language crate has no dependencies. Studio adds Iced and a file-dialog crate. Schematic is early and changes often: new functions arrive most weeks, and a name occasionally changes.</p>
+
+<h2>Documentation</h2>
+<ul>
+  <li><a href="guide.html">Guide</a>: from the first expression to tables and charts, assuming no Scheme or Clojure.</li>
+  <li><a href="reference.html">Reference</a>: every special form, pattern, and built-in function on one page.</li>
+  <li><a href="packages.html">Packages</a>: what the registry holds, how to add a package to a project, and how to publish one.</li>
+  <li><a href="https://github.com/collide2954/schematic">Source</a>: the repository, its tests, and the tour script that checks the guide's examples.</li>
+</ul>

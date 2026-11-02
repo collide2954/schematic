@@ -8,27 +8,33 @@
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
-<script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="./">Schematic</a>
-  <nav>
-    <a href="guide.html">Guide</a>
-    <a href="reference.html">Reference</a>
-    <a href="packages.html">Packages</a>
-    <a href="https://github.com/collide2954/schematic">GitHub</a>
-    <button class="theme-toggle" type="button" aria-label="Switch between light and dark"><span class="sun">☀</span><span class="moon">☾</span></button>
-  </nav>
+<header>
+  <div class="top">
+    <a class="brand" href="./">Schematic</a>
+    <nav>
+      <a href="guide.html">Guide</a>
+      <a href="reference.html">Reference</a>
+      <a href="packages.html">Packages</a>
+      <a href="https://github.com/collide2954/schematic">GitHub</a>
+    </nav>
+  </div>
 </header>
-<main class="{{ page.class | default: 'prose' }}">
+{% assign docs = false %}{% if page.url == "/guide.html" or page.url == "/reference.html" %}{% assign docs = true %}{% endif %}
+<main class="{% if docs %}docs{% else %}{{ page.class | default: 'prose' }}{% endif %}">
+{% if docs %}<nav class="toc" aria-label="Contents" hidden></nav>{% endif %}
+<div class="body">
 {{ content }}
-{% if page.url == "/guide.html" %}<p class="pager"><a href="reference.html">Next: the reference →</a></p>{% endif %}
-{% if page.url == "/reference.html" %}<p class="pager"><a href="guide.html">← Back to the guide</a></p>{% endif %}
+{% if page.url == "/guide.html" %}<p class="pager"><a href="reference.html">Next: the reference</a></p>{% endif %}
+{% if page.url == "/reference.html" %}<p class="pager"><a href="guide.html">Back to the guide</a></p>{% endif %}
+</div>
 </main>
 <footer>
-  <span>Apache-2.0</span>
-  <a href="https://github.com/collide2954/schematic">Source on GitHub</a>
+  <div>
+    <span>Apache-2.0</span>
+    <a href="https://github.com/collide2954/schematic">Source on GitHub</a>
+  </div>
 </footer>
 <script src="site.js" defer></script>
 {% if page.play %}<script src="play.js" defer></script>{% endif %}
