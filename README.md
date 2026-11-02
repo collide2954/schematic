@@ -62,10 +62,12 @@ Early development. Working today:
 - Tables with `select`, `where`, `distinct`, `order-by`, `group-by`,
   `aggregate`, `window`, `pivot`, `unpivot`, `join`, `describe`, row
   appending, and CSV reading and writing
-- Charts: bar (grouped, stacked, or sideways), line, area, scatter,
-  histogram, box plot, and pie as values that print as text, save as SVG,
-  and show in Studio's Plots pane, with facets, log scales, formatted
-  axes, reference lines, and value labels
+- Charts built from layers: bars, lines, steps, areas, points, lollipops,
+  pies, histograms, densities, box plots, and heatmaps stack on one plot
+  with `->`, plus titles, captions, notes, reference lines, a right axis,
+  trend and smoothed lines, palettes, legends, facets, log scales, and
+  formatted axes; a chart prints as text (fine blocks and braille lines at
+  a terminal), saves as SVG, and shows in Studio's Plots pane
 - Projects: a `project.scm` manifest, packages vendored into `packages/`
   along with the packages they depend on, pinned by commit and hash in
   `project.lock`, a registry read over HTTPS, SPDX licenses per package
@@ -123,8 +125,10 @@ Settings tab (Ctrl+,) changes them, Ctrl+= and Ctrl+- zoom the code, and a
 Start page lists recent files and projects. Files dropped on the window
 open, files changed on disk reload (or say so, when they have unsaved
 edits), and saving keeps the previous version in a backups folder. Plots
-zoom with the wheel, pan by dragging, show a crosshair, copy as SVG, and
-line up as thumbnails when there are several. Notebooks are `.scm` files
+zoom with the wheel or by dragging a box, pan by dragging, read every
+series at the pointer, hide a series when its legend entry is clicked,
+filter the data grid when a bar is clicked, copy as SVG, and line up as
+thumbnails when there are several. Notebooks are `.scm` files
 with `;; %%` cell markers (`;; %% text` for Markdown cells): Studio shows
 them as cells that run one at a time, keeps each cell's output beneath it
 and in a `.scm.out` sidecar, and exports them as HTML or Markdown, while the

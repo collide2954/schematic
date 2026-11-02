@@ -51,6 +51,7 @@ keywords, maps, vectors, sets, and arrays.
 | `(define [a b & rest] value)`, `(define {:keys [x y]} value)` | destructure a value into several names; patterns also stand for names in `let`, `let*`, `loop`, named `let`, and parameter lists |
 | `(match value (pattern [:when test] body...) ... (else body...))` | run the first clause whose pattern fits the value; no fitting clause is an error |
 | `(define-syntax name (syntax-rules (literals...) (pattern template)...))` | hygienic macro; `_` matches anything, `...` repeats |
+| `(-> x (f a...) g ...)`, `(->> x (f a...) g ...)` | thread `x` through the calls, as the first argument or as the last; a bare `g` is called as `(g x)` |
 
 Proper tail calls are guaranteed, so recursion in tail position never grows
 the stack. Non-tail recursion is limited to one million frames.
@@ -270,28 +271,58 @@ array of strings, so a text column turns into a date column in one call.
 
 ## Charts
 
+A chart is built from layers. Each layer verb takes data and returns a
+chart, or adds a layer when its first argument is a chart already, so
+`(-> (bars s :city :units) (lines s :city :target))` draws lines over bars.
+`data` is a table followed by column keywords, or `x` and `y` are two
+collections.
+
 | Function | Description |
 |---|---|
-| `(bar-chart data x y [opts])` | one bar per category in `x`; `data` is a table with two column keywords, or `x` and `y` are two collections; `:stack true` stacks the `:by` series and `:horizontal true` turns the bars sideways |
-| `(line-chart data x y [opts])` | points joined in `x` order; `x` may hold numbers or dates |
-| `(area-chart data x y [opts])` | a line chart filled to the baseline; several series stack |
-| `(scatter data x y [opts])` | points |
+| `(bars data x y [opts])`, `(bar-chart data x y [opts])` | one bar per category in `x`; `:stack true` stacks the `:by` series, `:normalize true` stacks them to 100%, `:horizontal true` turns the bars sideways, `:sort :desc` orders the categories by value, and `:top n` keeps the largest and sums the rest into Other |
+| `(lines data x y [opts])`, `(line-chart data x y [opts])` | points joined in `x` order; `x` may hold numbers or dates; `:step true` holds each value until the next, `:dash true` dashes the line, and `:dots false` leaves the points off |
+| `(steps data x y [opts])` | a line that holds each value until the next |
+| `(areas data x y [opts])`, `(area-chart data x y [opts])` | a line filled to the baseline; several series stack |
+| `(points data x y [opts])`, `(scatter data x y [opts])` | points; `:size :col` scales them by a column, `:shape` picks `:circle`, `:square`, `:diamond`, or `:triangle`, `:shapes true` gives each series its own, and `:text :col` labels them |
+| `(lollipops data x y [opts])` | bars drawn as a stem with a dot |
+| `(pie data x y [opts])`, `(pie-chart data x y [opts])` | one slice per category, duplicates summed; `:donut true` leaves a hole |
 | `(histogram data [:col] [opts])` | counts of numbers in equal-width bins, ten unless `:bins` says otherwise |
-| `(box-plot data [:group] :value [opts])`, `(box-plot numbers [opts])` | median, quartiles, whiskers at 1.5 times the interquartile range, and outliers as points |
-| `(pie-chart data x y [opts])` | one slice per category, duplicates summed; `:donut true` leaves a hole |
+| `(density data [:col] [opts])` | a smoothed distribution; `:bandwidth` widens or narrows the kernel |
+| `(box-plot data [:group] :value [opts])`, `(boxes data [:group] :value [opts])`, `(box-plot numbers [opts])` | median, quartiles, whiskers at 1.5 times the interquartile range, and outliers as points |
+| `(heatmap table x y value [opts])` | one shaded cell per `x` and `y` category |
+| `(plot [opts])` | an empty chart to add layers to |
+| `(title plot text [subtitle])`, `(subtitle plot text)`, `(caption plot text)` | a heading, a line under it, and a note at the foot |
+| `(x-axis plot opts)`, `(y-axis plot opts)`, `(right-axis plot opts)` | axis settings as a map of `:label`, `:range [low high]`, `:scale :log`, `:format`, and `:ticks n`; a layer given `:axis :right` uses the right axis |
+| `(hline plot value [label])`, `(vline plot value [label])` | dashed reference lines |
+| `(annotate plot x y text)` | a note at a point |
+| `(legend plot where)` | `:top`, `:right`, `:bottom`, `:none`, or `:auto` |
+| `(palette plot colors)` | a vector of `"#rrggbb"` strings, or `:default`, `:warm`, `:cool`, `:earth`, `:gray`, or `:bright` |
+| `(trend plot [opts])` | a dashed least-squares line through the last layer |
+| `(smooth plot n)` | an `n`-point rolling mean of the last layer |
+| `(figure plots [opts])` | several charts in one picture, with `:columns` and `:title` |
 | `(plot? x)` | test |
-| `(to-svg plot)`, `(save-plot plot path)` | the chart as a 640 by 400 SVG document, as a string or written to a file |
+| `(to-svg plot [opts])`, `(save-plot plot path [opts])` | the chart as an SVG document, as a string or written to a file; `:width` and `:height` default to 640 by 400, and `:theme :dark` draws on a dark background |
+| `(plot-theme! opts)`, `(plot-theme)` | set or read the defaults every new chart starts from: `:palette`, `:grid`, and `:legend` |
 
-Options are a map. `:title`, `:x-label`, and `:y-label` name things; `:by`
-splits the rows into series by a column and `:facet` splits them into
-panels with shared axes; `:bins` sizes a histogram. Axes take `:x-range`
-and `:y-range` as `[low high]`, `:x-scale` and `:y-scale` as `:linear` or
-`:log`, and `:x-format` and `:y-format` as a `format` spec such as `"{:,}"`
-or `"{:.0%}"`, or a `date-format` pattern for a date axis. `:hline` and
-`:vline` draw dashed reference lines at one value or a collection of them,
-and `:labels true` prints each value next to its bar or point. A chart is a
-value: printing it draws a text version, Schematic Studio shows it in the
-Plots pane with values on hover, and missing values are left out.
+Options are a map, and what a decorator sets can also be given to a layer
+verb. `:title`, `:subtitle`, `:caption`, `:x-label`, and `:y-label` name
+things; `:by` splits the rows into series by a column and `:facet` splits
+them into panels with shared axes. `:color "#rrggbb"`, `:width`, and
+`:opacity` style a layer, `:labels true` prints each value next to its bar
+or point, `:low` and `:high` name columns that draw error bars, and `:trend
+true` or `:rolling n` add a fit or a rolling mean in one step. Axes take
+`:x-range` and `:y-range` as `[low high]`, `:x-scale` and `:y-scale` as
+`:linear` or `:log`, `:x-ticks` and `:y-ticks` as a count, and `:x-format`
+and `:y-format` as a `format` spec such as `"{:,}"` or `"{:.0%}"`, as
+`:compact` for `1.5K` and `2M`, or as a `date-format` pattern for a date
+axis. `:hline` and `:vline` draw reference lines at one value or a
+collection of them, and `:legend`, `:palette`, and `:grid false` do what the
+decorators do. A chart is a value: printing it draws a text version, which
+at a terminal uses fine blocks, braille lines, and the series colors;
+Schematic Studio shows it in the Plots pane, where hovering reads every
+series at a point, clicking a legend entry hides its series, clicking a bar
+filters the data grid to that category, and dragging a box zooms in; and
+missing values are left out.
 
 ## Namespaces
 

@@ -345,7 +345,9 @@ mod tests {
         let chart = entry("bar-chart").unwrap();
         assert_eq!(chart.uses.len(), 1);
         assert_eq!(chart.uses[0].section, "Charts");
-        assert_eq!(chart.uses[0].signatures, ["(bar-chart data x y [opts])"]);
+        assert_eq!(chart.uses[0].signatures, ["(bars data x y [opts])", "(bar-chart data x y [opts])"]);
+        assert_eq!(entry("bars").unwrap().uses.len(), 1);
+        assert_eq!(entry("->").unwrap().uses[0].section, "Special forms");
         let sections: Vec<&str> = entry("where").unwrap().uses.iter().map(|u| u.section.as_str()).collect();
         assert_eq!(sections, ["Arrays", "Tables"]);
         assert_eq!(entry("let").unwrap().uses.len(), 2);

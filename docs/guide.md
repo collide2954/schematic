@@ -521,27 +521,61 @@ Studio shows it in its Plots pane, and `save-plot` writes an SVG file:
                      :year [2020 2021 2021]
                      :units [12 30 7]
                      :when [#2024-01-01 #2024-02-01 #2024-03-01]}))
-(bar-chart shop :city :units {:by :year})   ; grouped bars, one colour per year
-(line-chart shop :when :units)              ; dates along the x axis
+(bars shop :city :units {:by :year})   ; grouped bars, one colour per year
+(lines shop :when :units)              ; dates along the x axis
 (histogram (:units shop) {:bins 2})
-(save-plot (scatter shop :year :units) "units.svg")
+(save-plot (points shop :year :units) "units.svg")
 ```
 
-`bar-chart`, `line-chart`, `area-chart`, `scatter`, and `pie-chart` take a
-table with two column keywords, or two plain collections; `box-plot` takes a
-value column and an optional group column. Missing values are skipped. The
-options map names things with `:title`, `:x-label`, and `:y-label`, splits
-rows into series with `:by` or into side-by-side panels with `:facet`, and
-shapes the axes with `:x-range`, `:y-range`, `:y-scale :log`, `:y-format`,
-`:hline`, `:vline`, and `:labels`:
+A chart is built from layers. `bars`, `lines`, `steps`, `areas`, `points`,
+`lollipops`, and `pie` take a table with two column keywords, or two plain
+collections, and return a chart; given a chart as their first argument they
+add a layer to it instead. The `->` macro threads a value through a chain
+of calls, so a layered chart reads from top to bottom:
 
 ```scheme
-(bar-chart shop :city :units {:by :year :stack true :labels true})
-(line-chart shop :when :units {:facet :city :y-range [0 40]})
-(box-plot shop :city :units)
-(pie-chart shop :city :units {:donut true})
-(bar-chart shop :city :units {:horizontal true :y-format "{:,}" :hline 20})
+(define goals (table {:city ["Oslo" "Rome" "Bern"]
+                      :units [12 7 30]
+                      :target [15 10 20]
+                      :share [0.2 0.1 0.7]}))
+
+(-> (bars goals :city :units)
+    (lines goals :city :target {:dash true})
+    (points goals :city :share {:axis :right})
+    (hline 10 "goal")
+    (title "Units" "by city")
+    (caption "source: shop"))
 ```
+
+`title`, `subtitle`, `caption`, `hline`, `vline`, `annotate`, `x-axis`,
+`y-axis`, `right-axis`, `legend`, and `palette` decorate a chart, and
+`trend` and `smooth` add a fitted line or a rolling mean over the last
+layer. Options go in a map at the end of any layer verb: `:by` splits rows
+into series and `:facet` into side-by-side panels; `:stack`, `:normalize`,
+`:horizontal`, `:sort`, and `:top` shape bars; `:size`, `:shape`, and
+`:text` encode more columns in points; `:color`, `:width`, `:opacity`,
+`:dash`, and `:labels` style a layer; and `:x-range`, `:y-scale :log`,
+`:y-format`, `:hline`, and `:vline` shape the axes. Missing values are
+skipped.
+
+```scheme
+(bars shop :city :units {:by :year :stack true :labels true})
+(lines shop :when :units {:facet :city :y-range [0 40]})
+(-> (points shop :year :units {:size :units}) (trend))
+(bars shop :city :units {:sort :desc :top 2 :palette :warm})
+(density (:units shop))
+(box-plot shop :city :units)
+(heatmap shop :city :year :units)
+(pie shop :city :units {:donut true})
+(figure [(bars shop :city :units) (lines shop :when :units)] {:columns 2})
+(save-plot (points shop :year :units) "units.svg" {:width 800 :theme :dark})
+```
+
+`plot-theme!` sets the palette, grid, and legend every new chart starts
+from. At a terminal a printed chart uses fine blocks, braille lines, and
+the series colors. In Studio, hovering a chart reads every series at that
+point, clicking a legend entry hides its series, clicking a bar filters the
+data grid to its category, and dragging a box zooms in.
 
 ## When things go wrong
 
@@ -586,6 +620,15 @@ nested structures:
 ```scheme
 (define x 42)
 `(x is ~x and doubled ~(* 2 x))   ; (x is 42 and doubled 84)
+```
+
+Two macros from the prelude thread a value through a chain of calls. `->`
+puts it in as the first argument of each call and `->>` as the last, which
+suits `map` and `reduce`; a bare name is called with the value:
+
+```scheme
+(-> 1 (+ 2) inc)                    ; (inc (+ 1 2)) = 4
+(->> [1 2 3] (map inc) (reduce +))  ; 9
 ```
 
 ## Namespaces

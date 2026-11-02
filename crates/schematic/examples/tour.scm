@@ -136,6 +136,24 @@
 (check "box plot" true (string-contains? (str (box-plot shop :city :units)) "Oslo"))
 (check "pie" true (string-contains? (str (pie-chart shop :city :units {:donut true})) "(86%)"))
 (check "sideways" true (plot? (bar-chart shop :city :units {:horizontal true :y-format "{:,}" :hline 20})))
+(define goals (table {:city ["Oslo" "Rome" "Bern"]
+                      :units [12 7 30]
+                      :target [15 10 20]
+                      :share [0.2 0.1 0.7]}))
+(define layered (-> (bars goals :city :units)
+                    (lines goals :city :target {:dash true})
+                    (points goals :city :share {:axis :right})
+                    (hline 10 "goal")
+                    (title "Units" "by city")
+                    (caption "source: shop")))
+(check "layers" true (string-contains? (to-svg layered) ">goal<"))
+(check "layered text" true (string-starts-with? (str layered) "Units\nOslo"))
+(check "trend" true (plot? (-> (points shop :year :units {:size :units}) (trend))))
+(check "sorted bars" true (string-starts-with? (str (bars shop :city :units {:sort :desc :top 2 :palette :warm})) "Oslo"))
+(check "density" true (plot? (density (:units shop))))
+(check "heatmap" true (string-contains? (str (heatmap shop :city :year :units)) "2021"))
+(check "figure" true (string-contains? (to-svg (figure [(bars shop :city :units) (lines shop :when :units)] {:columns 2})) "<svg"))
+(check "dark svg" true (string-contains? (to-svg (points shop :year :units) {:width 800 :theme :dark}) "width=\"800\""))
 
 ;; Arrays
 (define prices #[10 20 30 nil])
@@ -209,6 +227,8 @@
      (if (= n 0) nil (begin body ...)))))
 (check "macro" "ran" (unless-zero 5 "ran"))
 (check "macro zero" nil (unless-zero 0 "ran"))
+(check "thread first" 4 (-> 1 (+ 2) inc))
+(check "thread last" 9 (->> [1 2 3] (map inc) (reduce +)))
 
 (define x 42)
 (check "quasiquote" '(x is 42 and doubled 84) `(x is ~x and doubled ~(* 2 x)))
