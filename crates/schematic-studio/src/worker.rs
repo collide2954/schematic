@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn plots_are_events_of_their_own() {
         let events = drive(vec![quiet_request("(define p (bar-chart [\"a\"] [1])) p"), inspect("p", 0, 10)]);
-        assert!(matches!(&events[1], Event::Plot(plot) if plot.kind == schematic::plot::Kind::Bar), "{events:?}");
+        assert!(matches!(&events[1], Event::Plot(plot) if plot.mark() == Some(schematic::plot::Mark::Bar)), "{events:?}");
         assert_eq!(events[2], Event::Environment(vec![binding("p", "plot", "bar chart with 1 bar")]));
         assert_eq!(events[3], Event::Namespace("user".into()));
         assert_eq!(events[4], Event::Finished(0));

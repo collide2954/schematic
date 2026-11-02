@@ -656,6 +656,8 @@ pub enum Message {
     PlotView(PlotView),
     PlotReset,
     PlotSelect(usize),
+    PlotToggle(usize),
+    PlotPick(String),
     CopyPlot,
     NewNotebook,
     CellEdit(usize, Action),
@@ -2008,6 +2010,20 @@ impl Studio {
                     self.plot_view = PlotView::default();
                 }
                 Task::none()
+            }
+            Message::PlotToggle(series) => {
+                self.plot_view = std::mem::take(&mut self.plot_view).toggled(series);
+                Task::none()
+            }
+            Message::PlotPick(key) => {
+                if self.grid_filter == key {
+                    self.grid_filter.clear();
+                    self.status = "Cleared the row filter".to_string();
+                } else {
+                    self.status = format!("Rows filtered to {key}");
+                    self.grid_filter = key;
+                }
+                self.reinspect()
             }
             Message::CopyPlot => match self.plot().map(Plot::svg) {
                 Some(svg) => {
@@ -4058,20 +4074,36 @@ mod tests {
         let mut studio = Studio::new();
         let _ = studio.update(Message::Worker(Event::Plot(Box::new(chart("one")))));
         let _ = studio.update(Message::Worker(Event::Plot(Box::new(chart("two")))));
-        let zoomed = PlotView { zoom: 2.0, pan: (-10.0, -5.0) };
-        let _ = studio.update(Message::PlotView(zoomed));
+        let zoomed = PlotView { zoom: 2.0, pan: (-10.0, -5.0), hidden: Vec::new() };
+        let _ = studio.update(Message::PlotView(zoomed.clone()));
         assert_eq!(studio.plot_view, zoomed);
         let _ = view::view(&studio);
         let _ = studio.update(Message::PlotReset);
         assert_eq!(studio.plot_view, PlotView::default());
-        let _ = studio.update(Message::PlotView(zoomed));
+        let _ = studio.update(Message::PlotView(zoomed.clone()));
         let _ = studio.update(Message::PlotSelect(0));
-        assert_eq!((studio.plot_at, studio.plot_view), (0, PlotView::default()));
+        assert_eq!((studio.plot_at, studio.plot_view.clone()), (0, PlotView::default()));
         let _ = studio.update(Message::PlotView(zoomed));
         let _ = studio.update(Message::PlotForward);
-        assert_eq!((studio.plot_at, studio.plot_view), (1, PlotView::default()));
+        assert_eq!((studio.plot_at, studio.plot_view.clone()), (1, PlotView::default()));
         let _ = studio.update(Message::CopyPlot);
         assert_eq!(studio.status, "Copied the chart as SVG");
+    }
+
+    #[test]
+    fn plot_legends_toggle_series_and_picks_filter_the_rows() {
+        let mut studio = Studio::new();
+        let _ = studio.update(Message::Worker(Event::Plot(Box::new(chart("one")))));
+        let _ = studio.update(Message::PlotToggle(1));
+        assert_eq!(studio.plot_view.hidden, [1]);
+        assert!(!studio.plot_view.is_fresh());
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::PlotToggle(1));
+        assert!(studio.plot_view.is_fresh());
+        let _ = studio.update(Message::PlotPick("b".into()));
+        assert_eq!((studio.grid_filter.as_str(), studio.status.as_str()), ("b", "Rows filtered to b"));
+        let _ = studio.update(Message::PlotPick("b".into()));
+        assert_eq!((studio.grid_filter.as_str(), studio.status.as_str()), ("", "Cleared the row filter"));
     }
 
     #[test]

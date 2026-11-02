@@ -1592,7 +1592,7 @@ fn plot_header(studio: &Studio) -> Element<'_, Message> {
             .push(glyph_button(Glyph::Right, (studio.plot_at + 1 < count).then_some(Message::PlotForward)));
     }
     bar.push(space::horizontal())
-        .push(small("Reset view", (studio.plot_view != PlotView::default()).then_some(Message::PlotReset)))
+        .push(small("Reset view", (!studio.plot_view.is_fresh()).then_some(Message::PlotReset)))
         .push(small("Copy SVG", Some(Message::CopyPlot)))
         .push(small("Save as SVG", Some(Message::SavePlot)))
         .into()
@@ -1600,7 +1600,7 @@ fn plot_header(studio: &Studio) -> Element<'_, Message> {
 
 fn plots(studio: &Studio) -> Element<'_, Message> {
     let Some(plot) = studio.plot() else { return hint("No charts.") };
-    let chart: Element<'_, Message> = canvas(Chart { plot, view: studio.plot_view }).width(Length::Fill).height(Length::Fill).into();
+    let chart: Element<'_, Message> = canvas(Chart { plot, view: studio.plot_view.clone() }).width(Length::Fill).height(Length::Fill).into();
     let mut body = column![plot_header(studio), line(), chart];
     if studio.plots.len() >= 2 {
         let thumbs = studio.plots.iter().enumerate().map(|(i, plot)| canvas(Thumb { plot, index: i, selected: i == studio.plot_at }).width(140).height(80).into());
