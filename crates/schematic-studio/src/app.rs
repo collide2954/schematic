@@ -24,6 +24,10 @@ use crate::project::{self, ProjectInfo};
 use crate::worker::{self, Binding, Event, Grid, Request, Watched};
 use crate::{files, fonts, forms, theme, view};
 
+use crate::assistant::{self, Attachment, Call, Session, Step};
+use crate::claude::{Delta, Request as Ask};
+use crate::transport::{self, Handle, Packet};
+
 pub const PAGE: usize = 100;
 pub const LINE_HEIGHT: f32 = 21.0;
 pub const EDITOR_PAD: f32 = 10.0;
@@ -35,6 +39,7 @@ pub enum PaneKind {
     Environment,
     Viewer,
     Plots,
+    Assistant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +100,14 @@ pub struct Git {
 pub struct Diff {
     pub title: String,
     pub text: String,
+    pub proposal: Option<Proposal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Proposal {
+    pub doc: u64,
+    pub find: String,
+    pub replace: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -153,6 +166,112 @@ pub struct Completion {
     pub selected: usize,
     pub prefix: String,
     pub source: Source,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entry {
+    You(String),
+    Reply(String),
+    Tool(String),
+    Note(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Attach {
+    File,
+    Selection,
+    Console,
+    Environment,
+    Files,
+}
+
+impl Attach {
+    pub const ALL: [Attach; 5] = [Attach::File, Attach::Selection, Attach::Console, Attach::Environment, Attach::Files];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Attach::File => "File",
+            Attach::Selection => "Selection",
+            Attach::Console => "Console",
+            Attach::Environment => "Environment",
+            Attach::Files => "Files",
+        }
+    }
+}
+
+pub struct Live {
+    pub id: u64,
+    pub handle: Handle,
+    pub text: String,
+    pub error: Option<String>,
+}
+
+pub struct Assistant {
+    pub session: Option<Session>,
+    pub system: Option<String>,
+    pub entries: Vec<Entry>,
+    pub composer: text_editor::Content,
+    pub attach: Vec<Attach>,
+    pub live: Option<Live>,
+    pub calls: Vec<Call>,
+    pub results: Vec<(String, Result<String, String>)>,
+    pub approval: Option<Call>,
+    pub allowed: bool,
+    pub awaiting: Option<(u64, String)>,
+    pub captures: u64,
+    pub key: Option<String>,
+    pub key_field: String,
+    pub model: String,
+    pub effort: String,
+    pub ask_before_running: bool,
+    pub attach_data: bool,
+    pub completions: bool,
+    pub suggestion: Option<String>,
+    pub generation: u64,
+    pub sleeping: bool,
+    pub suggesting: Option<(u64, u64, Handle)>,
+    pub jobs: u64,
+    pub offline: bool,
+}
+
+impl Assistant {
+    fn from(settings: &Settings) -> Assistant {
+        Assistant {
+            session: None,
+            system: None,
+            entries: Vec::new(),
+            composer: text_editor::Content::new(),
+            attach: vec![Attach::File, Attach::Console, Attach::Environment],
+            live: None,
+            calls: Vec::new(),
+            results: Vec::new(),
+            approval: None,
+            allowed: false,
+            awaiting: None,
+            captures: 0,
+            key: None,
+            key_field: String::new(),
+            model: settings.model.clone(),
+            effort: settings.effort.clone(),
+            ask_before_running: settings.ask_before_running,
+            attach_data: settings.attach_data,
+            completions: settings.completions,
+            suggestion: None,
+            generation: 0,
+            sleeping: false,
+            suggesting: None,
+            jobs: 0,
+            offline: false,
+        }
+    }
+
+    fn system(&mut self) -> String {
+        self.system.get_or_insert_with(assistant::system).clone()
+    }
+
+    pub fn busy(&self) -> bool {
+        self.live.is_some() || self.awaiting.is_some() || self.approval.is_some()
+    }
 }
 
 enum Follow {
@@ -524,6 +643,7 @@ pub struct Studio {
     pub running: bool,
     pub theme: Theme,
     pub status: String,
+    pub assistant: Assistant,
 }
 
 #[derive(Debug, Clone)]
@@ -699,6 +819,37 @@ pub enum Message {
     AttachPane(window::Id),
     AttachAll,
     CloseRequested(window::Id),
+    Compose(Action),
+    AskSend,
+    AskStop,
+    AskClear,
+    AttachToggle(Attach),
+    Packet(u64, Packet),
+    Approve(bool),
+    Deny,
+    ApplyProposal,
+    DiscardProposal,
+    ExplainSelection,
+    FixError,
+    SetModel(String),
+    SetEffort(String),
+    ToggleAskBeforeRunning,
+    ToggleAttachData,
+    ToggleCompletions,
+    KeyInput(String),
+    KeySave,
+    KeyRemove,
+    SuggestNow(u64),
+    AcceptSuggestion,
+    DismissSuggestion,
+}
+
+pub fn composer_id() -> Id {
+    Id::new("composer")
+}
+
+pub fn assistant_id() -> Id {
+    Id::new("assistant")
 }
 
 pub fn console_find_id() -> Id {
@@ -766,6 +917,7 @@ impl PaneKind {
             PaneKind::Environment => "Environment",
             PaneKind::Viewer => "Data",
             PaneKind::Plots => "Plots",
+            PaneKind::Assistant => "Assistant",
         }
     }
 }
@@ -788,6 +940,45 @@ pub fn editor_text_id() -> Id {
 
 pub fn console_text_id() -> Id {
     Id::new("console-text")
+}
+
+pub fn console_text(lines: &[Line], count: usize) -> String {
+    let start = lines.len().saturating_sub(count);
+    lines[start..]
+        .iter()
+        .map(|line| {
+            let marker = match line.kind {
+                LineKind::Input => "› ",
+                LineKind::Result => "= ",
+                LineKind::Error => "! ",
+                LineKind::Output | LineKind::Note => "",
+            };
+            format!("{marker}{}", line.text.trim_end_matches('\n'))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn tail(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let mut start = text.len() - limit;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text[start..].to_string()
+}
+
+fn head(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_string();
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 fn file_name_of(path: &Path) -> String {
@@ -916,7 +1107,7 @@ pub fn shortcut_of(key: &iced::keyboard::Key, modifiers: iced::keyboard::Modifie
         _ if letter("-") => Shortcut::ZoomOut,
         _ if letter("0") => Shortcut::ZoomReset,
         _ if letter(",") => Shortcut::Preferences,
-        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=8).contains(n))?),
+        Key::Character(c) => Shortcut::Pane(c.parse::<u8>().ok().filter(|n| (1..=9).contains(n))?),
         _ => return None,
     })
 }
@@ -1172,12 +1363,14 @@ impl Studio {
             running: false,
             theme: theme::named(&settings.theme),
             status: "Starting the interpreter".to_string(),
+            assistant: Assistant::from(&settings),
         }
     }
 
     fn boot() -> (Studio, Task<Message>) {
         let settings = settings::load();
         let mut studio = Studio::with_settings(settings.clone());
+        studio.assistant.key = settings::load_key();
         let mut tasks = Vec::new();
         match std::env::args().nth(1) {
             Some(path) => tasks.push(studio.load(PathBuf::from(path))),
@@ -1270,6 +1463,11 @@ impl Studio {
             projects: self.projects.clone(),
             root: self.root.clone(),
             watches: self.watches.clone(),
+            model: self.assistant.model.clone(),
+            effort: self.assistant.effort.clone(),
+            ask_before_running: self.assistant.ask_before_running,
+            attach_data: self.assistant.attach_data,
+            completions: self.assistant.completions,
         }
     }
 
@@ -1595,7 +1793,11 @@ impl Studio {
                 doc.marks = marks_for(doc);
                 self.track_completion(Source::Editor, follow);
                 let check = if edited { self.schedule_check() } else { Task::none() };
-                Task::batch([self.follow_cursor(), check])
+                let suggest = if edited { self.schedule_suggestion() } else { Task::none() };
+                if !edited {
+                    self.assistant.suggestion = None;
+                }
+                Task::batch([self.follow_cursor(), check, suggest])
             }
             Message::Checked(id, generation, problems) => {
                 if let Some(doc) = self.docs.iter_mut().find(|d| d.id == id)
@@ -1958,6 +2160,118 @@ impl Studio {
                 }
                 self.attach(id)
             }
+            Message::Compose(action) => {
+                self.assistant.composer.perform(action);
+                Task::none()
+            }
+            Message::AskSend => self.ask_send(),
+            Message::AskStop => {
+                self.stop_assistant();
+                Task::none()
+            }
+            Message::AskClear => {
+                self.stop_assistant();
+                self.assistant.session = None;
+                self.assistant.entries.clear();
+                self.assistant.allowed = false;
+                Task::none()
+            }
+            Message::AttachToggle(attach) => {
+                match self.assistant.attach.iter().position(|a| *a == attach) {
+                    Some(at) => {
+                        self.assistant.attach.remove(at);
+                    }
+                    None => self.assistant.attach.push(attach),
+                }
+                Task::none()
+            }
+            Message::Packet(job, packet) => self.packet(job, packet),
+            Message::Approve(always) => {
+                if always {
+                    self.assistant.allowed = true;
+                }
+                match self.assistant.approval.take() {
+                    Some(call) => self.run_call(call),
+                    None => Task::none(),
+                }
+            }
+            Message::Deny => match self.assistant.approval.take() {
+                Some(call) => self.finish_call(call.id, Err("The person chose not to run this code.".to_string())),
+                None => Task::none(),
+            },
+            Message::ApplyProposal => self.apply_proposal(),
+            Message::DiscardProposal => {
+                self.diff = None;
+                self.tab = Tab::Doc(self.current);
+                Task::none()
+            }
+            Message::ExplainSelection => self.explain_selection(),
+            Message::FixError => self.fix_error(),
+            Message::SetModel(model) => {
+                self.assistant.model = model;
+                Task::none()
+            }
+            Message::SetEffort(effort) => {
+                self.assistant.effort = effort;
+                Task::none()
+            }
+            Message::ToggleAskBeforeRunning => {
+                self.assistant.ask_before_running = !self.assistant.ask_before_running;
+                Task::none()
+            }
+            Message::ToggleAttachData => {
+                self.assistant.attach_data = !self.assistant.attach_data;
+                Task::none()
+            }
+            Message::ToggleCompletions => {
+                self.assistant.completions = !self.assistant.completions;
+                self.assistant.suggestion = None;
+                Task::none()
+            }
+            Message::KeyInput(text) => {
+                self.assistant.key_field = text;
+                Task::none()
+            }
+            Message::KeySave => {
+                let key = self.assistant.key_field.trim().to_string();
+                if key.is_empty() {
+                    return Task::none();
+                }
+                match settings::save_key(&key) {
+                    Ok(()) => {
+                        self.assistant.key = Some(key);
+                        self.assistant.key_field.clear();
+                        self.status = "Key saved".to_string();
+                    }
+                    Err(e) => self.status = format!("Cannot save the key: {e}"),
+                }
+                Task::none()
+            }
+            Message::KeyRemove => {
+                match settings::save_key("") {
+                    Ok(()) => {
+                        self.assistant.key = std::env::var("ANTHROPIC_API_KEY").ok().filter(|k| !k.trim().is_empty());
+                        self.status = "Key removed".to_string();
+                    }
+                    Err(e) => self.status = format!("Cannot remove the key: {e}"),
+                }
+                Task::none()
+            }
+            Message::SuggestNow(generation) => self.suggest_now(generation),
+            Message::AcceptSuggestion => {
+                let Some(text) = self.assistant.suggestion.take() else { return Task::none() };
+                let doc = self.doc_mut();
+                doc.record(EditKind::Other);
+                doc.dirty = true;
+                doc.content.perform(Action::Edit(Edit::Paste(Arc::new(text))));
+                doc.marks = marks_for(doc);
+                let check = self.schedule_check();
+                Task::batch([self.follow_cursor(), check])
+            }
+            Message::DismissSuggestion => {
+                self.assistant.suggestion = None;
+                Task::none()
+            }
             Message::Dropped(path) => {
                 if path.is_dir() {
                     self.set_root(path);
@@ -2240,7 +2554,7 @@ impl Studio {
                 match result {
                     Ok(text) => {
                         let text = if text.trim().is_empty() { "No differences.".to_string() } else { text };
-                        self.diff = Some(Diff { title, text });
+                        self.diff = Some(Diff { title, text, proposal: None });
                         self.tab = Tab::Diff;
                     }
                     Err(e) => self.status = format!("Error: {e}"),
@@ -2712,6 +3026,7 @@ impl Studio {
                 }
                 Task::none()
             }
+            Event::Captured { id, text } => self.captured(id, text),
             Event::Restarted(flag) => {
                 self.interrupt = Some(flag);
                 self.namespace = "user".to_string();
@@ -2746,6 +3061,430 @@ impl Studio {
 
     fn note(&mut self, text: &str) {
         self.console.push(Line { kind: LineKind::Note, text: text.to_string() });
+    }
+
+    fn remark(&mut self, text: impl Into<String>) {
+        self.assistant.entries.push(Entry::Note(text.into()));
+    }
+
+    fn project_root(&self) -> Option<PathBuf> {
+        self.root.clone().or_else(|| self.doc().path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf)))
+    }
+
+    pub fn project_files(&self, limit: usize) -> Vec<String> {
+        let Some(root) = self.project_root() else { return Vec::new() };
+        let mut found = Vec::new();
+        let mut folders = vec![root.clone()];
+        while let Some(folder) = folders.pop() {
+            let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+            let mut entries: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+            entries.sort();
+            for path in entries {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                if name.starts_with('.') || name == "target" {
+                    continue;
+                }
+                if path.is_dir() {
+                    folders.push(path);
+                } else if let Ok(relative) = path.strip_prefix(&root) {
+                    found.push(relative.to_string_lossy().replace('\\', "/"));
+                    if found.len() >= limit {
+                        return found;
+                    }
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    fn read_project_file(&self, path: &str) -> Result<String, String> {
+        let root = self.project_root().ok_or_else(|| "No project folder is open.".to_string())?;
+        let full = root.join(path);
+        let inside = full.canonicalize().ok().zip(root.canonicalize().ok()).is_some_and(|(file, root)| file.starts_with(root));
+        if !inside {
+            return Err(format!("{path} is outside the project folder"));
+        }
+        std::fs::read_to_string(&full).map_err(|e| format!("cannot read {path}: {e}"))
+    }
+
+    fn environment_text(&self) -> String {
+        let mut lines = Vec::new();
+        for binding in &self.bindings {
+            lines.push(format!("{}: {}, {}", binding.name, binding.kind, binding.summary));
+            if self.assistant.attach_data && !binding.columns.is_empty() {
+                lines.push(format!("  columns: {}", binding.columns.join(", ")));
+            }
+        }
+        lines.join("\n")
+    }
+
+    fn attachments(&self) -> Vec<Attachment> {
+        let doc = self.doc();
+        let mut out = Vec::new();
+        for attach in &self.assistant.attach {
+            match attach {
+                Attach::File => out.push(Attachment::new(format!("file {}", doc.name()), doc.content.text())),
+                Attach::Selection => {
+                    if let Some(selection) = doc.content.selection().filter(|s| !s.trim().is_empty()) {
+                        out.push(Attachment::new("selection", selection));
+                    }
+                }
+                Attach::Console => {
+                    let text = console_text(&self.console, 40);
+                    if !text.is_empty() {
+                        out.push(Attachment::new("console", text));
+                    }
+                }
+                Attach::Environment => {
+                    let text = self.environment_text();
+                    if !text.is_empty() {
+                        out.push(Attachment::new("environment", text));
+                    }
+                }
+                Attach::Files => {
+                    let files = self.project_files(200);
+                    if !files.is_empty() {
+                        out.push(Attachment::new("project files", files.join("\n")));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn ask_send(&mut self) -> Task<Message> {
+        let question = self.assistant.composer.text().trim().to_string();
+        if question.is_empty() || self.assistant.busy() {
+            return Task::none();
+        }
+        self.assistant.composer = text_editor::Content::new();
+        let attachments = self.attachments();
+        self.ask(question, attachments)
+    }
+
+    fn ask(&mut self, question: String, attachments: Vec<Attachment>) -> Task<Message> {
+        if self.pane_of(PaneKind::Assistant).is_none() {
+            self.toggle_pane(PaneKind::Assistant);
+        }
+        if self.assistant.busy() {
+            return Task::none();
+        }
+        let Some(key) = self.assistant.key.clone() else {
+            self.remark("No API key. Set one under Preferences, or set ANTHROPIC_API_KEY before starting Studio.");
+            return operation::snap_to(assistant_id(), RelativeOffset::END);
+        };
+        if !self.assistant.offline && !transport::available() {
+            self.remark("curl was not found on this computer.");
+            return Task::none();
+        }
+        self.assistant.entries.push(Entry::You(question.clone()));
+        let text = assistant::compose(&question, &attachments);
+        let (model, effort, system) = (self.assistant.model.clone(), self.assistant.effort.clone(), self.assistant.system());
+        let session = self.assistant.session.get_or_insert_with(|| Session::new(&model, &effort, system));
+        session.model = model;
+        session.effort = effort;
+        let request = session.ask(text);
+        self.assistant.calls.clear();
+        self.assistant.results.clear();
+        self.assistant.approval = None;
+        self.assistant.awaiting = None;
+        Task::batch([self.start_stream(request, key), operation::snap_to(assistant_id(), RelativeOffset::END)])
+    }
+
+    fn start_stream(&mut self, request: Ask, key: String) -> Task<Message> {
+        self.assistant.jobs += 1;
+        let job = self.assistant.jobs;
+        if self.assistant.offline {
+            self.assistant.live = Some(Live { id: job, handle: Handle::default(), text: String::new(), error: None });
+            return Task::none();
+        }
+        let (handle, stream) = transport::start(&request, key);
+        self.assistant.live = Some(Live { id: job, handle, text: String::new(), error: None });
+        Task::stream(stream).map(move |packet| Message::Packet(job, packet))
+    }
+
+    fn stop_assistant(&mut self) {
+        if let Some(live) = &self.assistant.live {
+            live.handle.stop();
+        }
+        self.assistant.live = None;
+        self.assistant.calls.clear();
+        self.assistant.results.clear();
+        self.assistant.approval = None;
+        self.assistant.awaiting = None;
+        if let Some(session) = &mut self.assistant.session {
+            session.drop_pending();
+        }
+    }
+
+    fn packet(&mut self, job: u64, packet: Packet) -> Task<Message> {
+        if self.assistant.suggesting.as_ref().is_some_and(|(id, _, _)| *id == job) {
+            return self.suggested(packet);
+        }
+        let Some(live) = self.assistant.live.as_mut().filter(|live| live.id == job) else { return Task::none() };
+        match packet {
+            Packet::Delta(Delta::Text(piece)) => {
+                live.text.push_str(&piece);
+                operation::snap_to(assistant_id(), RelativeOffset::END)
+            }
+            Packet::Delta(Delta::ToolStart(_)) => Task::none(),
+            Packet::Delta(Delta::Error(message)) => {
+                live.error = Some(message);
+                Task::none()
+            }
+            Packet::Done(result) => {
+                let live = self.assistant.live.take().expect("a live reply");
+                let turn = match result {
+                    Ok(turn) => turn,
+                    Err(message) => {
+                        if let Some(session) = &mut self.assistant.session {
+                            session.drop_pending();
+                        }
+                        self.remark(if message == "stopped" { "Stopped.".to_string() } else { message });
+                        return operation::snap_to(assistant_id(), RelativeOffset::END);
+                    }
+                };
+                if let Some(message) = live.error {
+                    self.remark(message);
+                }
+                let text = turn.text();
+                if !text.trim().is_empty() {
+                    self.assistant.entries.push(Entry::Reply(text));
+                }
+                let Some(session) = self.assistant.session.as_mut() else { return Task::none() };
+                let next = match session.received(&turn) {
+                    Step::Reply => Task::none(),
+                    Step::Calls(calls) => {
+                        self.assistant.calls = calls;
+                        self.assistant.results.clear();
+                        self.next_call()
+                    }
+                    Step::Refused(category) => {
+                        let why = if category.is_empty() { String::new() } else { format!(" ({category})") };
+                        self.remark(format!("The model declined this request{why}."));
+                        Task::none()
+                    }
+                    Step::Cut => {
+                        self.remark("The reply stopped at the length limit.");
+                        Task::none()
+                    }
+                };
+                Task::batch([next, operation::snap_to(assistant_id(), RelativeOffset::END)])
+            }
+        }
+    }
+
+    fn next_call(&mut self) -> Task<Message> {
+        if self.assistant.awaiting.is_some() || self.assistant.approval.is_some() {
+            return Task::none();
+        }
+        if self.assistant.calls.is_empty() {
+            if self.assistant.results.is_empty() {
+                return Task::none();
+            }
+            let results = std::mem::take(&mut self.assistant.results);
+            let Some(key) = self.assistant.key.clone() else { return Task::none() };
+            let Some(session) = self.assistant.session.as_mut() else { return Task::none() };
+            let request = session.answer(results);
+            return self.start_stream(request, key);
+        }
+        let call = self.assistant.calls.remove(0);
+        if call.name == "evaluate" && self.assistant.ask_before_running && !self.assistant.allowed {
+            self.assistant.approval = Some(call);
+            return operation::snap_to(assistant_id(), RelativeOffset::END);
+        }
+        self.run_call(call)
+    }
+
+    fn run_call(&mut self, call: Call) -> Task<Message> {
+        self.assistant.entries.push(Entry::Tool(call.summary()));
+        match call.name.as_str() {
+            "evaluate" | "describe" => {
+                let source = if call.name == "evaluate" { call.field("code").to_string() } else { format!("(describe {})", call.field("name")) };
+                let Some(worker) = &self.worker else { return self.finish_call(call.id, Err("The interpreter is not running.".to_string())) };
+                self.assistant.captures += 1;
+                let id = self.assistant.captures;
+                let _ = worker.send(Request::Capture { id, source });
+                self.assistant.awaiting = Some((id, call.id));
+                Task::none()
+            }
+            "read-file" => {
+                let result = self.read_project_file(call.field("path"));
+                self.finish_call(call.id, result)
+            }
+            "list-files" => {
+                let files = self.project_files(500);
+                let result = if files.is_empty() { Err("No project folder is open.".to_string()) } else { Ok(files.join("\n")) };
+                self.finish_call(call.id, result)
+            }
+            "propose-edit" => {
+                let result = self.propose(call.field("find"), call.field("replace"), call.field("why"));
+                self.finish_call(call.id, result)
+            }
+            other => self.finish_call(call.id, Err(format!("there is no tool named {other}"))),
+        }
+    }
+
+    fn finish_call(&mut self, id: String, result: Result<String, String>) -> Task<Message> {
+        self.assistant.results.push((id, result.map(assistant::clip)));
+        self.next_call()
+    }
+
+    fn captured(&mut self, id: u64, text: String) -> Task<Message> {
+        let Some((waiting, call)) = self.assistant.awaiting.clone() else { return Task::none() };
+        if waiting != id {
+            return Task::none();
+        }
+        self.assistant.awaiting = None;
+        let failed = text.lines().last().is_some_and(|line| line.starts_with("error:"));
+        self.finish_call(call, if failed { Err(text) } else { Ok(text) })
+    }
+
+    fn propose(&mut self, find: &str, replace: &str, why: &str) -> Result<String, String> {
+        let doc = self.doc();
+        let text = doc.content.text();
+        if !find.is_empty() {
+            match text.matches(find).count() {
+                0 => return Err("`find` does not occur in the file; read-file returns the current text".to_string()),
+                1 => {}
+                n => return Err(format!("`find` occurs {n} times; include more context so it matches once")),
+            }
+        }
+        let title = format!("{}: {}", doc.name(), if why.trim().is_empty() { "proposed edit" } else { why.trim() });
+        let id = doc.id;
+        let mut diff = String::new();
+        for line in find.lines() {
+            diff.push_str(&format!("-{line}\n"));
+        }
+        for line in replace.lines() {
+            diff.push_str(&format!("+{line}\n"));
+        }
+        self.diff = Some(Diff { title, text: diff, proposal: Some(Proposal { doc: id, find: find.to_string(), replace: replace.to_string() }) });
+        self.tab = Tab::Diff;
+        Ok("Proposed. The person sees the diff and decides whether to apply it.".to_string())
+    }
+
+    fn apply_proposal(&mut self) -> Task<Message> {
+        let Some(Diff { proposal: Some(proposal), .. }) = self.diff.clone() else { return Task::none() };
+        let Some(index) = self.docs.iter().position(|d| d.id == proposal.doc) else {
+            self.status = "That file is no longer open".to_string();
+            return Task::none();
+        };
+        self.current = index;
+        self.tab = Tab::Doc(index);
+        self.diff = None;
+        let text = self.doc().content.text();
+        let position = self.doc().content.cursor().position;
+        let replaced = if proposal.find.is_empty() {
+            let gap = if text.is_empty() || text.ends_with('\n') { "" } else { "\n" };
+            format!("{text}{gap}{}", proposal.replace)
+        } else {
+            text.replacen(&proposal.find, &proposal.replace, 1)
+        };
+        self.rewrite(replaced, position)
+    }
+
+    fn explain_selection(&mut self) -> Task<Message> {
+        let (name, text, code) = {
+            let doc = self.doc();
+            let text = doc.content.text();
+            let code = doc.content.selection().filter(|s| !s.trim().is_empty()).or_else(|| {
+                let cursor = doc.content.cursor().position;
+                let offset = forms::offset_of(&text, cursor.line, cursor.column);
+                forms::form_at(&text, offset).map(|range| text[range].to_string())
+            });
+            (doc.name(), text, code)
+        };
+        let Some(code) = code else {
+            self.status = "Nothing to explain at the cursor".to_string();
+            return Task::none();
+        };
+        let attachments = vec![Attachment::new(format!("file {name}"), text), Attachment::new("selection", code)];
+        self.ask("Explain the selected code: what it does, step by step, and anything surprising about it.".to_string(), attachments)
+    }
+
+    fn fix_error(&mut self) -> Task<Message> {
+        let Some(at) = self.console.iter().rposition(|line| line.kind == LineKind::Error) else {
+            self.status = "No error in the console".to_string();
+            return Task::none();
+        };
+        let error = self.console[at].text.trim_end().to_string();
+        let input = self.console[..at].iter().rev().find(|line| line.kind == LineKind::Input).map(|line| line.text.trim_end().to_string());
+        let (name, text) = {
+            let doc = self.doc();
+            (doc.name(), doc.content.text())
+        };
+        let mut attachments = vec![Attachment::new(format!("file {name}"), text)];
+        if let Some(input) = input {
+            attachments.push(Attachment::new("code that failed", input));
+        }
+        attachments.push(Attachment::new("error", error));
+        self.ask("This failed. Say why in a sentence or two, then fix it: propose-edit when the cause is in the file, otherwise show the corrected code.".to_string(), attachments)
+    }
+
+    fn wants_suggestions(&self) -> bool {
+        self.assistant.completions && self.assistant.key.is_some() && self.doc().notebook.is_none() && self.completion.is_none() && (self.assistant.offline || transport::available())
+    }
+
+    fn schedule_suggestion(&mut self) -> Task<Message> {
+        self.assistant.suggestion = None;
+        self.assistant.generation += 1;
+        if !self.wants_suggestions() || self.assistant.sleeping {
+            return Task::none();
+        }
+        self.assistant.sleeping = true;
+        let generation = self.assistant.generation;
+        Task::perform(async { std::thread::sleep(std::time::Duration::from_millis(700)) }, move |()| Message::SuggestNow(generation))
+    }
+
+    fn suggest_now(&mut self, generation: u64) -> Task<Message> {
+        self.assistant.sleeping = false;
+        if !self.wants_suggestions() || self.assistant.suggesting.is_some() {
+            return Task::none();
+        }
+        if generation != self.assistant.generation {
+            self.assistant.sleeping = true;
+            let current = self.assistant.generation;
+            return Task::perform(async { std::thread::sleep(std::time::Duration::from_millis(700)) }, move |()| Message::SuggestNow(current));
+        }
+        let Some(key) = self.assistant.key.clone() else { return Task::none() };
+        let (before, after) = {
+            let doc = self.doc();
+            let text = doc.content.text();
+            let cursor = doc.content.cursor().position;
+            let offset = forms::offset_of(&text, cursor.line, cursor.column);
+            (tail(&text[..offset], 3000), head(&text[offset..], 600))
+        };
+        if before.trim().is_empty() {
+            return Task::none();
+        }
+        let system = self.assistant.system();
+        let request = assistant::suggestion_request(&system, &before, &after);
+        self.assistant.jobs += 1;
+        let job = self.assistant.jobs;
+        if self.assistant.offline {
+            self.assistant.suggesting = Some((job, generation, Handle::default()));
+            return Task::none();
+        }
+        let (handle, stream) = transport::start(&request, key);
+        self.assistant.suggesting = Some((job, generation, handle));
+        Task::stream(stream).map(move |packet| Message::Packet(job, packet))
+    }
+
+    fn suggested(&mut self, packet: Packet) -> Task<Message> {
+        let Packet::Done(result) = packet else { return Task::none() };
+        let Some((_, generation, _)) = self.assistant.suggesting.take() else { return Task::none() };
+        if let Ok(turn) = result
+            && generation == self.assistant.generation
+            && self.wants_suggestions()
+        {
+            let text = assistant::clean_suggestion(&turn.text());
+            if !text.trim().is_empty() {
+                self.assistant.suggestion = Some(text);
+            }
+        }
+        Task::none()
     }
 
     fn push(&mut self, kind: LineKind, text: String) -> Task<Message> {
@@ -3000,6 +3739,7 @@ impl Studio {
             PaneKind::Environment => (first(&[PaneKind::Viewer, PaneKind::Plots, PaneKind::Editor]), Axis::Vertical, false),
             PaneKind::Viewer => (first(&[PaneKind::Environment, PaneKind::Plots, PaneKind::Editor]), Axis::Horizontal, false),
             PaneKind::Plots => (first(&[PaneKind::Viewer, PaneKind::Environment, PaneKind::Console]), Axis::Horizontal, false),
+            PaneKind::Assistant => (first(&[PaneKind::Editor, PaneKind::Console]), Axis::Vertical, false),
         };
         let Some(anchor) = anchor else { return };
         if let Some((pane, _)) = self.panes.split(axis, anchor, kind)
@@ -3011,7 +3751,7 @@ impl Studio {
     fn shortcut(&mut self, shortcut: Shortcut) -> Task<Message> {
         match shortcut {
             Shortcut::Escape => {
-                if self.menu.take().is_some() || self.palette.take().is_some() || self.completion.take().is_some() {
+                if self.menu.take().is_some() || self.palette.take().is_some() || self.completion.take().is_some() || self.assistant.suggestion.take().is_some() {
                     return Task::none();
                 }
                 if self.find.is_some() {
@@ -3040,6 +3780,12 @@ impl Studio {
             Shortcut::Close => self.update(Message::CloseTab(Tab::Doc(self.current))),
             Shortcut::Pane(1) => operation::focus(editor_text_id()),
             Shortcut::Pane(2) => operation::focus(console_text_id()),
+            Shortcut::Pane(9) => {
+                if self.pane_of(PaneKind::Assistant).is_none() {
+                    self.toggle_pane(PaneKind::Assistant);
+                }
+                operation::focus(composer_id())
+            }
             Shortcut::Pane(n) => {
                 self.side = match n {
                     3 => Side::Environment,
@@ -3525,6 +4271,97 @@ mod tests {
     }
 
     #[test]
+    fn the_assistant_streams_replies_and_waits_for_approval_before_running_code() {
+        use crate::claude::{Content, Turn};
+        use schematic::json::Json;
+        let mut studio = studio_with_content();
+        studio.assistant.offline = true;
+        let _ = studio.update(Message::ExplainSelection);
+        assert!(studio.pane_of(PaneKind::Assistant).is_some());
+        assert!(matches!(studio.assistant.entries.last(), Some(Entry::Note(note)) if note.starts_with("No API key")));
+        studio.assistant.key = Some("k".into());
+        studio.assistant.composer = text_editor::Content::with_text("mean of xs?");
+        let _ = studio.update(Message::AskSend);
+        assert_eq!(studio.assistant.entries.last(), Some(&Entry::You("mean of xs?".into())));
+        let job = studio.assistant.live.as_ref().expect("a live reply").id;
+        let session = studio.assistant.session.as_ref().unwrap();
+        let asked = match &session.messages[0].content[0] {
+            Content::Text(text) => text.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert!(asked.starts_with("[file Untitled]\n(define x 1)") && asked.contains("[console]\n› (+ 1 2)\n= 3\n! boom") && asked.contains("[environment]\nt: table") && asked.ends_with("mean of xs?"), "{asked}");
+        let _ = studio.update(Message::Packet(job, Packet::Delta(Delta::Text("Let me ".into()))));
+        assert_eq!(studio.assistant.live.as_ref().unwrap().text, "Let me ");
+        let _ = view::view(&studio);
+        let turn = Turn {
+            content: vec![Content::Text("Let me check.".into()), Content::ToolUse { id: "t1".into(), name: "evaluate".into(), input: Json::object([("code", Json::text("(mean xs)"))]) }],
+            stop: "tool_use".into(),
+            ..Turn::default()
+        };
+        let _ = studio.update(Message::Packet(job, Packet::Done(Ok(turn))));
+        assert_eq!(studio.assistant.entries.last(), Some(&Entry::Reply("Let me check.".into())));
+        assert_eq!(studio.assistant.approval.as_ref().map(|c| c.name.as_str()), Some("evaluate"));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::Deny);
+        assert!(studio.assistant.approval.is_none());
+        assert_eq!(studio.assistant.entries.last(), Some(&Entry::Reply("Let me check.".into())));
+        let session = studio.assistant.session.as_ref().unwrap();
+        assert!(matches!(&session.messages.last().unwrap().content[0], Content::ToolResult { error: true, .. }));
+        assert!(studio.assistant.live.is_some(), "the denial goes back to the model");
+        let job = studio.assistant.live.as_ref().unwrap().id;
+        let _ = studio.update(Message::Packet(job, Packet::Done(Err("stopped".into()))));
+        assert_eq!(studio.assistant.entries.last(), Some(&Entry::Note("Stopped.".into())));
+        assert!(studio.assistant.live.is_none());
+        let _ = studio.update(Message::AskClear);
+        assert!(studio.assistant.entries.is_empty() && studio.assistant.session.is_none());
+    }
+
+    #[test]
+    fn proposals_open_as_diffs_and_apply_once() {
+        let mut studio = studio_with_content();
+        assert!(studio.propose("nope", "x", "").is_err());
+        assert!(studio.propose("x", "y", "").unwrap_err().contains("occurs"));
+        assert!(studio.propose("(define x 1)", "(define x 2)", "bump x").is_ok());
+        assert_eq!(studio.tab, Tab::Diff);
+        assert_eq!(studio.diff.as_ref().map(|d| d.title.as_str()), Some("Untitled: bump x"));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::ApplyProposal);
+        assert!(studio.doc().content.text().starts_with("(define x 2)\n"), "{}", studio.doc().content.text());
+        assert!(studio.diff.is_none() && studio.tab == Tab::Doc(0));
+        assert!(studio.propose("", "(define z 3)", "").is_ok());
+        let _ = studio.update(Message::ApplyProposal);
+        assert!(studio.doc().content.text().ends_with("   1)\n(define z 3)"), "{}", studio.doc().content.text());
+        let _ = studio.update(Message::Undo);
+        assert!(!studio.doc().content.text().contains("z 3"));
+    }
+
+    #[test]
+    fn suggestions_are_accepted_with_tab_and_dropped_by_edits() {
+        let mut studio = studio_with_content();
+        studio.assistant.offline = true;
+        studio.assistant.key = Some("k".into());
+        let _ = studio.update(Message::Edit(Action::Edit(Edit::Insert(';'))));
+        assert!(studio.assistant.sleeping);
+        let generation = studio.assistant.generation;
+        let _ = studio.update(Message::SuggestNow(generation));
+        assert!(studio.assistant.suggesting.is_some());
+        let job = studio.assistant.suggesting.as_ref().unwrap().0;
+        let turn = crate::claude::Turn { content: vec![crate::claude::Content::Text("```scheme\n; hello\n```".into())], stop: "end_turn".into(), ..Default::default() };
+        let _ = studio.update(Message::Packet(job, Packet::Done(Ok(turn))));
+        assert_eq!(studio.assistant.suggestion.as_deref(), Some("; hello"));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::AcceptSuggestion);
+        assert!(studio.doc().content.text().starts_with(";; hello"), "{}", studio.doc().content.text());
+        assert!(studio.assistant.suggestion.is_none());
+        studio.assistant.suggestion = Some("x".into());
+        let _ = studio.update(Message::Edit(Action::Move(iced::widget::text_editor::Motion::Right)));
+        assert!(studio.assistant.suggestion.is_none());
+        studio.assistant.completions = false;
+        let _ = studio.update(Message::Edit(Action::Edit(Edit::Insert('a'))));
+        assert!(!studio.assistant.sleeping || studio.assistant.suggesting.is_none());
+    }
+
+    #[test]
     fn console_lines_are_picked_for_copying() {
         let mut studio = studio_with_content();
         assert!(studio.console.len() > 1);
@@ -3611,7 +4448,7 @@ mod tests {
         assert_eq!(shortcut_of(&character("S"), Modifiers::COMMAND | Modifiers::SHIFT), Some(Shortcut::SaveAs));
         assert_eq!(shortcut_of(&character("P"), Modifiers::COMMAND | Modifiers::SHIFT), Some(Shortcut::Palette));
         assert_eq!(shortcut_of(&character("3"), Modifiers::COMMAND), Some(Shortcut::Pane(3)));
-        assert_eq!(shortcut_of(&character("9"), Modifiers::COMMAND), None);
+        assert_eq!(shortcut_of(&character("9"), Modifiers::COMMAND), Some(Shortcut::Pane(9)));
         assert_eq!(shortcut_of(&character("f"), Modifiers::empty()), None);
     }
 

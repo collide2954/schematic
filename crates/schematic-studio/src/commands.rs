@@ -1,4 +1,4 @@
-use crate::app::{Message, Page, PaneKind, Side, Source, Studio, Tab};
+use crate::app::{LineKind, Message, Page, PaneKind, Side, Source, Studio, Tab};
 use crate::theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -8,11 +8,12 @@ pub enum Menu {
     View,
     Run,
     Git,
+    Assistant,
     Help,
 }
 
 impl Menu {
-    pub const ALL: [Menu; 6] = [Menu::File, Menu::Edit, Menu::View, Menu::Run, Menu::Git, Menu::Help];
+    pub const ALL: [Menu; 7] = [Menu::File, Menu::Edit, Menu::View, Menu::Run, Menu::Git, Menu::Assistant, Menu::Help];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -21,6 +22,7 @@ impl Menu {
             Menu::View => "View",
             Menu::Run => "Run",
             Menu::Git => "Git",
+            Menu::Assistant => "Assistant",
             Menu::Help => "Help",
         }
     }
@@ -62,6 +64,8 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
     let staged = studio.git.status.as_ref().map(|s| s.staged().count()).unwrap_or(0);
     let unstaged = studio.git.status.as_ref().map(|s| s.unstaged().count()).unwrap_or(0);
     let upstream = studio.git.status.as_ref().is_some_and(|s| s.upstream.is_some());
+    let assistant = &studio.assistant;
+    let has_error = studio.console.iter().any(|line| line.kind == LineKind::Error);
     let mut list = vec![
         item(Menu::File, "New file", "Ctrl+N", Some(Message::NewFile)),
         item(Menu::File, "New notebook", "Ctrl+Shift+N", Some(Message::NewNotebook)),
@@ -102,6 +106,7 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         check(item(Menu::View, "Environment", "", Some(Message::TogglePane(PaneKind::Environment))), shown(PaneKind::Environment)),
         check(item(Menu::View, "Data", "", Some(Message::TogglePane(PaneKind::Viewer))), shown(PaneKind::Viewer)),
         check(item(Menu::View, "Plots", "", Some(Message::TogglePane(PaneKind::Plots))), shown(PaneKind::Plots)),
+        check(item(Menu::View, "Assistant", "Ctrl+9", Some(Message::TogglePane(PaneKind::Assistant))), shown(PaneKind::Assistant)),
         gap(if maximized {
             item(Menu::View, "Restore layout", "", Some(Message::RestorePanes))
         } else {
@@ -139,6 +144,14 @@ pub fn commands(studio: &Studio) -> Vec<Command> {
         gap(item(Menu::Git, "Pull", "", (git_ready && upstream).then_some(Message::GitPull))),
         item(Menu::Git, "Push", "", git_ready.then_some(Message::GitPush)),
         gap(item(Menu::Git, "Git tab", "Ctrl+8", Some(Message::ShowSide(Side::Git)))),
+        check(item(Menu::Assistant, "Assistant pane", "Ctrl+9", Some(Message::TogglePane(PaneKind::Assistant))), shown(PaneKind::Assistant)),
+        gap(item(Menu::Assistant, "Explain the selection", "", Some(Message::ExplainSelection))),
+        item(Menu::Assistant, "Fix the last error", "", has_error.then_some(Message::FixError)),
+        gap(item(Menu::Assistant, "Stop", "", assistant.live.is_some().then_some(Message::AskStop))),
+        item(Menu::Assistant, "Clear the conversation", "", (!assistant.entries.is_empty()).then_some(Message::AskClear)),
+        gap(check(item(Menu::Assistant, "Suggest completions", "", Some(Message::ToggleCompletions)), assistant.completions)),
+        check(item(Menu::Assistant, "Ask before running code", "", Some(Message::ToggleAskBeforeRunning)), assistant.ask_before_running),
+        gap(item(Menu::Assistant, "Key and model…", "", Some(Message::OpenSettings))),
         item(Menu::Help, "Guide", "", Some(Message::ShowHelp(Page::Guide))),
         item(Menu::Help, "Reference", "", Some(Message::ShowHelp(Page::Reference))),
         item(Menu::Help, "Look up the name at the cursor", "F1", Some(Message::LookUp(Source::Editor))),

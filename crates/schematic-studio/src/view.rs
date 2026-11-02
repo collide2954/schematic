@@ -12,9 +12,12 @@ use iced::{Alignment, Color, Element, Font, Length, Padding, Pixels, Theme, wind
 use schematic::docs::{self, Block, Inline};
 
 use crate::app::{
-    Cell, Diff, EDITOR_PAD, Find, LineKind, Message, NamingKind, Notebook, PAGE, Page, Palette, PaneKind, Side, Source, Studio,
-    Tab, console_find_id, console_id, console_text_id, duration, editor_id, editor_text_id, find_id, naming_id, palette_id,
+    Attach, Cell, Diff, EDITOR_PAD, Entry, Find, LineKind, Message, NamingKind, Notebook, PAGE, Page, Palette, PaneKind, Side,
+    Source, Studio, Tab, assistant_id, composer_id, console_find_id, console_id, console_text_id, duration, editor_id,
+    editor_text_id, find_id, naming_id, palette_id,
 };
+use crate::assistant::Call;
+use crate::claude::{EFFORTS, MODELS};
 use crate::git::{self, Change};
 use crate::notebook::{Kind, Output};
 use crate::chart::{Chart, PlotView, Thumb};
@@ -68,7 +71,92 @@ fn pane_parts(studio: &Studio, kind: PaneKind) -> PaneParts<'_> {
             let detail = plot.map(|p| p.title.clone().unwrap_or_else(|| p.describe()));
             (single("Plots", detail), None, plots(studio))
         }
+        PaneKind::Assistant => {
+            let model = MODELS.iter().find(|m| m.id == studio.assistant.model).map(|m| m.name.trim_start_matches("Claude ").to_string());
+            (single("Assistant", model), Some(assistant_controls(studio)), assistant_pane(studio))
+        }
     }
+}
+
+fn assistant_controls(studio: &Studio) -> Element<'_, Message> {
+    let assistant = &studio.assistant;
+    row![small("Stop", assistant.live.is_some().then_some(Message::AskStop)), small("Clear", (!assistant.entries.is_empty()).then_some(Message::AskClear))]
+        .spacing(2)
+        .align_y(Alignment::Center)
+        .into()
+}
+
+fn markdown_view(studio: &Studio, source: &str) -> Element<'static, Message> {
+    let blocks = docs::blocks(source).into_iter().map(|block| render(block, &studio.theme));
+    Column::with_children(blocks).spacing(6).into()
+}
+
+fn entry_view<'a>(studio: &'a Studio, entry: &'a Entry) -> Element<'a, Message> {
+    match entry {
+        Entry::You(words) => {
+            let rule = container(space::vertical()).width(2).height(Length::Fill).style(theme::cell_rule(true));
+            row![rule, container(text(words).size(theme::UI).style(theme::strong)).padding([2, 10]).width(Length::Fill)].into()
+        }
+        Entry::Reply(markdown) => markdown_view(studio, markdown),
+        Entry::Tool(summary) => text(summary).size(theme::FINE).style(theme::muted).into(),
+        Entry::Note(note) => text(note).size(theme::META).style(theme::warn).into(),
+    }
+}
+
+fn approval_view<'a>(studio: &'a Studio, call: &'a Call) -> Element<'a, Message> {
+    let source = call.field("code");
+    column![
+        text("Run this?").size(theme::META).font(fonts::UI_MEDIUM),
+        container(code(source, &studio.theme, studio.console_size())).padding([6, 10]).width(Length::Fill).style(theme::code_block),
+        row![small("Run", Some(Message::Approve(false))), small("Run without asking", Some(Message::Approve(true))), small("Skip", Some(Message::Deny))].spacing(6),
+    ]
+    .spacing(6)
+    .into()
+}
+
+fn composer_binding(press: KeyPress) -> Option<Binding<Message>> {
+    if !matches!(press.status, Status::Focused { .. }) {
+        return Binding::from_key_press(press);
+    }
+    match &press.key {
+        Key::Named(key::Named::Enter) if !press.modifiers.shift() => Some(Binding::Custom(Message::AskSend)),
+        _ => Binding::from_key_press(press),
+    }
+}
+
+fn assistant_pane(studio: &Studio) -> Element<'_, Message> {
+    let assistant = &studio.assistant;
+    let mut list = Column::new().spacing(10).width(Length::Fill).padding(Padding { top: 10.0, right: 12.0, bottom: 10.0, left: 12.0 });
+    for entry in &assistant.entries {
+        list = list.push(entry_view(studio, entry));
+    }
+    if let Some(live) = &assistant.live
+        && !live.text.is_empty()
+    {
+        list = list.push(markdown_view(studio, &live.text));
+    }
+    if let Some(call) = &assistant.approval {
+        list = list.push(approval_view(studio, call));
+    }
+    let history = scrollable(list).id(assistant_id()).width(Length::Fill).height(Length::Fill).style(theme::scroll);
+    let chips = Row::with_children(Attach::ALL.iter().map(|attach| {
+        let on = assistant.attach.contains(attach);
+        button(text(attach.label()).size(theme::FINE).font(fonts::UI_MEDIUM)).padding(theme::CONTROL).style(theme::choice(on)).on_press(Message::AttachToggle(*attach)).into()
+    }))
+    .spacing(4);
+    let ready = !assistant.composer.text().trim().is_empty() && !assistant.busy();
+    let bar = row![chips, space::horizontal(), small("Send", ready.then_some(Message::AskSend))].spacing(6).align_y(Alignment::Center);
+    let composer = text_editor(&assistant.composer)
+        .id(composer_id())
+        .on_action(Message::Compose)
+        .size(theme::UI)
+        .padding(theme::FIELD_PAD)
+        .height(Length::Shrink)
+        .wrapping(text::Wrapping::Word)
+        .style(theme::editor)
+        .key_binding(composer_binding);
+    let foot = column![bar, composer].spacing(6).padding(Padding { top: 6.0, right: 12.0, bottom: 8.0, left: 12.0 });
+    column![history, line(), foot].into()
 }
 
 fn detached_pane(studio: &Studio, kind: PaneKind) -> Element<'_, Message> {
@@ -492,14 +580,11 @@ fn change_row<'a>(entry: &'a git::Entry, change: Change, staged: bool, busy: boo
 }
 
 fn diff_view<'a>(studio: &'a Studio, diff: &'a Diff) -> Element<'a, Message> {
-    let header = row![
-        text(&diff.title).font(fonts::MONO).size(theme::UI).style(theme::strong),
-        space::horizontal(),
-        small("Copy", Some(Message::CopyText(diff.text.clone()))),
-    ]
-    .spacing(6)
-    .align_y(Alignment::Center)
-    .padding(HEADER);
+    let mut header = row![text(&diff.title).font(fonts::MONO).size(theme::UI).style(theme::strong), space::horizontal()].spacing(6).align_y(Alignment::Center).padding(HEADER);
+    if diff.proposal.is_some() {
+        header = header.push(small("Apply", Some(Message::ApplyProposal))).push(small("Discard", Some(Message::DiscardProposal)));
+    }
+    header = header.push(small("Copy", Some(Message::CopyText(diff.text.clone()))));
     let size = studio.code_size();
     let lines = diff.text.lines().map(|shown| {
         let style: TextStyle = if shown.starts_with("+++") || shown.starts_with("---") || shown.starts_with("diff ") || shown.starts_with("index ") {
@@ -789,6 +874,7 @@ fn pairing(press: &KeyPress, text: &str, offset: usize) -> Option<Binding<Messag
 
 fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Message>> + '_ {
     let completing = studio.completion.as_ref().is_some_and(|c| c.source == Source::Editor);
+    let suggesting = studio.assistant.suggestion.is_some();
     move |press| {
         if completing
             && let Some(message) = completion_binding(&press) {
@@ -815,6 +901,9 @@ fn editor_binding(studio: &Studio) -> impl Fn(KeyPress) -> Option<Binding<Messag
             return Binding::from_key_press(press);
         }
         if matches!(press.key, Key::Named(key::Named::Tab)) {
+            if suggesting && !command && !shift {
+                return Some(Binding::Custom(Message::AcceptSuggestion));
+            }
             return Some(Binding::Sequence(vec![Binding::Insert(' '), Binding::Insert(' ')]));
         }
         let plain_enter = matches!(press.key, Key::Named(key::Named::Enter)) && !command && !shift;
@@ -1108,6 +1197,44 @@ fn settings_page(studio: &Studio) -> Element<'_, Message> {
     .spacing(14)
     .padding(Padding { top: 8.0, right: 20.0, bottom: 24.0, left: 20.0 })
     .max_width(680);
+    let assistant = &studio.assistant;
+    let key_note = if assistant.key.is_some() {
+        "Set. ANTHROPIC_API_KEY takes precedence when it is set."
+    } else {
+        "Not set. Kept in credentials.scm beside the settings; ANTHROPIC_API_KEY takes precedence."
+    };
+    let key_row = row![
+        text_input("Key", &assistant.key_field)
+            .secure(true)
+            .on_input(Message::KeyInput)
+            .on_submit(Message::KeySave)
+            .size(theme::UI)
+            .padding(theme::FIELD_PAD)
+            .style(theme::field)
+            .width(theme::FIELD),
+        small("Save", (!assistant.key_field.trim().is_empty()).then_some(Message::KeySave)),
+        small("Remove", assistant.key.is_some().then_some(Message::KeyRemove)),
+    ]
+    .spacing(4)
+    .align_y(Alignment::Center);
+    let models = Row::with_children(MODELS.iter().map(|model| {
+        let label = text(model.name.trim_start_matches("Claude ")).size(theme::META).font(fonts::UI_MEDIUM);
+        button(label).padding(theme::TOOL).style(theme::choice(assistant.model == model.id)).on_press(Message::SetModel(model.id.to_string())).into()
+    }))
+    .spacing(4);
+    let efforts = Row::with_children(EFFORTS.iter().map(|effort| {
+        let label = text(*effort).size(theme::META).font(fonts::UI_MEDIUM);
+        button(label).padding(theme::TOOL).style(theme::choice(assistant.effort == *effort)).on_press(Message::SetEffort(effort.to_string())).into()
+    }))
+    .spacing(4);
+    page = page
+        .push(heading("Assistant"))
+        .push(setting("API key", key_note, key_row.into()))
+        .push(setting("Model", "", models.into()))
+        .push(setting("Effort", "", efforts.into()))
+        .push(setting("Ask before running code", "", toggle(assistant.ask_before_running, Message::ToggleAskBeforeRunning)))
+        .push(setting("Attach table columns", "", toggle(assistant.attach_data, Message::ToggleAttachData)))
+        .push(setting("Suggest completions", "Tab accepts, Esc dismisses", toggle(assistant.completions, Message::ToggleCompletions)));
     if studio.persistent
         && let Some(path) = settings::path() {
             page = page.push(text(format!("Kept in {}", path.display())).size(theme::FINE).style(theme::faint));
@@ -1204,7 +1331,8 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
         .on_scroll(Message::EditorScrolled)
         .style(theme::scroll);
     let view: Element<'_, Message> = sensor(scroller).on_show(Message::EditorResized).on_resize(Message::EditorResized).into();
-    let Some((popup, rows)) = popup(studio, Source::Editor) else { return view };
+    let overlay = popup(studio, Source::Editor).or_else(|| studio.assistant.suggestion.as_deref().map(|suggestion| suggestion_popup(studio, suggestion)));
+    let Some((popup, rows)) = overlay else { return view };
     let cursor = doc.content.cursor().position;
     let advance = CODE_ADVANCE * studio.zoom;
     let gutter = digits as f32 * advance + 24.0;
@@ -1223,6 +1351,11 @@ fn editor(studio: &Studio) -> Element<'_, Message> {
 const POPUP_WIDTH: f32 = 400.0;
 const CODE_ADVANCE: f32 = 8.1;
 const CONSOLE_ADVANCE: f32 = 7.8;
+
+fn suggestion_popup<'a>(studio: &'a Studio, suggestion: &str) -> (Element<'a, Message>, usize) {
+    let body = container(code(suggestion, &studio.theme, studio.code_size())).padding(6).max_width(POPUP_WIDTH + 160.0).style(theme::popup);
+    (body.into(), suggestion.lines().count().max(1))
+}
 
 fn popup(studio: &Studio, source: Source) -> Option<(Element<'_, Message>, usize)> {
     let completion = studio.completion.as_ref().filter(|c| c.source == source)?;

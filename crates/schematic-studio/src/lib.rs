@@ -1,5 +1,7 @@
 pub mod app;
+pub mod assistant;
 pub mod chart;
+pub mod claude;
 pub mod commands;
 pub mod completion;
 pub mod files;
@@ -11,6 +13,8 @@ pub mod icons;
 pub mod notebook;
 pub mod project;
 pub mod settings;
+pub mod sse;
 pub mod theme;
+pub mod transport;
 pub mod view;
 pub mod worker;

@@ -5,6 +5,7 @@ use schematic::Value;
 use schematic::reader::read_str;
 
 use crate::app::PaneKind;
+use crate::claude::{EFFORTS, MODELS};
 
 pub const THEMES: [&str; 4] = ["light", "dark", "warm", "contrast"];
 pub const RECENT: usize = 12;
@@ -32,6 +33,11 @@ pub struct Settings {
     pub projects: Vec<PathBuf>,
     pub root: Option<PathBuf>,
     pub watches: Vec<String>,
+    pub model: String,
+    pub effort: String,
+    pub ask_before_running: bool,
+    pub attach_data: bool,
+    pub completions: bool,
 }
 
 impl Default for Settings {
@@ -52,8 +58,51 @@ impl Default for Settings {
             projects: Vec::new(),
             root: None,
             watches: Vec::new(),
+            model: MODELS[0].id.to_string(),
+            effort: "medium".to_string(),
+            ask_before_running: true,
+            attach_data: true,
+            completions: true,
         }
     }
+}
+
+pub fn credentials_path() -> Option<PathBuf> {
+    directory().map(|dir| dir.join("credentials.scm"))
+}
+
+pub fn load_key() -> Option<String> {
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY")
+        && !key.trim().is_empty()
+    {
+        return Some(key.trim().to_string());
+    }
+    let text = std::fs::read_to_string(credentials_path()?).ok()?;
+    let Ok(Value::Map(map)) = read_str(&text) else { return None };
+    match map.get(&keyword("anthropic-key")) {
+        Some(Value::Str(key)) if !key.trim().is_empty() => Some(key.trim().to_string()),
+        _ => None,
+    }
+}
+
+pub fn save_key(key: &str) -> std::io::Result<()> {
+    let Some(path) = credentials_path() else { return Ok(()) };
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    if key.trim().is_empty() {
+        return match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    }
+    std::fs::write(&path, format!("{{:anthropic-key {}}}\n", Value::string(key.trim())))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
 }
 
 pub fn directory() -> Option<PathBuf> {
@@ -92,6 +141,7 @@ fn pane_name(kind: PaneKind) -> &'static str {
         PaneKind::Environment => "environment",
         PaneKind::Viewer => "data",
         PaneKind::Plots => "plots",
+        PaneKind::Assistant => "assistant",
     }
 }
 
@@ -102,6 +152,7 @@ fn pane_kind(name: &str) -> Option<PaneKind> {
         "environment" => PaneKind::Environment,
         "data" => PaneKind::Viewer,
         "plots" => PaneKind::Plots,
+        "assistant" => PaneKind::Assistant,
         _ => return None,
     })
 }
@@ -182,6 +233,11 @@ pub fn render(settings: &Settings) -> String {
         (keyword("recent"), paths(settings.recent.clone())),
         (keyword("projects"), paths(settings.projects.clone())),
         (keyword("watches"), Value::vector(settings.watches.iter().map(|w| Value::string(w)))),
+        (keyword("model"), Value::string(&settings.model)),
+        (keyword("effort"), keyword(&settings.effort)),
+        (keyword("ask-before-running"), Value::Bool(settings.ask_before_running)),
+        (keyword("attach-data"), Value::Bool(settings.attach_data)),
+        (keyword("completions"), Value::Bool(settings.completions)),
     ];
     if let Some((width, height)) = settings.window {
         pairs.push((keyword("window"), Value::vector([Value::Float(f64::from(width)), Value::Float(f64::from(height))])));
@@ -262,6 +318,17 @@ pub fn parse(text: &str) -> Settings {
             _ => None,
         },
         watches,
+        model: match get("model") {
+            Some(Value::Str(s)) if MODELS.iter().any(|m| m.id == s.as_str()) => s.to_string(),
+            _ => defaults.model.clone(),
+        },
+        effort: match get("effort") {
+            Some(Value::Keyword(k)) if EFFORTS.contains(&&*k.name()) => k.name().to_string(),
+            _ => defaults.effort.clone(),
+        },
+        ask_before_running: flag("ask-before-running", true),
+        attach_data: flag("attach-data", true),
+        completions: flag("completions", true),
     }
 }
 
@@ -335,13 +402,26 @@ mod tests {
             projects: vec![PathBuf::from("C:\\work")],
             root: Some(PathBuf::from("C:\\work")),
             watches: vec!["(count t)".into()],
+            model: "claude-sonnet-5-5".into(),
+            effort: "high".into(),
+            ask_before_running: false,
+            attach_data: false,
+            completions: false,
         };
         let text = render(&settings);
         assert!(text.starts_with("{:theme :warm\n :scale 1.25"), "{text}");
-        assert!(text.contains(":detached [:console :plots]"), "{text}");
+        assert!(text.contains(":detached [:console :plots]") && text.contains(":effort :high"), "{text}");
         assert_eq!(parse(&text), settings);
         assert_eq!(parse("garbage"), Settings::default());
-        assert_eq!(parse("{:theme :neon :scale 9 :zoom 0.1 :window [10 10]}"), Settings { scale: 1.6, zoom: 0.7, ..Settings::default() });
+        assert_eq!(parse("{:theme :neon :scale 9 :zoom 0.1 :window [10 10] :model \"gpt\" :effort :loud}"), Settings { scale: 1.6, zoom: 0.7, ..Settings::default() });
+    }
+
+    #[test]
+    fn keys_are_kept_in_their_own_file() {
+        let text = format!("{{:anthropic-key {}}}\n", Value::string("sk-test"));
+        let Ok(Value::Map(map)) = read_str(&text) else { panic!("{text}") };
+        assert_eq!(map.get(&keyword("anthropic-key")), Some(&Value::string("sk-test")));
+        assert!(credentials_path().is_none_or(|p| p.ends_with("credentials.scm")));
     }
 
     #[test]

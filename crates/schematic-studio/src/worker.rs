@@ -23,6 +23,7 @@ pub enum Request {
     Run { tag: u64, source: String, show_results: bool, load_path: Vec<PathBuf>, watches: Vec<String> },
     Inspect { name: String, offset: usize, limit: usize, sort: Option<(String, bool)>, filter: String },
     Evaluate { source: String, label: String },
+    Capture { id: u64, source: String },
     Watch { watches: Vec<String> },
     Restart,
 }
@@ -67,6 +68,7 @@ pub enum Event {
     Plot(Box<Plot>),
     Watches(Vec<Watched>),
     Evaluated { label: String, error: Option<String> },
+    Captured { id: u64, text: String },
     Restarted(Arc<AtomicBool>),
     Finished(u128),
 }
@@ -82,6 +84,7 @@ impl PartialEq for Event {
             (Plot(a), Plot(b)) => a == b,
             (Watches(a), Watches(b)) => a == b,
             (Evaluated { label: a, error: x }, Evaluated { label: b, error: y }) => a == b && x == y,
+            (Captured { id: a, text: x }, Captured { id: b, text: y }) => a == b && x == y,
             (Restarted(_), Restarted(_)) => true,
             (Finished(_), Finished(_)) => true,
             _ => false,
@@ -94,6 +97,21 @@ struct Forward<F>(F);
 impl<F: FnMut(Event)> Write for Forward<F> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         (self.0)(Event::Output(String::from_utf8_lossy(buf).into_owned()));
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(mut bytes) = self.0.lock() {
+            bytes.extend_from_slice(buf);
+        }
         Ok(buf.len())
     }
 
@@ -164,6 +182,11 @@ pub fn run(mut interp: Interpreter, requests: Receiver<Request>, mut emit: impl 
                 let error = evaluate(&mut interp, &source, &mut emit);
                 emit(Event::Evaluated { label, error });
             }
+            Request::Capture { id, source } => {
+                let text = capture(&mut interp, &source, &mut emit);
+                emit(Event::Environment(environment(&interp)));
+                emit(Event::Captured { id, text });
+            }
             Request::Watch { watches } => emit(Event::Watches(watch(&mut interp, &watches))),
             Request::Restart => {
                 interp = Interpreter::new();
@@ -190,6 +213,38 @@ fn execute(interp: &mut Interpreter, source: &str, show_results: bool, emit: &mu
             Err(e) => return emit(Event::Error(e.to_string())),
         }
     }
+}
+
+fn capture(interp: &mut Interpreter, source: &str, emit: &mut (impl FnMut(Event) + Clone + 'static)) -> String {
+    let printed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    interp.set_output(Box::new(Sink(printed.clone())));
+    let mut lines = Vec::new();
+    match read_all(source) {
+        Err(e) => lines.push(format!("error: {e}")),
+        Ok(forms) => {
+            for form in &forms {
+                match interp.eval(form) {
+                    Ok(Value::Plot(plot)) => {
+                        lines.push(format!("drew a {}", plot.describe()));
+                        emit(Event::Plot(Box::new((*plot).clone())));
+                    }
+                    Ok(Value::Nil) => {}
+                    Ok(value) => lines.push(value.to_string()),
+                    Err(e) => {
+                        lines.push(format!("error: {e}"));
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    interp.set_output(Box::new(Forward(emit.clone())));
+    let mut text = printed.lock().map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&lines.join("\n"));
+    text.trim_end().to_string()
 }
 
 fn evaluate(interp: &mut Interpreter, source: &str, emit: &mut impl FnMut(Event)) -> Option<String> {
@@ -468,6 +523,15 @@ mod tests {
             ]
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn captures_print_output_and_values_without_touching_the_console() {
+        let events = drive(vec![Request::Capture { id: 7, source: "(println \"hi\") (+ 1 2) (define z 9) (nope)".into() }]);
+        assert!(!events.iter().any(|e| matches!(e, Event::Output(_) | Event::Result(_) | Event::Error(_))), "{events:?}");
+        assert_eq!(events.last(), Some(&Event::Captured { id: 7, text: "hi\n3\nz\nerror: nope is not defined".into() }));
+        let Event::Environment(bindings) = &events[events.len() - 2] else { panic!("{events:?}") };
+        assert!(bindings.iter().any(|b| b.name == "z"));
     }
 
     #[test]
