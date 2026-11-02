@@ -27,3 +27,15 @@
 (define-syntax doc
   (syntax-rules ()
     ((_ name) (print-doc 'name))))
+
+(define-syntax ->
+  (syntax-rules ()
+    ((_ x) x)
+    ((_ x (f args ...) rest ...) (-> (f x args ...) rest ...))
+    ((_ x f rest ...) (-> (f x) rest ...))))
+
+(define-syntax ->>
+  (syntax-rules ()
+    ((_ x) x)
+    ((_ x (f args ...) rest ...) (->> (f args ... x) rest ...))
+    ((_ x f rest ...) (->> (f x) rest ...))))

@@ -1378,3 +1378,12 @@ fn quote_wants_exactly_one_form() {
     assert!(eval("(quote)").starts_with("error:"));
     assert!(eval("(quote 1 2)").starts_with("error:"));
 }
+
+#[test]
+fn threading_macros_nest_the_previous_form() {
+    assert_eq!(eval("(-> 1 (+ 2) inc)"), "4");
+    assert_eq!(eval("(->> [1 2 3] (map inc) (reduce +))"), "9");
+    assert_eq!(eval("(-> {:a {:b 2}} :a :b)"), "2");
+    assert_eq!(eval("(-> 10 (- 3) (->> (- 20)))"), "13");
+    assert_eq!(eval("(-> 5)"), "5");
+}
