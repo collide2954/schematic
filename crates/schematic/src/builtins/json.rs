@@ -77,7 +77,7 @@ pub fn to_json(name: &str, value: &Value) -> Result<Json, Error> {
         Value::Str(s) => Json::String(s.to_string()),
         Value::Keyword(k) | Value::Symbol(k) => Json::String(k.name().to_string()),
         Value::Date(d) => Json::String(date::iso(*d)),
-        Value::List(items) => Json::Array(items.iter().map(|item| to_json(name, &item)).collect::<Result<_, _>>()?),
+        Value::List(items) => Json::Array(items.iter().map(|item| to_json(name, item)).collect::<Result<_, _>>()?),
         Value::Vector(items) => Json::Array(items.iter().map(|item| to_json(name, item)).collect::<Result<_, _>>()?),
         Value::Set(items) => Json::Array(items.iter().map(|item| to_json(name, item)).collect::<Result<_, _>>()?),
         Value::Array(items) => Json::Array(items.iter().map(|item| to_json(name, &item)).collect::<Result<_, _>>()?),

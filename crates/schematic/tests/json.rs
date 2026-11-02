@@ -30,7 +30,7 @@ fn json_errors_name_the_problem() {
     assert_eq!(eval("(parse-json 5)"), "error: parse-json expects a string, got 5");
     assert_eq!(eval("(parse-json \"1\" {:keys :symbols})"), "error: parse-json expects :keywords or :strings for :keys, got :symbols");
     assert_eq!(eval("(to-json 1 {:pretty 2})"), "error: to-json expects true or false for :pretty, got 2");
-    assert_eq!(eval("(read-json \"no/such/file.json\")").starts_with("error: cannot read no/such/file.json"), true);
+    assert!(eval("(read-json \"no/such/file.json\")").starts_with("error: cannot read no/such/file.json"));
 }
 
 #[test]
