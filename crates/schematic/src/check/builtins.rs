@@ -278,13 +278,35 @@ fn build() -> HashMap<&'static str, Builtin> {
     add("printf", vec![Type::Str], Some(any()), Type::Nil, false);
     add("newline", vec![], None, Type::Nil, false);
 
-    for name in ["bar-chart", "line-chart", "area-chart", "scatter", "pie-chart"] {
+    for name in ["bar-chart", "line-chart", "area-chart", "scatter", "pie-chart", "bars", "lines", "steps", "points", "areas", "lollipops", "pie"] {
         add(name, vec![any(), any(), any(), map(any(), any())], None, Type::Plot, false);
     }
-    add("histogram", vec![any(), any(), any()], None, Type::Plot, false);
-    add("box-plot", vec![any(), any(), any(), any()], None, Type::Plot, false);
-    add("to-svg", vec![Type::Plot], None, Type::Str, false);
-    add("save-plot", vec![Type::Plot, Type::Str], None, any(), false);
+    for name in ["histogram", "density"] {
+        add(name, vec![any(), any(), any(), any()], None, Type::Plot, false);
+    }
+    for name in ["box-plot", "boxes"] {
+        add(name, vec![any(), any(), any(), any(), any()], None, Type::Plot, false);
+    }
+    add("heatmap", vec![any(), any(), any(), any(), any(), any()], None, Type::Plot, false);
+    add("plot", vec![map(any(), any())], None, Type::Plot, false);
+    add("title", vec![Type::Plot, any(), any()], None, Type::Plot, false);
+    add("subtitle", vec![Type::Plot, any()], None, Type::Plot, false);
+    add("caption", vec![Type::Plot, any()], None, Type::Plot, false);
+    add("hline", vec![Type::Plot, any(), any()], None, Type::Plot, false);
+    add("vline", vec![Type::Plot, any(), any()], None, Type::Plot, false);
+    add("annotate", vec![Type::Plot, any(), any(), any()], None, Type::Plot, false);
+    for name in ["x-axis", "y-axis", "right-axis"] {
+        add(name, vec![Type::Plot, map(any(), any())], None, Type::Plot, false);
+    }
+    add("legend", vec![Type::Plot, any()], None, Type::Plot, false);
+    add("palette", vec![Type::Plot, any()], None, Type::Plot, false);
+    add("trend", vec![Type::Plot, map(any(), any())], None, Type::Plot, false);
+    add("smooth", vec![Type::Plot, Type::Int], None, Type::Plot, false);
+    add("figure", vec![any(), map(any(), any())], None, Type::Plot, false);
+    add("to-svg", vec![Type::Plot, map(any(), any())], None, Type::Str, false);
+    add("save-plot", vec![Type::Plot, Type::Str, map(any(), any())], None, any(), false);
+    add("plot-theme!", vec![map(any(), any())], None, Type::Nil, false);
+    add("plot-theme", vec![], None, map(any(), any()), false);
 
     add("doc-string", vec![any()], None, maybe(Type::Str), false);
     add("apropos", vec![Type::Str], None, vector(Type::Str), false);

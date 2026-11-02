@@ -5,21 +5,125 @@ use std::fmt::Write;
 use crate::value::Value;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
+pub enum Mark {
     Bar,
     Line,
-    Scatter,
-    Histogram,
+    Step,
     Area,
+    Point,
+    Lollipop,
+    Histogram,
     Box,
     Pie,
+    Heat,
+    Density,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Mark {
+    fn starts_at_zero(self) -> bool {
+        matches!(self, Mark::Bar | Mark::Histogram | Mark::Lollipop | Mark::Area | Mark::Density)
+    }
+
+    pub fn categorical(self) -> bool {
+        matches!(self, Mark::Bar | Mark::Lollipop | Mark::Pie | Mark::Heat | Mark::Box)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Mark::Bar => "bar chart",
+            Mark::Line => "line chart",
+            Mark::Step => "step chart",
+            Mark::Area => "area chart",
+            Mark::Point => "scatter",
+            Mark::Lollipop => "lollipop chart",
+            Mark::Histogram => "histogram",
+            Mark::Box => "box plot",
+            Mark::Pie => "pie chart",
+            Mark::Heat => "heatmap",
+            Mark::Density => "density plot",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Marker {
+    Circle,
+    Square,
+    Diamond,
+    Triangle,
+}
+
+pub const MARKERS: [Marker; 4] = [Marker::Circle, Marker::Square, Marker::Diamond, Marker::Triangle];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LegendAt {
+    Auto,
+    Top,
+    Right,
+    Bottom,
+    Hidden,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rgb(pub u8, pub u8, pub u8);
+
+impl Rgb {
+    pub fn parse(text: &str) -> Option<Rgb> {
+        let hex = text.trim().strip_prefix('#')?;
+        let digits: Vec<u8> = hex.chars().map(|c| c.to_digit(16).map(|d| d as u8)).collect::<Option<Vec<_>>>()?;
+        match digits.as_slice() {
+            [r, g, b] => Some(Rgb(r * 17, g * 17, b * 17)),
+            [r1, r2, g1, g2, b1, b2] => Some(Rgb(r1 * 16 + r2, g1 * 16 + g2, b1 * 16 + b2)),
+            _ => None,
+        }
+    }
+
+    pub fn hex(self) -> String {
+        format!("#{:02x}{:02x}{:02x}", self.0, self.1, self.2)
+    }
+
+    pub fn mix(self, other: Rgb, t: f32) -> Rgb {
+        let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t.clamp(0.0, 1.0)).round() as u8;
+        Rgb(lerp(self.0, other.0), lerp(self.1, other.1), lerp(self.2, other.2))
+    }
+}
+
+pub const SERIES_COLORS: [&str; 6] = ["#0f7b86", "#7b3fe4", "#b4540f", "#c0286e", "#2458d3", "#2a8a5a"];
+
+pub fn named_palette(name: &str) -> Option<Vec<Rgb>> {
+    let hexes: &[&str] = match name {
+        "default" => &SERIES_COLORS,
+        "warm" => &["#b4540f", "#c0286e", "#d9a21b", "#8f3b1b", "#e2725b", "#a1468f"],
+        "cool" => &["#0f7b86", "#2458d3", "#3c8dbc", "#5b6fd1", "#1e9c8e", "#4f5bd5"],
+        "earth" => &["#6b4f2a", "#2a8a5a", "#b4540f", "#4a6b3a", "#8a6d3b", "#1f6f5f"],
+        "gray" => &["#1a2230", "#56637a", "#8a94a6", "#b5bcc8", "#d0d5dd", "#66728a"],
+        "bright" => &["#e63946", "#f4a261", "#2a9d8f", "#457b9d", "#8338ec", "#ffbe0b"],
+        _ => return None,
+    };
+    Some(hexes.iter().filter_map(|h| Rgb::parse(h)).collect())
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Series {
     pub name: Option<String>,
     pub xs: Vec<f64>,
     pub ys: Vec<f64>,
+    pub sizes: Vec<f64>,
+    pub lows: Vec<f64>,
+    pub highs: Vec<f64>,
+    pub texts: Vec<String>,
+}
+
+impl Series {
+    pub fn new(name: Option<String>, xs: Vec<f64>, ys: Vec<f64>) -> Series {
+        Series { name, xs, ys, ..Series::default() }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -34,34 +138,161 @@ pub struct BoxStats {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Plot {
-    pub kind: Kind,
-    pub title: Option<String>,
-    pub x_label: Option<String>,
-    pub y_label: Option<String>,
-    pub categories: Vec<String>,
-    pub dates: bool,
-    pub step: f64,
+pub struct Layer {
+    pub mark: Mark,
     pub series: Vec<Series>,
     pub boxes: Vec<BoxStats>,
+    pub bands: Vec<String>,
+    pub side: Side,
     pub stacked: bool,
-    pub horizontal: bool,
-    pub donut: bool,
-    pub x_range: Option<(f64, f64)>,
-    pub y_range: Option<(f64, f64)>,
-    pub x_log: bool,
-    pub y_log: bool,
-    pub x_format: Option<String>,
-    pub y_format: Option<String>,
-    pub hlines: Vec<f64>,
-    pub vlines: Vec<f64>,
+    pub normalized: bool,
     pub labels: bool,
-    pub panels: Vec<Plot>,
+    pub dashed: bool,
+    pub width: f32,
+    pub opacity: f32,
+    pub marker: Marker,
+    pub markers: bool,
+    pub dots: bool,
+    pub color: Option<Rgb>,
+    pub step: f64,
+    pub donut: bool,
+    pub first_color: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Layer {
+    pub fn new(mark: Mark) -> Layer {
+        Layer {
+            mark,
+            series: Vec::new(),
+            boxes: Vec::new(),
+            bands: Vec::new(),
+            side: Side::Left,
+            stacked: false,
+            normalized: false,
+            labels: false,
+            dashed: false,
+            width: 2.0,
+            opacity: 1.0,
+            marker: Marker::Circle,
+            markers: false,
+            dots: true,
+            color: None,
+            step: 0.0,
+            donut: false,
+            first_color: 0,
+        }
+    }
+
+    fn points(&self) -> usize {
+        self.series.iter().map(|s| s.xs.len()).sum()
+    }
+
+    pub fn describe(&self) -> String {
+        let many = self.series.len() > 1;
+        match self.mark {
+            Mark::Bar | Mark::Lollipop => format!("{} with {}", self.mark.label(), plural(self.points(), "bar")),
+            Mark::Line | Mark::Step | Mark::Area | Mark::Density if many => format!("{} with {}", self.mark.label(), plural(self.series.len(), "series")),
+            Mark::Line | Mark::Step | Mark::Area | Mark::Point | Mark::Density => format!("{} with {}", self.mark.label(), plural(self.points(), "point")),
+            Mark::Histogram => format!("histogram with {}", plural(self.points(), "bin")),
+            Mark::Box => format!("box plot with {}", plural(self.boxes.len(), "group")),
+            Mark::Pie => format!("pie chart with {}", plural(self.points(), "slice")),
+            Mark::Heat => format!("heatmap with {}", plural(self.points(), "cell")),
+        }
+    }
+
+    fn stack_totals(&self) -> BTreeMap<u64, f64> {
+        let mut totals: BTreeMap<u64, f64> = BTreeMap::new();
+        for series in &self.series {
+            for (x, y) in series.xs.iter().zip(&series.ys) {
+                if *y > 0.0 {
+                    *totals.entry(x.to_bits()).or_default() += y;
+                }
+            }
+        }
+        totals
+    }
+
+    fn stacks(&self) -> bool {
+        self.stacked || (self.mark == Mark::Area && self.series.len() > 1)
+    }
+
+    fn value_extent(&self, visible: &dyn Fn(usize) -> bool) -> (f64, f64) {
+        let fold = |values: &mut dyn Iterator<Item = f64>| values.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        let shown = || self.series.iter().enumerate().filter(|(i, _)| visible(*i)).map(|(_, s)| s);
+        match self.mark {
+            Mark::Box => {
+                let mut all = self.boxes.iter().flat_map(|b| b.outliers.iter().copied().chain([b.low, b.high]));
+                fold(&mut all)
+            }
+            Mark::Bar | Mark::Area if self.stacks() => {
+                let totals = self.stack_totals();
+                let (lo, _) = fold(&mut shown().flat_map(|s| s.ys.iter().copied()));
+                let (_, hi) = fold(&mut totals.into_values());
+                (lo.min(0.0), hi)
+            }
+            _ => {
+                let mut values = shown().flat_map(|s| s.ys.iter().copied().chain(s.lows.iter().copied()).chain(s.highs.iter().copied()));
+                fold(&mut values)
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct AxisSpec {
+    pub label: Option<String>,
+    pub range: Option<(f64, f64)>,
+    pub log: bool,
+    pub format: Option<String>,
+    pub ticks: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rule {
+    pub vertical: bool,
+    pub value: f64,
+    pub label: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub x: f64,
+    pub y: f64,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plot {
+    pub title: Option<String>,
+    pub subtitle: Option<String>,
+    pub caption: Option<String>,
+    pub x: AxisSpec,
+    pub y: AxisSpec,
+    pub y2: AxisSpec,
+    pub categories: Vec<String>,
+    pub dates: bool,
+    pub horizontal: bool,
+    pub layers: Vec<Layer>,
+    pub rules: Vec<Rule>,
+    pub notes: Vec<Note>,
+    pub legend: LegendAt,
+    pub palette: Vec<Rgb>,
+    pub grid: bool,
+    pub panels: Vec<Plot>,
+    pub columns: Option<usize>,
+}
+
+impl Default for Plot {
+    fn default() -> Plot {
+        Plot::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Paint {
     Series(usize),
+    Rgb(Rgb),
+    Heat(f32),
     Axis,
     Grid,
     Text,
@@ -77,30 +308,75 @@ pub enum Anchor {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Shape {
-    Rect { x: f32, y: f32, w: f32, h: f32, paint: Paint, tip: Option<String> },
+    Rect { x: f32, y: f32, w: f32, h: f32, paint: Paint, alpha: f32, tip: Option<String> },
     Line { x1: f32, y1: f32, x2: f32, y2: f32, paint: Paint, width: f32, dashed: bool },
-    Polyline { points: Vec<(f32, f32)>, paint: Paint, width: f32 },
-    Polygon { points: Vec<(f32, f32)>, paint: Paint },
-    Circle { x: f32, y: f32, r: f32, paint: Paint, tip: Option<String> },
+    Polyline { points: Vec<(f32, f32)>, paint: Paint, width: f32, dashed: bool },
+    Polygon { points: Vec<(f32, f32)>, paint: Paint, alpha: f32, tip: Option<String> },
+    Circle { x: f32, y: f32, r: f32, paint: Paint, alpha: f32, tip: Option<String> },
     Arc { cx: f32, cy: f32, r: f32, inner: f32, start: f32, end: f32, paint: Paint, tip: Option<String> },
-    Text { x: f32, y: f32, text: String, size: f32, anchor: Anchor, paint: Paint, bold: bool },
+    Text { x: f32, y: f32, text: String, size: f32, anchor: Anchor, paint: Paint, bold: bool, angle: f32 },
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct LegendEntry {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub series: usize,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sample {
+    pub x: f32,
+    pub y: f32,
+    pub series: usize,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pick {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Scene {
     pub width: f32,
     pub height: f32,
     pub shapes: Vec<Shape>,
+    pub legend: Vec<LegendEntry>,
+    pub samples: Vec<Sample>,
+    pub picks: Vec<Pick>,
 }
 
 const BAR_WIDTH: usize = 40;
 const GRID_W: usize = 40;
 const GRID_H: usize = 10;
 const MARKS: [char; 4] = ['•', '○', '▪', '▫'];
-pub const SERIES_COLORS: [&str; 6] = ["#0f7b86", "#7b3fe4", "#b4540f", "#c0286e", "#2458d3", "#2a8a5a"];
+const CHAR_W: f32 = 6.2;
 
 pub fn number(x: f64) -> String {
     if x.fract() == 0.0 && x.abs() < 1e15 { format!("{}", x as i64) } else { format!("{x}") }
+}
+
+pub fn compact(x: f64) -> String {
+    let magnitude = x.abs();
+    let (scaled, suffix) = if magnitude >= 1e9 {
+        (x / 1e9, "B")
+    } else if magnitude >= 1e6 {
+        (x / 1e6, "M")
+    } else if magnitude >= 1e3 {
+        (x / 1e3, "K")
+    } else {
+        return number(x);
+    };
+    let text = if scaled.fract() == 0.0 || scaled.abs() >= 100.0 { format!("{}", scaled.round() as i64) } else { format!("{scaled:.1}") };
+    format!("{}{suffix}", text.trim_end_matches(".0"))
 }
 
 pub fn ticks(lo: f64, hi: f64, count: usize) -> (Vec<f64>, f64) {
@@ -186,13 +462,64 @@ pub fn histogram_in(values: &[f64], min: f64, width: f64, bins: usize) -> Plot {
         counts[index.min(bins - 1)] += 1.0;
     }
     let edges: Vec<f64> = (0..bins).map(|i| min + i as f64 * width).collect();
-    let categories = edges.iter().map(|lo| format!("{}–{}", number(*lo), number(lo + width))).collect();
-    let mut plot = Plot::new(Kind::Histogram);
-    plot.y_label = Some("count".to_string());
-    plot.categories = categories;
-    plot.step = width;
-    plot.series = vec![Series { name: None, xs: edges, ys: counts }];
+    let mut plot = Plot::new();
+    plot.y.label = Some("count".to_string());
+    plot.categories = edges.iter().map(|lo| format!("{}–{}", number(*lo), number(lo + width))).collect();
+    let mut layer = Layer::new(Mark::Histogram);
+    layer.step = width;
+    layer.series = vec![Series::new(None, edges, counts)];
+    plot.layers.push(layer);
     plot
+}
+
+pub fn density(values: &[f64], bandwidth: Option<f64>, points: usize) -> Series {
+    let finite: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
+    let n = finite.len();
+    if n == 0 {
+        return Series::default();
+    }
+    let mean = finite.iter().sum::<f64>() / n as f64;
+    let variance = finite.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n.max(1) as f64;
+    let deviation = variance.sqrt();
+    let h = bandwidth.unwrap_or_else(|| {
+        let silverman = 1.06 * deviation * (n as f64).powf(-0.2);
+        if silverman > 0.0 { silverman } else { 1.0 }
+    });
+    let min = finite.iter().copied().fold(f64::INFINITY, f64::min) - 3.0 * h;
+    let max = finite.iter().copied().fold(f64::NEG_INFINITY, f64::max) + 3.0 * h;
+    let count = points.max(2);
+    let xs: Vec<f64> = (0..count).map(|i| min + (max - min) * i as f64 / (count - 1) as f64).collect();
+    let norm = 1.0 / (n as f64 * h * (2.0 * std::f64::consts::PI).sqrt());
+    let ys = xs.iter().map(|x| finite.iter().map(|v| (-0.5 * ((x - v) / h).powi(2)).exp()).sum::<f64>() * norm).collect();
+    Series::new(None, xs, ys)
+}
+
+pub fn linear_fit(xs: &[f64], ys: &[f64]) -> Option<(f64, f64)> {
+    let n = xs.len().min(ys.len());
+    if n < 2 {
+        return None;
+    }
+    let (sx, sy) = (xs[..n].iter().sum::<f64>(), ys[..n].iter().sum::<f64>());
+    let (mx, my) = (sx / n as f64, sy / n as f64);
+    let sxx: f64 = xs[..n].iter().map(|x| (x - mx).powi(2)).sum();
+    if sxx == 0.0 {
+        return None;
+    }
+    let sxy: f64 = xs[..n].iter().zip(&ys[..n]).map(|(x, y)| (x - mx) * (y - my)).sum();
+    let slope = sxy / sxx;
+    Some((slope, my - slope * mx))
+}
+
+pub fn rolling_mean(ys: &[f64], window: usize) -> Vec<f64> {
+    let window = window.max(1);
+    ys.iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let start = (i + 1).saturating_sub(window);
+            let slice = &ys[start..=i];
+            slice.iter().sum::<f64>() / slice.len() as f64
+        })
+        .collect()
 }
 
 fn plural(n: usize, word: &str) -> String {
@@ -202,21 +529,22 @@ fn plural(n: usize, word: &str) -> String {
 pub fn shared_ranges(panels: &[Plot]) -> ((f64, f64), Option<(f64, f64)>) {
     let Some(first) = panels.first() else { return ((0.0, 1.0), None) };
     let fold = |pairs: &mut dyn Iterator<Item = (f64, f64)>| pairs.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (a, b)| (lo.min(a), hi.max(b)));
-    let (vlo, vhi) = fold(&mut panels.iter().map(Plot::value_extent));
-    let bars = matches!(first.kind, Kind::Bar | Kind::Histogram | Kind::Area);
-    let value = if first.y_log {
+    let (vlo, vhi) = fold(&mut panels.iter().map(|p| p.value_extent(Side::Left, &[])));
+    let from_zero = first.layers.iter().any(|l| l.mark.starts_at_zero());
+    let value = if first.y.log {
         (vlo.max(f64::MIN_POSITIVE), vhi)
     } else {
-        let axis = Axis::numeric(vlo, vhi, 5, bars);
+        let axis = Axis::numeric(vlo, vhi, 5, from_zero);
         (axis.lo, axis.hi)
     };
-    let x = matches!(first.kind, Kind::Line | Kind::Scatter | Kind::Area).then(|| {
+    let numeric = first.categories.is_empty() && first.layers.iter().any(|l| matches!(l.mark, Mark::Line | Mark::Step | Mark::Point | Mark::Area | Mark::Density));
+    let x = numeric.then(|| {
         let mut extents = panels.iter().map(|p| {
-            let mut xs = p.series.iter().flat_map(|s| s.xs.iter().copied());
+            let mut xs = p.layers.iter().flat_map(|l| l.series.iter().flat_map(|s| s.xs.iter().copied()));
             xs.next().map_or((f64::INFINITY, f64::NEG_INFINITY), |x| xs.fold((x, x), |(lo, hi), v| (lo.min(v), hi.max(v))))
         });
         let (lo, hi) = fold(&mut extents);
-        if first.x_log {
+        if first.x.log {
             (lo, hi)
         } else {
             let axis = Axis::hugging(lo, hi, 5);
@@ -240,15 +568,24 @@ fn whole(values: impl Iterator<Item = f64>) -> bool {
 fn translate(shape: Shape, dx: f32, dy: f32) -> Shape {
     let shift = |points: Vec<(f32, f32)>| points.into_iter().map(|(x, y)| (x + dx, y + dy)).collect();
     match shape {
-        Shape::Rect { x, y, w, h, paint, tip } => Shape::Rect { x: x + dx, y: y + dy, w, h, paint, tip },
-        Shape::Line { x1, y1, x2, y2, paint, width, dashed } => {
-            Shape::Line { x1: x1 + dx, y1: y1 + dy, x2: x2 + dx, y2: y2 + dy, paint, width, dashed }
-        }
-        Shape::Polyline { points, paint, width } => Shape::Polyline { points: shift(points), paint, width },
-        Shape::Polygon { points, paint } => Shape::Polygon { points: shift(points), paint },
-        Shape::Circle { x, y, r, paint, tip } => Shape::Circle { x: x + dx, y: y + dy, r, paint, tip },
+        Shape::Rect { x, y, w, h, paint, alpha, tip } => Shape::Rect { x: x + dx, y: y + dy, w, h, paint, alpha, tip },
+        Shape::Line { x1, y1, x2, y2, paint, width, dashed } => Shape::Line { x1: x1 + dx, y1: y1 + dy, x2: x2 + dx, y2: y2 + dy, paint, width, dashed },
+        Shape::Polyline { points, paint, width, dashed } => Shape::Polyline { points: shift(points), paint, width, dashed },
+        Shape::Polygon { points, paint, alpha, tip } => Shape::Polygon { points: shift(points), paint, alpha, tip },
+        Shape::Circle { x, y, r, paint, alpha, tip } => Shape::Circle { x: x + dx, y: y + dy, r, paint, alpha, tip },
         Shape::Arc { cx, cy, r, inner, start, end, paint, tip } => Shape::Arc { cx: cx + dx, cy: cy + dy, r, inner, start, end, paint, tip },
-        Shape::Text { x, y, text, size, anchor, paint, bold } => Shape::Text { x: x + dx, y: y + dy, text, size, anchor, paint, bold },
+        Shape::Text { x, y, text, size, anchor, paint, bold, angle } => Shape::Text { x: x + dx, y: y + dy, text, size, anchor, paint, bold, angle },
+    }
+}
+
+fn shift_scene(scene: Scene, dx: f32, dy: f32) -> Scene {
+    Scene {
+        width: scene.width,
+        height: scene.height,
+        shapes: scene.shapes.into_iter().map(|s| translate(s, dx, dy)).collect(),
+        legend: scene.legend.into_iter().map(|e| LegendEntry { x: e.x + dx, y: e.y + dy, ..e }).collect(),
+        samples: scene.samples.into_iter().map(|s| Sample { x: s.x + dx, y: s.y + dy, ..s }).collect(),
+        picks: scene.picks.into_iter().map(|p| Pick { x: p.x + dx, y: p.y + dy, ..p }).collect(),
     }
 }
 
@@ -321,6 +658,16 @@ impl Axis {
         self
     }
 
+    fn for_values(spec: &AxisSpec, lo: f64, hi: f64, count: usize, include_zero: bool, hug: bool) -> Axis {
+        let count = spec.ticks.unwrap_or(count).max(1);
+        match (spec.range, spec.log) {
+            (Some((a, b)), log) => Axis::fixed(a, b, count, log),
+            (None, true) => Axis::log(lo, hi),
+            (None, false) if hug => Axis::hugging(lo, hi, count),
+            (None, false) => Axis::numeric(lo, hi, count, include_zero),
+        }
+    }
+
     fn place(&self, value: f64, from: f32, to: f32) -> f32 {
         let fraction = if self.log {
             (value.max(f64::MIN_POSITIVE).log10() - self.lo.log10()) / (self.hi.log10() - self.lo.log10())
@@ -336,6 +683,9 @@ impl Axis {
 
     fn label(&self, value: f64, dates: bool, format: Option<&str>) -> String {
         if let Some(pattern) = format {
+            if pattern == "compact" {
+                return compact(value);
+            }
             if dates {
                 return crate::date::format(value.round() as i32, pattern);
             }
@@ -349,6 +699,9 @@ impl Axis {
 
 pub fn format_tick(value: f64, spec: Option<&str>) -> Option<String> {
     let spec = spec?;
+    if spec == "compact" {
+        return Some(compact(value));
+    }
     let argument = if value.fract() == 0.0 && value.abs() < 1e15 { Value::Int(value as i64) } else { Value::Float(value) };
     match crate::builtins::strings::format_values(&Value::string(spec), &[argument]) {
         Ok(Value::Str(text)) => Some(text.to_string()),
@@ -356,58 +709,108 @@ pub fn format_tick(value: f64, spec: Option<&str>) -> Option<String> {
     }
 }
 
+fn text_shape(x: f32, y: f32, text: String, size: f32, anchor: Anchor, paint: Paint) -> Shape {
+    Shape::Text { x, y, text, size, anchor, paint, bold: false, angle: 0.0 }
+}
+
+fn marker_shape(marker: Marker, x: f32, y: f32, r: f32, paint: Paint, alpha: f32, tip: Option<String>) -> Shape {
+    match marker {
+        Marker::Circle => Shape::Circle { x, y, r, paint, alpha, tip },
+        Marker::Square => Shape::Polygon { points: vec![(x - r, y - r), (x + r, y - r), (x + r, y + r), (x - r, y + r)], paint, alpha, tip },
+        Marker::Diamond => {
+            let d = r * 1.3;
+            Shape::Polygon { points: vec![(x, y - d), (x + d, y), (x, y + d), (x - d, y)], paint, alpha, tip }
+        }
+        Marker::Triangle => {
+            let d = r * 1.25;
+            Shape::Polygon { points: vec![(x, y - d), (x + d, y + d * 0.8), (x - d, y + d * 0.8)], paint, alpha, tip }
+        }
+    }
+}
+
+struct Frame {
+    x0: f32,
+    x1: f32,
+    y0: f32,
+    y1: f32,
+}
+
 impl Plot {
-    pub fn new(kind: Kind) -> Plot {
+    pub fn new() -> Plot {
         Plot {
-            kind,
             title: None,
-            x_label: None,
-            y_label: None,
+            subtitle: None,
+            caption: None,
+            x: AxisSpec::default(),
+            y: AxisSpec::default(),
+            y2: AxisSpec::default(),
             categories: Vec::new(),
             dates: false,
-            step: 0.0,
-            series: Vec::new(),
-            boxes: Vec::new(),
-            stacked: false,
             horizontal: false,
-            donut: false,
-            x_range: None,
-            y_range: None,
-            x_log: false,
-            y_log: false,
-            x_format: None,
-            y_format: None,
-            hlines: Vec::new(),
-            vlines: Vec::new(),
-            labels: false,
+            layers: Vec::new(),
+            rules: Vec::new(),
+            notes: Vec::new(),
+            legend: LegendAt::Auto,
+            palette: Vec::new(),
+            grid: true,
             panels: Vec::new(),
+            columns: None,
         }
     }
 
-    fn points(&self) -> usize {
-        self.series.iter().map(|s| s.xs.len()).sum()
+    pub fn mark(&self) -> Option<Mark> {
+        self.layers.first().map(|l| l.mark)
     }
 
     pub fn describe(&self) -> String {
         if let Some(first) = self.panels.first() {
             return format!("{} of {}", plural(self.panels.len(), "panel"), first.describe());
         }
-        let many = self.series.len() > 1;
-        match self.kind {
-            Kind::Bar => format!("bar chart with {}", plural(self.points(), "bar")),
-            Kind::Line if many => format!("line chart with {}", plural(self.series.len(), "series")),
-            Kind::Line => format!("line chart with {}", plural(self.points(), "point")),
-            Kind::Area if many => format!("area chart with {}", plural(self.series.len(), "series")),
-            Kind::Area => format!("area chart with {}", plural(self.points(), "point")),
-            Kind::Scatter => format!("scatter with {}", plural(self.points(), "point")),
-            Kind::Histogram => format!("histogram with {}", plural(self.points(), "bin")),
-            Kind::Box => format!("box plot with {}", plural(self.boxes.len(), "group")),
-            Kind::Pie => format!("pie chart with {}", plural(self.points(), "slice")),
+        match self.layers.as_slice() {
+            [] => "empty plot".to_string(),
+            [one] => one.describe(),
+            [first, rest @ ..] => format!("{} and {} more layer{}", first.describe(), rest.len(), if rest.len() == 1 { "" } else { "s" }),
         }
+    }
+
+    pub fn entries(&self) -> Vec<(usize, usize, String)> {
+        let mut out = Vec::new();
+        for (li, layer) in self.layers.iter().enumerate() {
+            for (si, series) in layer.series.iter().enumerate() {
+                if let Some(name) = &series.name {
+                    out.push((li, si, name.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    fn global_index(&self, layer: usize, series: usize) -> usize {
+        self.layers[..layer].iter().map(|l| l.series.len()).sum::<usize>() + series
+    }
+
+    fn paint(&self, layer: &Layer, series: usize) -> Paint {
+        if let Some(color) = layer.color {
+            return Paint::Rgb(color);
+        }
+        let index = layer.first_color + series;
+        if self.palette.is_empty() { Paint::Series(index) } else { Paint::Rgb(self.palette[index % self.palette.len()]) }
     }
 
     fn x_text(&self, x: f64) -> String {
         if self.dates { crate::date::iso(x.round() as i32) } else { number(x) }
+    }
+
+    pub fn value_extent(&self, side: Side, hidden: &[usize]) -> (f64, f64) {
+        let mut lo = f64::INFINITY;
+        let mut hi = f64::NEG_INFINITY;
+        for (li, layer) in self.layers.iter().enumerate().filter(|(_, l)| l.side == side) {
+            let visible = |si: usize| !hidden.contains(&self.global_index(li, si));
+            let (a, b) = layer.value_extent(&visible);
+            lo = lo.min(a);
+            hi = hi.max(b);
+        }
+        (lo, hi)
     }
 
     pub fn text(&self) -> String {
@@ -431,66 +834,41 @@ impl Plot {
     }
 
     fn body_text(&self, out: &mut String) {
-        match self.kind {
-            Kind::Bar | Kind::Histogram => self.text_bars(out),
-            Kind::Pie => self.text_pie(out),
-            Kind::Box => self.text_boxes(out),
-            Kind::Line | Kind::Scatter | Kind::Area => self.text_grid(out),
+        let mut grid_layers: Vec<&Layer> = Vec::new();
+        let mut first = true;
+        for layer in &self.layers {
+            match layer.mark {
+                Mark::Line | Mark::Step | Mark::Point | Mark::Area | Mark::Density => {
+                    grid_layers.push(layer);
+                    continue;
+                }
+                _ => {}
+            }
+            if !first {
+                out.push('\n');
+            }
+            first = false;
+            match layer.mark {
+                Mark::Bar | Mark::Histogram | Mark::Lollipop => self.text_bars(layer, out),
+                Mark::Pie => self.text_pie(layer, out),
+                Mark::Box => Self::text_boxes(layer, out),
+                Mark::Heat => self.text_heat(layer, out),
+                _ => {}
+            }
+        }
+        if !grid_layers.is_empty() {
+            if !first {
+                out.push('\n');
+            }
+            self.text_grid(&grid_layers, out);
         }
     }
 
-    fn panel_scene(&self, width: f32, height: f32) -> Scene {
-        let mut shapes = Vec::new();
-        let mut top = 0.0;
-        if let Some(title) = &self.title {
-            shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true });
-            top = 32.0;
-        }
-        let (top_label, bottom_label) = self.axis_labels();
-        if let Some(label) = top_label {
-            shapes.push(Self::text_shape(self.left_margin(), top + 11.0, label, 12.0, Anchor::Start, Paint::Muted));
-            top += 22.0;
-        }
-        let mut bottom = 0.0;
-        if let Some(label) = bottom_label {
-            shapes.push(Self::text_shape(width / 2.0, height - 10.0, label, 12.0, Anchor::Middle, Paint::Muted));
-            bottom = 18.0;
-        }
-        let n = self.panels.len();
-        let avail = height - top - bottom;
-        let room = |cols: usize| (width / cols as f32 - 82.0).min(avail / n.div_ceil(cols) as f32 - 64.0);
-        let square = ((n as f32).sqrt().ceil() as usize).max(1);
-        let cols = (1..=n)
-            .max_by(|a, b| room(*a).total_cmp(&room(*b)).then_with(|| a.abs_diff(square).cmp(&b.abs_diff(square)).reverse()))
-            .unwrap_or(1);
-        let rows = n.div_ceil(cols);
-        let (cell_w, cell_h) = (width / cols as f32, avail / rows as f32);
-        for (i, panel) in self.panels.iter().enumerate() {
-            let (dx, dy) = ((i % cols) as f32 * cell_w, top + (i / cols) as f32 * cell_h);
-            shapes.extend(panel.body_scene(cell_w, cell_h, true).shapes.into_iter().map(|shape| translate(shape, dx, dy)));
-        }
-        Scene { width, height, shapes }
-    }
-
-    fn axis_labels(&self) -> (Option<String>, Option<String>) {
-        let (value_label, category_label) = (self.y_label.clone(), self.x_label.clone());
-        if self.horizontal { (category_label, value_label) } else { (value_label, category_label) }
-    }
-
-    fn left_margin(&self) -> f32 {
-        if self.horizontal {
-            let longest = self.categories.iter().map(|c| c.chars().count()).max().unwrap_or(0) as f32;
-            20.0 + longest * 7.0
-        } else {
-            58.0
-        }
-    }
-
-    fn bar_rows(&self) -> Vec<(String, f64)> {
-        let multi = self.series.len() > 1;
+    fn bar_rows(&self, layer: &Layer) -> Vec<(String, f64)> {
+        let multi = layer.series.len() > 1;
         let mut rows = Vec::new();
-        if self.kind == Kind::Histogram {
-            for series in &self.series {
+        if layer.mark == Mark::Histogram {
+            for series in &layer.series {
                 for (i, y) in series.ys.iter().enumerate() {
                     rows.push((self.categories.get(i).cloned().unwrap_or_default(), *y));
                 }
@@ -498,7 +876,7 @@ impl Plot {
             return rows;
         }
         for (c, category) in self.categories.iter().enumerate() {
-            for series in &self.series {
+            for series in &layer.series {
                 let Some(i) = series.xs.iter().position(|x| *x as usize == c) else { continue };
                 let label = match (&series.name, multi) {
                     (Some(name), true) => format!("{category} {name}"),
@@ -522,13 +900,13 @@ impl Plot {
         }
     }
 
-    fn text_bars(&self, out: &mut String) {
-        let rows: Vec<(String, f64, String)> = self.bar_rows().into_iter().map(|(l, v)| (l, v, String::new())).collect();
+    fn text_bars(&self, layer: &Layer, out: &mut String) {
+        let rows: Vec<(String, f64, String)> = self.bar_rows(layer).into_iter().map(|(l, v)| (l, v, String::new())).collect();
         Self::write_bars(out, &rows);
     }
 
-    fn text_pie(&self, out: &mut String) {
-        let Some(series) = self.series.first() else { return };
+    fn text_pie(&self, layer: &Layer, out: &mut String) {
+        let Some(series) = layer.series.first() else { return };
         let total: f64 = series.ys.iter().sum();
         let rows: Vec<(String, f64, String)> = series
             .xs
@@ -543,12 +921,29 @@ impl Plot {
         Self::write_bars(out, &rows);
     }
 
-    fn text_boxes(&self, out: &mut String) {
-        let width = self.boxes.iter().map(|b| b.label.chars().count()).max().unwrap_or(0);
-        let lo = self.boxes.iter().map(|b| b.outliers.iter().copied().fold(b.low, f64::min)).fold(f64::INFINITY, f64::min);
-        let hi = self.boxes.iter().map(|b| b.outliers.iter().copied().fold(b.high, f64::max)).fold(f64::NEG_INFINITY, f64::max);
+    fn text_heat(&self, layer: &Layer, out: &mut String) {
+        let Some(series) = layer.series.first() else { return };
+        let width = layer.bands.iter().map(|b| b.chars().count()).max().unwrap_or(0);
+        let _ = write!(out, "{:<width$}", "");
+        for category in &self.categories {
+            let _ = write!(out, " {category:>8}");
+        }
+        for (r, band) in layer.bands.iter().enumerate() {
+            let _ = write!(out, "\n{band:<width$}");
+            for c in 0..self.categories.len() {
+                let found = series.xs.iter().zip(&series.ys).zip(&series.sizes).find(|((x, y), _)| **x as usize == c && **y as usize == r);
+                let cell = found.map(|(_, v)| number(*v)).unwrap_or_default();
+                let _ = write!(out, " {cell:>8}");
+            }
+        }
+    }
+
+    fn text_boxes(layer: &Layer, out: &mut String) {
+        let width = layer.boxes.iter().map(|b| b.label.chars().count()).max().unwrap_or(0);
+        let lo = layer.boxes.iter().map(|b| b.outliers.iter().copied().fold(b.low, f64::min)).fold(f64::INFINITY, f64::min);
+        let hi = layer.boxes.iter().map(|b| b.outliers.iter().copied().fold(b.high, f64::max)).fold(f64::NEG_INFINITY, f64::max);
         let col = |v: f64| if hi > lo { ((v - lo) / (hi - lo) * (GRID_W - 1) as f64).round() as usize } else { GRID_W / 2 };
-        for (i, b) in self.boxes.iter().enumerate() {
+        for (i, b) in layer.boxes.iter().enumerate() {
             if i > 0 {
                 out.push('\n');
             }
@@ -568,26 +963,13 @@ impl Plot {
                 cells[col(*outlier)] = 'o';
             }
             let glyphs: String = cells.iter().collect();
-            let _ = write!(
-                out,
-                "{:<width$} {glyphs} {} {} {} {} {}",
-                b.label,
-                number(b.low),
-                number(b.q1),
-                number(b.median),
-                number(b.q3),
-                number(b.high)
-            );
+            let _ = write!(out, "{:<width$} {glyphs} {} {} {} {} {}", b.label, number(b.low), number(b.q1), number(b.median), number(b.q3), number(b.high));
         }
     }
 
-    fn text_grid(&self, out: &mut String) {
-        let points: Vec<(usize, f64, f64)> = self
-            .series
-            .iter()
-            .enumerate()
-            .flat_map(|(i, s)| s.xs.iter().zip(&s.ys).map(move |(x, y)| (i, *x, *y)))
-            .collect();
+    fn text_grid(&self, layers: &[&Layer], out: &mut String) {
+        let series: Vec<(&Layer, &Series)> = layers.iter().flat_map(|l| l.series.iter().map(move |s| (*l, s))).collect();
+        let points: Vec<(usize, f64, f64)> = series.iter().enumerate().flat_map(|(i, (_, s))| s.xs.iter().zip(&s.ys).map(move |(x, y)| (i, *x, *y))).collect();
         if points.is_empty() {
             out.push_str("(no points)");
             return;
@@ -600,21 +982,24 @@ impl Plot {
             GRID_H - 1 - up
         };
         let mut grid = vec![vec![' '; GRID_W]; GRID_H];
-        if matches!(self.kind, Kind::Line | Kind::Area) {
-            for series in &self.series {
-                let mut cells: Vec<(usize, usize)> = series.xs.iter().zip(&series.ys).map(|(x, y)| (col(*x), row(*y))).collect();
-                cells.sort();
-                for pair in cells.windows(2) {
-                    for (c, r) in segment(pair[0], pair[1]) {
-                        if grid[r][c] == ' ' {
-                            grid[r][c] = '·';
-                        }
+        for (layer, s) in &series {
+            if !matches!(layer.mark, Mark::Line | Mark::Step | Mark::Area | Mark::Density) {
+                continue;
+            }
+            let mut cells: Vec<(usize, usize)> = s.xs.iter().zip(&s.ys).map(|(x, y)| (col(*x), row(*y))).collect();
+            cells.sort();
+            for pair in cells.windows(2) {
+                for (c, r) in segment(pair[0], pair[1]) {
+                    if grid[r][c] == ' ' {
+                        grid[r][c] = '·';
                     }
                 }
             }
         }
         for (i, x, y) in &points {
-            grid[row(*y)][col(*x)] = MARKS[i % MARKS.len()];
+            if series[*i].0.mark != Mark::Density {
+                grid[row(*y)][col(*x)] = MARKS[i % MARKS.len()];
+            }
         }
         let (lo, hi) = (number(ymin), number(ymax));
         let width = lo.chars().count().max(hi.chars().count());
@@ -627,242 +1012,361 @@ impl Plot {
         let (left, right) = (self.x_text(xmin), self.x_text(xmax));
         let gap = GRID_W.saturating_sub(left.chars().count() + right.chars().count());
         let _ = write!(out, "{:>width$}  {left}{}{right}", "", " ".repeat(gap));
-        if self.series.len() > 1 {
-            let legend: Vec<String> = self
-                .series
-                .iter()
-                .enumerate()
-                .map(|(i, s)| format!("{} {}", MARKS[i % MARKS.len()], s.name.clone().unwrap_or_default()))
-                .collect();
+        if series.len() > 1 {
+            let legend: Vec<String> = series.iter().enumerate().map(|(i, (_, s))| format!("{} {}", MARKS[i % MARKS.len()], s.name.clone().unwrap_or_default())).collect();
             let _ = write!(out, "\n{}", legend.join("  "));
         }
     }
 
-    fn stack_totals(&self) -> Vec<f64> {
-        let mut totals: BTreeMap<u64, f64> = BTreeMap::new();
-        for series in &self.series {
-            for (x, y) in series.xs.iter().zip(&series.ys) {
-                if *y > 0.0 {
-                    *totals.entry(x.to_bits()).or_default() += y;
-                }
-            }
-        }
-        totals.into_values().collect()
-    }
-
-    pub fn value_extent(&self) -> (f64, f64) {
-        let fold = |values: &mut dyn Iterator<Item = f64>| values.fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)));
-        match self.kind {
-            Kind::Box => {
-                let mut all = self.boxes.iter().flat_map(|b| b.outliers.iter().copied().chain([b.low, b.high]));
-                fold(&mut all)
-            }
-            Kind::Bar | Kind::Area if self.stacked || (self.kind == Kind::Area && self.series.len() > 1) => {
-                let totals = self.stack_totals();
-                let (lo, _) = fold(&mut self.series.iter().flat_map(|s| s.ys.iter().copied()));
-                let (_, hi) = fold(&mut totals.into_iter());
-                (lo.min(0.0), hi)
-            }
-            _ => fold(&mut self.series.iter().flat_map(|s| s.ys.iter().copied())),
-        }
-    }
-
-    fn text_shape(x: f32, y: f32, text: String, size: f32, anchor: Anchor, paint: Paint) -> Shape {
-        Shape::Text { x, y, text, size, anchor, paint, bold: false }
-    }
-
     pub fn scene(&self, width: f32, height: f32) -> Scene {
-        if self.panels.is_empty() { self.body_scene(width, height, false) } else { self.panel_scene(width, height) }
+        self.scene_hiding(width, height, &[])
     }
 
-    fn body_scene(&self, width: f32, height: f32, bare: bool) -> Scene {
-        if self.kind == Kind::Pie {
+    pub fn scene_hiding(&self, width: f32, height: f32, hidden: &[usize]) -> Scene {
+        if self.panels.is_empty() { self.body_scene(width, height, false, hidden) } else { self.panel_scene(width, height) }
+    }
+
+    fn panel_scene(&self, width: f32, height: f32) -> Scene {
+        let mut scene = Scene { width, height, ..Scene::default() };
+        let mut top = 0.0;
+        if let Some(title) = &self.title {
+            scene.shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true, angle: 0.0 });
+            top = 32.0;
+        }
+        let (top_label, bottom_label) = self.axis_labels();
+        if let Some(label) = top_label {
+            scene.shapes.push(text_shape(self.left_margin(), top + 11.0, label, 12.0, Anchor::Start, Paint::Muted));
+            top += 22.0;
+        }
+        let mut bottom = 0.0;
+        if let Some(label) = bottom_label {
+            scene.shapes.push(text_shape(width / 2.0, height - 10.0, label, 12.0, Anchor::Middle, Paint::Muted));
+            bottom = 18.0;
+        }
+        let n = self.panels.len();
+        let avail = height - top - bottom;
+        let room = |cols: usize| (width / cols as f32 - 82.0).min(avail / n.div_ceil(cols) as f32 - 64.0);
+        let square = ((n as f32).sqrt().ceil() as usize).max(1);
+        let cols = self
+            .columns
+            .filter(|c| *c > 0)
+            .unwrap_or_else(|| (1..=n).max_by(|a, b| room(*a).total_cmp(&room(*b)).then_with(|| a.abs_diff(square).cmp(&b.abs_diff(square)).reverse())).unwrap_or(1))
+            .min(n.max(1));
+        let rows = n.div_ceil(cols);
+        let (cell_w, cell_h) = (width / cols as f32, avail / rows as f32);
+        for (i, panel) in self.panels.iter().enumerate() {
+            let (dx, dy) = ((i % cols) as f32 * cell_w, top + (i / cols) as f32 * cell_h);
+            let inner = shift_scene(panel.body_scene(cell_w, cell_h, true, &[]), dx, dy);
+            scene.shapes.extend(inner.shapes);
+            scene.legend.extend(inner.legend);
+            scene.samples.extend(inner.samples);
+            scene.picks.extend(inner.picks);
+        }
+        scene
+    }
+
+    fn axis_labels(&self) -> (Option<String>, Option<String>) {
+        let (value_label, category_label) = (self.y.label.clone(), self.x.label.clone());
+        if self.horizontal { (category_label, value_label) } else { (value_label, category_label) }
+    }
+
+    fn left_margin(&self) -> f32 {
+        if self.horizontal {
+            let longest = self.categories.iter().map(|c| c.chars().count()).max().unwrap_or(0) as f32;
+            20.0 + longest * 7.0
+        } else if self.mark() == Some(Mark::Heat) {
+            let longest = self.layers.iter().flat_map(|l| l.bands.iter()).map(|b| b.chars().count()).max().unwrap_or(0) as f32;
+            16.0 + longest * 7.0
+        } else {
+            58.0
+        }
+    }
+
+    fn body_scene(&self, width: f32, height: f32, bare: bool, hidden: &[usize]) -> Scene {
+        if self.mark() == Some(Mark::Pie) {
             return self.pie_scene(width, height);
         }
-        let mut shapes = Vec::new();
-        let multi = self.series.len() > 1 && self.kind != Kind::Box;
+        let mut scene = Scene { width, height, ..Scene::default() };
+        let entries: Vec<(usize, usize, String)> = self
+            .layers
+            .iter()
+            .enumerate()
+            .flat_map(|(li, l)| l.series.iter().enumerate().filter_map(move |(si, s)| s.name.clone().map(|n| (li, si, n))))
+            .collect();
+        let series_count: usize = self.layers.iter().map(|l| l.series.len()).sum();
+        let legend_at = match self.legend {
+            LegendAt::Auto if !entries.is_empty() && series_count > 1 => LegendAt::Top,
+            LegendAt::Auto => LegendAt::Hidden,
+            _ if entries.is_empty() => LegendAt::Hidden,
+            other => other,
+        };
         let (top_label, bottom_label) = if bare { (None, None) } else { self.axis_labels() };
         let title_room = match (&self.title, bare) {
             (None, _) => 0.0,
             (Some(_), true) => 14.0,
             (Some(_), false) => 24.0,
-        };
-        let legend_room = if multi || top_label.is_some() { 22.0 } else { 0.0 };
-        let (label_above, label_beside) = if self.labels { if self.horizontal { (0.0, 28.0) } else { (12.0, 0.0) } } else { (0.0, 0.0) };
-        let top = 16.0 + title_room + legend_room + label_above;
-        let bottom = 34.0 + if bottom_label.is_some() { 18.0 } else { 0.0 };
+        } + if self.subtitle.is_some() && !bare { 16.0 } else { 0.0 };
+        let legend_room = if legend_at == LegendAt::Top || top_label.is_some() { 22.0 } else { 0.0 };
+        let legend_width = if legend_at == LegendAt::Right { entries.iter().map(|(_, _, n)| n.chars().count()).max().unwrap_or(0) as f32 * 6.5 + 34.0 } else { 0.0 };
+        let legend_bottom = if legend_at == LegendAt::Bottom { 22.0 } else { 0.0 };
+        let caption_room = if self.caption.is_some() && !bare { 18.0 } else { 0.0 };
+        let any_labels = self.layers.iter().any(|l| l.labels);
+        let (label_above, label_beside) = if any_labels { if self.horizontal { (0.0, 28.0) } else { (12.0, 0.0) } } else { (0.0, 0.0) };
+        let right_axis = self.layers.iter().any(|l| l.side == Side::Right);
         let left = self.left_margin();
-        let right = if self.dates { 40.0 } else { 24.0 } + label_beside;
-        let (x0, x1, y0, y1) = (left, width - right, top, height - bottom);
+        let right = if self.dates { 40.0 } else { 24.0 } + label_beside + legend_width + if right_axis { 46.0 } else { 0.0 };
+        let longest_category = self.categories.iter().map(|c| c.chars().count()).max().unwrap_or(0) as f32;
+        let band_estimate = (width - left - right) / self.categories.len().max(1) as f32;
+        let rotate = !self.horizontal && !self.categories.is_empty() && self.mark() != Some(Mark::Histogram) && longest_category * CHAR_W > band_estimate - 6.0;
+        let rotated_room = if rotate { (longest_category * CHAR_W * 0.64 + 6.0).min(70.0) } else { 0.0 };
+        let top = 16.0 + title_room + legend_room + label_above;
+        let bottom = 34.0 + if bottom_label.is_some() { 18.0 } else { 0.0 } + legend_bottom + caption_room + rotated_room;
+        let frame = Frame { x0: left, x1: width - right, y0: top, y1: height - bottom };
+        let (x0, x1, y0, y1) = (frame.x0, frame.x1, frame.y0, frame.y1);
         let (plot_w, plot_h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
         if let Some(title) = &self.title {
             let (y, size) = if bare { (14.0, 13.0) } else { (18.0, 15.0) };
-            shapes.push(Shape::Text { x: width / 2.0, y, text: title.clone(), size, anchor: Anchor::Middle, paint: Paint::Text, bold: true });
+            scene.shapes.push(Shape::Text { x: width / 2.0, y, text: title.clone(), size, anchor: Anchor::Middle, paint: Paint::Text, bold: true, angle: 0.0 });
+        }
+        if let (Some(subtitle), false) = (&self.subtitle, bare) {
+            scene.shapes.push(text_shape(width / 2.0, 36.0, subtitle.clone(), 12.0, Anchor::Middle, Paint::Muted));
         }
         if let Some(label) = top_label {
-            shapes.push(Self::text_shape(x0, y0 - 11.0, label, 12.0, Anchor::Start, Paint::Muted));
+            scene.shapes.push(text_shape(x0, y0 - 11.0, label, 12.0, Anchor::Start, Paint::Muted));
         }
         if let Some(label) = bottom_label {
-            shapes.push(Self::text_shape((x0 + x1) / 2.0, height - 10.0, label, 12.0, Anchor::Middle, Paint::Muted));
+            scene.shapes.push(text_shape((x0 + x1) / 2.0, height - 10.0 - caption_room, label, 12.0, Anchor::Middle, Paint::Muted));
         }
-        let bars = matches!(self.kind, Kind::Bar | Kind::Histogram | Kind::Area);
-        let (vlo, vhi) = self.value_extent();
+        if let (Some(caption), false) = (&self.caption, bare) {
+            scene.shapes.push(text_shape(x0, height - 8.0, caption.clone(), 11.0, Anchor::Start, Paint::Muted));
+        }
+        if self.mark() == Some(Mark::Heat) {
+            self.heat_shapes(&mut scene, &frame);
+            self.finish_axes(&mut scene, &frame);
+            return scene;
+        }
+        let from_zero = self.layers.iter().any(|l| l.side == Side::Left && l.mark.starts_at_zero());
+        let (vlo, vhi) = self.value_extent(Side::Left, hidden);
         let value_count = (((if self.horizontal { plot_w } else { plot_h }) / 40.0) as usize).clamp(2, 6);
-        let mut value_axis = match (self.y_range, self.y_log) {
-            (Some((lo, hi)), log) => Axis::fixed(lo, hi, value_count, log),
-            (None, true) => Axis::log(vlo, vhi),
-            (None, false) => Axis::numeric(vlo, vhi, value_count, bars),
-        };
-        let whole_values = if self.kind == Kind::Box {
-            whole(self.boxes.iter().flat_map(|b| [b.low, b.q1, b.median, b.q3, b.high]))
-        } else {
-            whole(self.series.iter().flat_map(|s| s.ys.iter().copied()))
-        };
+        let mut value_axis = Axis::for_values(&self.y, vlo, vhi, value_count, from_zero, false);
+        let whole_values = self.layers.iter().filter(|l| l.side == Side::Left).all(|l| match l.mark {
+            Mark::Box => whole(l.boxes.iter().flat_map(|b| [b.low, b.q1, b.median, b.q3, b.high])),
+            _ => whole(l.series.iter().flat_map(|s| s.ys.iter().copied())),
+        }) && !self.layers.is_empty();
         if whole_values {
             value_axis = value_axis.whole();
         }
-        let baseline = if value_axis.log { value_axis.lo } else { 0.0 };
-        let value_at = |v: f64| if self.horizontal { value_axis.place(v, x0, x1) } else { value_axis.place(v, y1, y0) };
-        let value_text = |v: f64| format_tick(v, self.y_format.as_deref()).unwrap_or_else(|| number(v));
+        let right_axis_scale = right_axis.then(|| {
+            let (lo, hi) = self.value_extent(Side::Right, hidden);
+            let zero = self.layers.iter().any(|l| l.side == Side::Right && l.mark.starts_at_zero());
+            Axis::for_values(&self.y2, lo, hi, value_count, zero, false)
+        });
+        let horizontal = self.horizontal;
+        let value_at = |axis: &Axis, v: f64| if horizontal { axis.place(v, x0, x1) } else { axis.place(v, y1, y0) };
         for tick in &value_axis.ticks {
-            let label = value_axis.label(*tick, false, self.y_format.as_deref());
-            if self.horizontal {
-                let x = value_at(*tick);
-                shapes.push(Shape::Line { x1: x, y1: y0, x2: x, y2: y1, paint: Paint::Grid, width: 1.0, dashed: false });
-                shapes.push(Self::text_shape(x, y1 + 14.0, label, 11.0, Anchor::Middle, Paint::Muted));
+            let label = value_axis.label(*tick, false, self.y.format.as_deref());
+            if horizontal {
+                let x = value_at(&value_axis, *tick);
+                if self.grid {
+                    scene.shapes.push(Shape::Line { x1: x, y1: y0, x2: x, y2: y1, paint: Paint::Grid, width: 1.0, dashed: false });
+                }
+                scene.shapes.push(text_shape(x, y1 + 14.0, label, 11.0, Anchor::Middle, Paint::Muted));
             } else {
-                let y = value_at(*tick);
-                shapes.push(Shape::Line { x1: x0, y1: y, x2: x1, y2: y, paint: Paint::Grid, width: 1.0, dashed: false });
-                shapes.push(Self::text_shape(x0 - 8.0, y, label, 11.0, Anchor::End, Paint::Muted));
+                let y = value_at(&value_axis, *tick);
+                if self.grid {
+                    scene.shapes.push(Shape::Line { x1: x0, y1: y, x2: x1, y2: y, paint: Paint::Grid, width: 1.0, dashed: false });
+                }
+                scene.shapes.push(text_shape(x0 - 8.0, y, label, 11.0, Anchor::End, Paint::Muted));
             }
         }
-        match self.kind {
-            Kind::Bar => self.bar_shapes(&mut shapes, (x0, x1, y0, y1), baseline, &value_at, &value_text),
-            Kind::Box => self.box_shapes(&mut shapes, (x0, x1, y0, y1), &value_at),
-            Kind::Histogram => {
-                if let Some(series) = self.series.first() {
-                    let xlo = series.xs.first().copied().unwrap_or(0.0);
-                    let xhi = series.xs.last().copied().unwrap_or(0.0) + self.step;
-                    let span = (xhi - xlo).max(f64::EPSILON);
-                    let sx = |x: f64| x0 + ((x - xlo) / span) as f32 * plot_w;
-                    let base = value_at(baseline);
-                    for (i, (x, y)) in series.xs.iter().zip(&series.ys).enumerate() {
-                        let (left, right) = (sx(*x), sx(x + self.step));
-                        let tip = format!("{}: {}", self.categories.get(i).cloned().unwrap_or_default(), number(*y));
-                        let top = value_at(y.max(baseline));
-                        shapes.push(Shape::Rect { x: left + 0.5, y: top, w: (right - left - 1.0).max(1.0), h: base - top, paint: Paint::Series(0), tip: Some(tip) });
-                        if self.labels {
-                            shapes.push(Self::text_shape((left + right) / 2.0, top - 8.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
-                        }
-                    }
-                    let mut edges: Vec<f64> = series.xs.clone();
-                    edges.push(xhi);
-                    let (labels, step) = if edges.len() <= 12 { (edges, self.step) } else { ticks(xlo, xhi, 6) };
+        if let Some(axis) = &right_axis_scale {
+            for tick in &axis.ticks {
+                let label = axis.label(*tick, false, self.y2.format.as_deref());
+                scene.shapes.push(text_shape(x1 + 8.0, value_at(axis, *tick), label, 11.0, Anchor::Start, Paint::Muted));
+            }
+            if let Some(label) = &self.y2.label {
+                scene.shapes.push(text_shape(x1, y0 - 11.0, label.clone(), 12.0, Anchor::End, Paint::Muted));
+            }
+        }
+        let categorical = !self.categories.is_empty();
+        let n = self.categories.len().max(1);
+        let band = if horizontal { plot_h / n as f32 } else { plot_w / n as f32 };
+        let x_axis = (!categorical).then(|| {
+            let histogram = self.layers.iter().find(|l| l.mark == Mark::Histogram);
+            let xs: Vec<f64> = self.layers.iter().flat_map(|l| l.series.iter().flat_map(|s| s.xs.iter().copied())).collect();
+            let (mut xmin, mut xmax) = xs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
+            if let Some(layer) = histogram {
+                xmax = xmax.max(layer.series.first().and_then(|s| s.xs.last()).copied().unwrap_or(0.0) + layer.step);
+                if self.x.range.is_none() {
+                    return Axis::fixed(xmin, xmax, 6, false);
+                }
+            }
+            if !xmin.is_finite() {
+                xmin = 0.0;
+                xmax = 1.0;
+            }
+            let count = ((plot_w / if self.dates { 90.0 } else { 60.0 }) as usize).clamp(2, 6);
+            let mut axis = Axis::for_values(&self.x, xmin, xmax, count, false, true);
+            if whole(xs.iter().copied()) {
+                axis = axis.whole();
+            }
+            axis
+        });
+        let position = |x: f64| -> f32 {
+            match &x_axis {
+                Some(axis) => axis.place(x, x0, x1),
+                None if horizontal => y0 + (x as f32 + 0.5) * band,
+                None => x0 + (x as f32 + 0.5) * band,
+            }
+        };
+        if let Some(axis) = &x_axis {
+            let histogram = self.layers.iter().find(|l| l.mark == Mark::Histogram);
+            match histogram {
+                Some(layer) if self.x.range.is_none() => {
+                    let series = layer.series.first();
+                    let mut edges: Vec<f64> = series.map(|s| s.xs.clone()).unwrap_or_default();
+                    edges.push(axis.hi);
+                    let (labels, step) = if edges.len() <= 12 { (edges, layer.step) } else { ticks(axis.lo, axis.hi, 6) };
                     for edge in labels {
-                        shapes.push(Self::text_shape(sx(edge), y1 + 14.0, tick_label(edge, step, false), 11.0, Anchor::Middle, Paint::Muted));
+                        scene.shapes.push(text_shape(position(edge), y1 + 14.0, tick_label(edge, step, false), 11.0, Anchor::Middle, Paint::Muted));
+                    }
+                }
+                _ => {
+                    for tick in &axis.ticks {
+                        let label = axis.label(*tick, self.dates, self.x.format.as_deref());
+                        scene.shapes.push(text_shape(position(*tick), y1 + 14.0, label, 11.0, Anchor::Middle, Paint::Muted));
                     }
                 }
             }
-            Kind::Line | Kind::Scatter | Kind::Area => {
-                let xs: Vec<f64> = self.series.iter().flat_map(|s| s.xs.iter().copied()).collect();
-                let (xmin, xmax) = xs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(*x), hi.max(*x)));
-                let count = ((plot_w / if self.dates { 90.0 } else { 60.0 }) as usize).clamp(2, 6);
-                let mut x_axis = match (self.x_range, self.x_log) {
-                    (Some((lo, hi)), log) => Axis::fixed(lo, hi, count, log),
-                    (None, true) => Axis::log(xmin, xmax),
-                    (None, false) => Axis::hugging(xmin, xmax, count),
-                };
-                if whole(xs.iter().copied()) {
-                    x_axis = x_axis.whole();
-                }
-                let sx = |x: f64| x_axis.place(x, x0, x1);
-                for tick in &x_axis.ticks {
-                    let label = x_axis.label(*tick, self.dates, self.x_format.as_deref());
-                    shapes.push(Self::text_shape(sx(*tick), y1 + 14.0, label, 11.0, Anchor::Middle, Paint::Muted));
-                }
-                for v in self.vlines.iter().filter(|v| x_axis.holds(**v)) {
-                    shapes.push(Shape::Line { x1: sx(*v), y1: y0, x2: sx(*v), y2: y1, paint: Paint::Axis, width: 1.0, dashed: true });
-                }
-                let stack = self.kind == Kind::Area && multi;
-                let mut base: BTreeMap<u64, f64> = BTreeMap::new();
-                for (si, series) in self.series.iter().enumerate() {
-                    let floors: Vec<f64> = series.xs.iter().map(|x| if stack { base.get(&x.to_bits()).copied().unwrap_or(0.0) } else { baseline }).collect();
-                    let tops: Vec<f64> = series.ys.iter().zip(&floors).map(|(y, f)| y + f).collect();
-                    let points: Vec<(f32, f32)> = series.xs.iter().zip(&tops).map(|(x, y)| (sx(*x), value_at(*y))).collect();
-                    if self.kind == Kind::Area && !points.is_empty() {
-                        let mut polygon = points.clone();
-                        let mut lower: Vec<(f32, f32)> = series.xs.iter().zip(&floors).map(|(x, f)| (sx(*x), value_at(*f))).collect();
-                        lower.reverse();
-                        polygon.extend(lower);
-                        shapes.push(Shape::Polygon { points: polygon, paint: Paint::Series(si) });
-                    }
-                    if matches!(self.kind, Kind::Line | Kind::Area) && points.len() > 1 {
-                        shapes.push(Shape::Polyline { points: points.clone(), paint: Paint::Series(si), width: 2.0 });
-                    }
-                    if self.kind == Kind::Scatter || (self.kind == Kind::Line && points.len() <= 60) {
-                        let r = if self.kind == Kind::Scatter { 3.5 } else { 2.5 };
-                        for ((x, y), (px, py)) in series.xs.iter().zip(&series.ys).zip(&points) {
-                            let tip = Some(format!("{}, {}", self.x_text(*x), number(*y)));
-                            shapes.push(Shape::Circle { x: *px, y: *py, r, paint: Paint::Series(si), tip });
-                        }
-                    }
-                    if self.labels {
-                        for (y, (px, py)) in series.ys.iter().zip(&points) {
-                            shapes.push(Self::text_shape(*px, py - 9.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
-                        }
-                    }
-                    if stack {
-                        for (x, top) in series.xs.iter().zip(&tops) {
-                            base.insert(x.to_bits(), *top);
-                        }
-                    }
+        } else {
+            for (c, category) in self.categories.iter().enumerate() {
+                let center = position(c as f64);
+                if horizontal {
+                    scene.shapes.push(text_shape(x0 - 8.0, center, category.clone(), 11.0, Anchor::End, Paint::Muted));
+                } else if rotate {
+                    scene.shapes.push(Shape::Text { x: center + 4.0, y: y1 + 10.0, text: category.clone(), size: 11.0, anchor: Anchor::End, paint: Paint::Muted, bold: false, angle: -40.0 });
+                } else {
+                    scene.shapes.push(text_shape(center, y1 + 14.0, category.clone(), 11.0, Anchor::Middle, Paint::Muted));
                 }
             }
-            Kind::Pie => {}
         }
-        for v in self.hlines.iter().filter(|v| value_axis.holds(**v)) {
-            let line = if self.horizontal {
-                Shape::Line { x1: value_at(*v), y1: y0, x2: value_at(*v), y2: y1, paint: Paint::Axis, width: 1.0, dashed: true }
-            } else {
-                Shape::Line { x1: x0, y1: value_at(*v), x2: x1, y2: value_at(*v), paint: Paint::Axis, width: 1.0, dashed: true }
+        for rule in self.rules.iter().filter(|r| r.vertical) {
+            let Some(axis) = &x_axis else { continue };
+            if !axis.holds(rule.value) {
+                continue;
+            }
+            let x = position(rule.value);
+            scene.shapes.push(Shape::Line { x1: x, y1: y0, x2: x, y2: y1, paint: Paint::Axis, width: 1.0, dashed: true });
+            if let Some(label) = &rule.label {
+                scene.shapes.push(text_shape(x + 4.0, y0 + 8.0, label.clone(), 10.5, Anchor::Start, Paint::Muted));
+            }
+        }
+        for (li, layer) in self.layers.iter().enumerate() {
+            let axis = match (layer.side, &right_axis_scale) {
+                (Side::Right, Some(axis)) => axis,
+                _ => &value_axis,
             };
-            shapes.push(line);
-        }
-        shapes.push(Shape::Line { x1: x0, y1: y0, x2: x0, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
-        shapes.push(Shape::Line { x1: x0, y1, x2: x1, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
-        if multi {
-            let mut right = x1;
-            for (si, series) in self.series.iter().enumerate().rev() {
-                let name = series.name.clone().unwrap_or_default();
-                let text_w = name.chars().count() as f32 * 6.5;
-                right -= text_w;
-                shapes.push(Self::text_shape(right, y0 - 11.0, name, 11.0, Anchor::Start, Paint::Muted));
-                right -= 16.0;
-                shapes.push(Shape::Rect { x: right, y: y0 - 16.0, w: 10.0, h: 10.0, paint: Paint::Series(si), tip: None });
-                right -= 14.0;
+            let base = if axis.log { axis.lo } else { 0.0 };
+            let visible: Vec<bool> = (0..layer.series.len()).map(|si| !hidden.contains(&self.global_index(li, si))).collect();
+            let context = LayerContext { frame: &frame, band, position: &position, value_at: &|v| value_at(axis, v), baseline: base, visible: &visible, layer_index: li };
+            match layer.mark {
+                Mark::Bar | Mark::Lollipop => self.bar_shapes(&mut scene, layer, &context),
+                Mark::Box => self.box_shapes(&mut scene, layer, &context),
+                Mark::Histogram => self.histogram_shapes(&mut scene, layer, &context),
+                Mark::Line | Mark::Step | Mark::Point | Mark::Area | Mark::Density => self.path_shapes(&mut scene, layer, &context),
+                Mark::Pie | Mark::Heat => {}
             }
         }
-        Scene { width, height, shapes }
+        for rule in self.rules.iter().filter(|r| !r.vertical) {
+            if !value_axis.holds(rule.value) {
+                continue;
+            }
+            let v = value_at(&value_axis, rule.value);
+            let line = if horizontal {
+                Shape::Line { x1: v, y1: y0, x2: v, y2: y1, paint: Paint::Axis, width: 1.0, dashed: true }
+            } else {
+                Shape::Line { x1: x0, y1: v, x2: x1, y2: v, paint: Paint::Axis, width: 1.0, dashed: true }
+            };
+            scene.shapes.push(line);
+            if let Some(label) = &rule.label {
+                if horizontal {
+                    scene.shapes.push(text_shape(v + 4.0, y0 + 8.0, label.clone(), 10.5, Anchor::Start, Paint::Muted));
+                } else {
+                    scene.shapes.push(text_shape(x1 - 4.0, v - 7.0, label.clone(), 10.5, Anchor::End, Paint::Muted));
+                }
+            }
+        }
+        for note in &self.notes {
+            let px = if horizontal { value_at(&value_axis, note.y) } else { position(note.x) };
+            let py = if horizontal { position(note.x) } else { value_at(&value_axis, note.y) };
+            scene.shapes.push(Shape::Text { x: px + 6.0, y: py - 6.0, text: note.text.clone(), size: 11.0, anchor: Anchor::Start, paint: Paint::Text, bold: false, angle: 0.0 });
+            scene.shapes.push(Shape::Circle { x: px, y: py, r: 2.5, paint: Paint::Text, alpha: 1.0, tip: None });
+        }
+        self.finish_axes(&mut scene, &frame);
+        if right_axis {
+            scene.shapes.push(Shape::Line { x1, y1: y0, x2: x1, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
+        }
+        self.legend_shapes(&mut scene, &entries, legend_at, &frame, width, height, caption_room, hidden);
+        scene
     }
 
-    fn bar_shapes(
-        &self,
-        shapes: &mut Vec<Shape>,
-        (x0, x1, y0, y1): (f32, f32, f32, f32),
-        baseline: f64,
-        value_at: &dyn Fn(f64) -> f32,
-        value_text: &dyn Fn(f64) -> String,
-    ) {
+    fn finish_axes(&self, scene: &mut Scene, frame: &Frame) {
+        let Frame { x0, x1, y0, y1 } = *frame;
+        scene.shapes.push(Shape::Line { x1: x0, y1: y0, x2: x0, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
+        scene.shapes.push(Shape::Line { x1: x0, y1, x2: x1, y2: y1, paint: Paint::Axis, width: 1.0, dashed: false });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn legend_shapes(&self, scene: &mut Scene, entries: &[(usize, usize, String)], at: LegendAt, frame: &Frame, width: f32, height: f32, caption_room: f32, hidden: &[usize]) {
+        let paint_of = |li: usize, si: usize| {
+            let paint = self.paint(&self.layers[li], si);
+            if hidden.contains(&self.global_index(li, si)) { Paint::Grid } else { paint }
+        };
+        match at {
+            LegendAt::Hidden | LegendAt::Auto => {}
+            LegendAt::Top | LegendAt::Bottom => {
+                let y = if at == LegendAt::Top { frame.y0 - 11.0 } else { height - 12.0 - caption_room - if self.x.label.is_some() { 18.0 } else { 0.0 } };
+                let mut right = frame.x1;
+                for (li, si, name) in entries.iter().rev() {
+                    let text_w = name.chars().count() as f32 * 6.5;
+                    right -= text_w;
+                    scene.shapes.push(text_shape(right, y, name.clone(), 11.0, Anchor::Start, Paint::Muted));
+                    right -= 16.0;
+                    scene.shapes.push(Shape::Rect { x: right, y: y - 5.0, w: 10.0, h: 10.0, paint: paint_of(*li, *si), alpha: 1.0, tip: None });
+                    scene.legend.push(LegendEntry { x: right, y: y - 8.0, w: 16.0 + text_w, h: 16.0, series: self.global_index(*li, *si), name: name.clone() });
+                    right -= 14.0;
+                }
+            }
+            LegendAt::Right => {
+                let x = frame.x1 + 14.0 + if self.layers.iter().any(|l| l.side == Side::Right) { 46.0 } else { 0.0 };
+                let mut y = frame.y0 + 8.0;
+                for (li, si, name) in entries {
+                    scene.shapes.push(Shape::Rect { x, y: y - 5.0, w: 10.0, h: 10.0, paint: paint_of(*li, *si), alpha: 1.0, tip: None });
+                    scene.shapes.push(text_shape(x + 16.0, y, name.clone(), 11.0, Anchor::Start, Paint::Muted));
+                    scene.legend.push(LegendEntry { x, y: y - 8.0, w: width - x, h: 16.0, series: self.global_index(*li, *si), name: name.clone() });
+                    y += 18.0;
+                }
+            }
+        }
+    }
+
+    fn bar_shapes(&self, scene: &mut Scene, layer: &Layer, context: &LayerContext) {
+        let LayerContext { frame, band, position, value_at, baseline, visible, .. } = *context;
+        let Frame { x0, y0, .. } = *frame;
+        let _ = (x0, y0);
         let n = self.categories.len().max(1);
-        let group = if self.horizontal { (y1 - y0) / n as f32 } else { (x1 - x0) / n as f32 };
-        let slots = if self.stacked { 1 } else { self.series.len().max(1) };
-        let slot = group * 0.72 / slots as f32;
+        let shown: Vec<usize> = (0..layer.series.len()).filter(|i| visible[*i]).collect();
+        let slots = if layer.stacks() { 1 } else { shown.len().max(1) };
+        let slot = band * 0.72 / slots as f32;
         let mut positive = vec![baseline; n];
         let mut negative = vec![0.0f64; n];
-        for (si, series) in self.series.iter().enumerate() {
-            for (x, y) in series.xs.iter().zip(&series.ys) {
+        let value_text = |v: f64| format_tick(v, self.y.format.as_deref()).unwrap_or_else(|| number(v));
+        for (slot_index, si) in shown.iter().enumerate() {
+            let series = &layer.series[*si];
+            let paint = self.paint(layer, *si);
+            for (k, (x, y)) in series.xs.iter().zip(&series.ys).enumerate() {
                 let c = *x as usize;
-                let (from, to) = if self.stacked {
+                let (from, to) = if layer.stacks() {
                     if *y >= 0.0 {
                         let from = positive[c];
                         positive[c] += y;
@@ -875,141 +1379,310 @@ impl Plot {
                 } else {
                     (baseline, y.max(baseline).max(*y))
                 };
-                let offset = group * 0.14 + if self.stacked { 0.0 } else { si as f32 * slot };
+                let center = position(c as f64) - band / 2.0 + band * 0.14 + if layer.stacks() { slot / 2.0 } else { slot_index as f32 * slot + slot / 2.0 };
                 let category = self.categories.get(c).cloned().unwrap_or_default();
                 let tip = Some(match &series.name {
-                    Some(name) if self.series.len() > 1 => format!("{category} {name}: {}", number(*y)),
+                    Some(name) if layer.series.len() > 1 => format!("{category} {name}: {}", number(*y)),
                     _ => format!("{category}: {}", number(*y)),
                 });
                 let (a, b) = (value_at(from), value_at(to));
                 let thickness = slot.max(1.0) - 1.0;
-                if self.horizontal {
-                    let row = y0 + c as f32 * group + offset;
-                    shapes.push(Shape::Rect { x: a.min(b), y: row, w: (a - b).abs(), h: thickness, paint: Paint::Series(si), tip });
-                    if self.labels && !self.stacked {
-                        shapes.push(Self::text_shape(a.max(b) + 5.0, row + thickness / 2.0, value_text(*y), 10.5, Anchor::Start, Paint::Muted));
+                if layer.mark == Mark::Lollipop {
+                    if self.horizontal {
+                        scene.shapes.push(Shape::Line { x1: a, y1: center, x2: b, y2: center, paint, width: 2.0, dashed: false });
+                        scene.shapes.push(Shape::Circle { x: b, y: center, r: 5.0, paint, alpha: layer.opacity, tip: tip.clone() });
+                        scene.picks.push(Pick { x: b - 5.0, y: center - 5.0, w: 10.0, h: 10.0, key: category.clone() });
+                    } else {
+                        scene.shapes.push(Shape::Line { x1: center, y1: a, x2: center, y2: b, paint, width: 2.0, dashed: false });
+                        scene.shapes.push(Shape::Circle { x: center, y: b, r: 5.0, paint, alpha: layer.opacity, tip: tip.clone() });
+                        scene.picks.push(Pick { x: center - 5.0, y: b - 5.0, w: 10.0, h: 10.0, key: category.clone() });
                     }
+                } else if self.horizontal {
+                    let row = center - thickness / 2.0;
+                    scene.shapes.push(Shape::Rect { x: a.min(b), y: row, w: (a - b).abs(), h: thickness, paint, alpha: layer.opacity, tip });
+                    scene.picks.push(Pick { x: a.min(b), y: row, w: (a - b).abs(), h: thickness, key: category.clone() });
                 } else {
-                    let column = x0 + c as f32 * group + offset;
-                    shapes.push(Shape::Rect { x: column, y: a.min(b), w: thickness, h: (a - b).abs(), paint: Paint::Series(si), tip });
-                    if self.labels && !self.stacked {
-                        shapes.push(Self::text_shape(column + thickness / 2.0, a.min(b) - 8.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
+                    let column = center - thickness / 2.0;
+                    scene.shapes.push(Shape::Rect { x: column, y: a.min(b), w: thickness, h: (a - b).abs(), paint, alpha: layer.opacity, tip });
+                    scene.picks.push(Pick { x: column, y: a.min(b), w: thickness, h: (a - b).abs(), key: category.clone() });
+                }
+                if layer.labels && !layer.stacks() {
+                    if self.horizontal {
+                        scene.shapes.push(text_shape(a.max(b) + 5.0, center, value_text(*y), 10.5, Anchor::Start, Paint::Muted));
+                    } else {
+                        scene.shapes.push(text_shape(center, a.min(b) - 8.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
                     }
+                }
+                if let (Some(low), Some(high)) = (series.lows.get(k), series.highs.get(k)) {
+                    self.range_shapes(scene, center, value_at(*low), value_at(*high), Paint::Axis);
                 }
             }
         }
-        if self.labels && self.stacked {
+        if layer.labels && layer.stacks() {
             for (c, total) in positive.iter().enumerate().filter(|(_, total)| **total > baseline) {
-                let middle = group * 0.14 + slot.max(1.0) / 2.0;
+                let center = position(c as f64) - band / 2.0 + band * 0.14 + slot.max(1.0) / 2.0;
                 if self.horizontal {
-                    shapes.push(Self::text_shape(value_at(*total) + 5.0, y0 + c as f32 * group + middle, value_text(*total), 10.5, Anchor::Start, Paint::Muted));
+                    scene.shapes.push(text_shape(value_at(*total) + 5.0, center, value_text(*total), 10.5, Anchor::Start, Paint::Muted));
                 } else {
-                    shapes.push(Self::text_shape(x0 + c as f32 * group + middle, value_at(*total) - 8.0, value_text(*total), 10.5, Anchor::Middle, Paint::Muted));
+                    scene.shapes.push(text_shape(center, value_at(*total) - 8.0, value_text(*total), 10.5, Anchor::Middle, Paint::Muted));
                 }
-            }
-        }
-        for (c, category) in self.categories.iter().enumerate() {
-            if self.horizontal {
-                shapes.push(Self::text_shape(x0 - 8.0, y0 + (c as f32 + 0.5) * group, category.clone(), 11.0, Anchor::End, Paint::Muted));
-            } else {
-                shapes.push(Self::text_shape(x0 + (c as f32 + 0.5) * group, y1 + 14.0, category.clone(), 11.0, Anchor::Middle, Paint::Muted));
             }
         }
     }
 
-    fn box_shapes(&self, shapes: &mut Vec<Shape>, (x0, x1, _y0, y1): (f32, f32, f32, f32), value_at: &dyn Fn(f64) -> f32) {
-        let n = self.boxes.len().max(1);
-        let group = (x1 - x0) / n as f32;
-        let half = group * 0.25;
-        for (i, b) in self.boxes.iter().enumerate() {
-            let center = x0 + (i as f32 + 0.5) * group;
+    fn range_shapes(&self, scene: &mut Scene, center: f32, a: f32, b: f32, paint: Paint) {
+        let cap = 4.0;
+        if self.horizontal {
+            scene.shapes.push(Shape::Line { x1: a, y1: center, x2: b, y2: center, paint, width: 1.2, dashed: false });
+            scene.shapes.push(Shape::Line { x1: a, y1: center - cap, x2: a, y2: center + cap, paint, width: 1.2, dashed: false });
+            scene.shapes.push(Shape::Line { x1: b, y1: center - cap, x2: b, y2: center + cap, paint, width: 1.2, dashed: false });
+        } else {
+            scene.shapes.push(Shape::Line { x1: center, y1: a, x2: center, y2: b, paint, width: 1.2, dashed: false });
+            scene.shapes.push(Shape::Line { x1: center - cap, y1: a, x2: center + cap, y2: a, paint, width: 1.2, dashed: false });
+            scene.shapes.push(Shape::Line { x1: center - cap, y1: b, x2: center + cap, y2: b, paint, width: 1.2, dashed: false });
+        }
+    }
+
+    fn box_shapes(&self, scene: &mut Scene, layer: &Layer, context: &LayerContext) {
+        let LayerContext { frame, band, position, value_at, .. } = *context;
+        let half = band * 0.25;
+        for (i, b) in layer.boxes.iter().enumerate() {
+            let center = position(i as f64);
+            let paint = self.paint(layer, i);
             let line = |x1: f32, y1: f32, x2: f32, y2: f32| Shape::Line { x1, y1, x2, y2, paint: Paint::Axis, width: 1.5, dashed: false };
-            shapes.push(line(center, value_at(b.high), center, value_at(b.q3)));
-            shapes.push(line(center, value_at(b.q1), center, value_at(b.low)));
-            shapes.push(line(center - half / 2.0, value_at(b.high), center + half / 2.0, value_at(b.high)));
-            shapes.push(line(center - half / 2.0, value_at(b.low), center + half / 2.0, value_at(b.low)));
+            scene.shapes.push(line(center, value_at(b.high), center, value_at(b.q3)));
+            scene.shapes.push(line(center, value_at(b.q1), center, value_at(b.low)));
+            scene.shapes.push(line(center - half / 2.0, value_at(b.high), center + half / 2.0, value_at(b.high)));
+            scene.shapes.push(line(center - half / 2.0, value_at(b.low), center + half / 2.0, value_at(b.low)));
             let tip = format!("{}: {} to {}, median {}", b.label, number(b.q1), number(b.q3), number(b.median));
-            shapes.push(Shape::Rect { x: center - half, y: value_at(b.q3), w: half * 2.0, h: value_at(b.q1) - value_at(b.q3), paint: Paint::Series(i), tip: Some(tip) });
-            shapes.push(Shape::Line { x1: center - half, y1: value_at(b.median), x2: center + half, y2: value_at(b.median), paint: Paint::Text, width: 2.0, dashed: false });
+            let (top, bottom) = (value_at(b.q3), value_at(b.q1));
+            scene.shapes.push(Shape::Rect { x: center - half, y: top, w: half * 2.0, h: bottom - top, paint, alpha: layer.opacity, tip: Some(tip) });
+            scene.picks.push(Pick { x: center - half, y: top, w: half * 2.0, h: bottom - top, key: b.label.clone() });
+            scene.shapes.push(Shape::Line { x1: center - half, y1: value_at(b.median), x2: center + half, y2: value_at(b.median), paint: Paint::Text, width: 2.0, dashed: false });
             for outlier in &b.outliers {
-                shapes.push(Shape::Circle { x: center, y: value_at(*outlier), r: 3.0, paint: Paint::Series(i), tip: Some(format!("{}: {}", b.label, number(*outlier))) });
+                scene.shapes.push(Shape::Circle { x: center, y: value_at(*outlier), r: 3.0, paint, alpha: 1.0, tip: Some(format!("{}: {}", b.label, number(*outlier))) });
             }
-            shapes.push(Self::text_shape(center, y1 + 14.0, b.label.clone(), 11.0, Anchor::Middle, Paint::Muted));
+        }
+        let _ = frame;
+    }
+
+    fn histogram_shapes(&self, scene: &mut Scene, layer: &Layer, context: &LayerContext) {
+        let LayerContext { position, value_at, baseline, visible, .. } = *context;
+        let value_text = |v: f64| format_tick(v, self.y.format.as_deref()).unwrap_or_else(|| number(v));
+        for (si, series) in layer.series.iter().enumerate().filter(|(si, _)| visible[*si]) {
+            let paint = self.paint(layer, si);
+            let base = value_at(baseline);
+            for (i, (x, y)) in series.xs.iter().zip(&series.ys).enumerate() {
+                let (left, right) = (position(*x), position(x + layer.step));
+                let category = self.categories.get(i).cloned().unwrap_or_default();
+                let tip = format!("{category}: {}", number(*y));
+                let top = value_at(y.max(baseline));
+                let w = (right - left - 1.0).max(1.0);
+                scene.shapes.push(Shape::Rect { x: left + 0.5, y: top, w, h: base - top, paint, alpha: layer.opacity, tip: Some(tip) });
+                scene.picks.push(Pick { x: left + 0.5, y: top, w, h: base - top, key: category });
+                if layer.labels {
+                    scene.shapes.push(text_shape((left + right) / 2.0, top - 8.0, value_text(*y), 10.5, Anchor::Middle, Paint::Muted));
+                }
+            }
+        }
+    }
+
+    fn path_shapes(&self, scene: &mut Scene, layer: &Layer, context: &LayerContext) {
+        let LayerContext { position, value_at, baseline, visible, layer_index, .. } = *context;
+        let stack = layer.stacks();
+        let mut base: BTreeMap<u64, f64> = BTreeMap::new();
+        let max_size = layer.series.iter().flat_map(|s| s.sizes.iter().copied()).fold(0.0, f64::max);
+        let value_text = |v: f64| format_tick(v, self.y.format.as_deref()).unwrap_or_else(|| number(v));
+        for (si, series) in layer.series.iter().enumerate() {
+            if !visible[si] {
+                continue;
+            }
+            let paint = self.paint(layer, si);
+            let global = self.global_index(layer_index, si);
+            let floors: Vec<f64> = series.xs.iter().map(|x| if stack { base.get(&x.to_bits()).copied().unwrap_or(0.0) } else { baseline }).collect();
+            let tops: Vec<f64> = series.ys.iter().zip(&floors).map(|(y, f)| y + f).collect();
+            let points: Vec<(f32, f32)> = series.xs.iter().zip(&tops).map(|(x, y)| (position(*x), value_at(*y))).collect();
+            let traced: Vec<(f32, f32)> = if layer.mark == Mark::Step {
+                let mut out = Vec::with_capacity(points.len() * 2);
+                for pair in points.windows(2) {
+                    out.push(pair[0]);
+                    out.push((pair[1].0, pair[0].1));
+                }
+                if let Some(last) = points.last() {
+                    out.push(*last);
+                }
+                out
+            } else {
+                points.clone()
+            };
+            if matches!(layer.mark, Mark::Area | Mark::Density) && !points.is_empty() {
+                let mut polygon = traced.clone();
+                let mut lower: Vec<(f32, f32)> = series.xs.iter().zip(&floors).map(|(x, f)| (position(*x), value_at(*f))).collect();
+                lower.reverse();
+                polygon.extend(lower);
+                scene.shapes.push(Shape::Polygon { points: polygon, paint, alpha: 0.35 * layer.opacity, tip: None });
+            }
+            if matches!(layer.mark, Mark::Line | Mark::Step | Mark::Area | Mark::Density) && traced.len() > 1 {
+                scene.shapes.push(Shape::Polyline { points: traced.clone(), paint, width: layer.width, dashed: layer.dashed });
+            }
+            let marker = if layer.markers { MARKERS[(layer.first_color + si) % MARKERS.len()] } else { layer.marker };
+            let dots = layer.mark == Mark::Point || (matches!(layer.mark, Mark::Line | Mark::Step) && layer.dots && points.len() <= 60);
+            for (k, ((x, y), (px, py))) in series.xs.iter().zip(&series.ys).zip(&points).enumerate() {
+                let text = match &series.name {
+                    Some(name) => format!("{name}: {}", number(*y)),
+                    None => number(*y),
+                };
+                scene.samples.push(Sample { x: *px, y: *py, series: global, text: format!("{} · {text}", self.x_text(*x)) });
+                if let (Some(low), Some(high)) = (series.lows.get(k), series.highs.get(k)) {
+                    self.range_shapes(scene, *px, value_at(*low), value_at(*high), paint);
+                }
+                if dots {
+                    let r = match series.sizes.get(k) {
+                        Some(size) if max_size > 0.0 => 3.0 + 15.0 * (size / max_size).sqrt() as f32,
+                        _ if layer.mark == Mark::Point => 3.5,
+                        _ => 2.5,
+                    };
+                    let tip = Some(match series.texts.get(k) {
+                        Some(label) => format!("{label}: {}, {}", self.x_text(*x), number(*y)),
+                        None => format!("{}, {}", self.x_text(*x), number(*y)),
+                    });
+                    scene.shapes.push(marker_shape(marker, *px, *py, r, paint, layer.opacity, tip));
+                    let key = series.texts.get(k).cloned().unwrap_or_else(|| self.x_text(*x));
+                    scene.picks.push(Pick { x: px - r, y: py - r, w: 2.0 * r, h: 2.0 * r, key });
+                }
+                if layer.labels {
+                    let label = series.texts.get(k).cloned().unwrap_or_else(|| value_text(*y));
+                    scene.shapes.push(text_shape(*px, py - 9.0, label, 10.5, Anchor::Middle, Paint::Muted));
+                }
+            }
+            if stack {
+                for (x, top) in series.xs.iter().zip(&tops) {
+                    base.insert(x.to_bits(), *top);
+                }
+            }
+        }
+    }
+
+    fn heat_shapes(&self, scene: &mut Scene, frame: &Frame) {
+        let Frame { x0, x1, y0, y1 } = *frame;
+        let Some(layer) = self.layers.iter().find(|l| l.mark == Mark::Heat) else { return };
+        let Some(series) = layer.series.first() else { return };
+        let cols = self.categories.len().max(1);
+        let rows = layer.bands.len().max(1);
+        let (cell_w, cell_h) = ((x1 - x0) / cols as f32, (y1 - y0) / rows as f32);
+        let (lo, hi) = series.sizes.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+        for ((x, y), value) in series.xs.iter().zip(&series.ys).zip(&series.sizes) {
+            let (c, r) = (*x as usize, *y as usize);
+            let t = if hi > lo { ((value - lo) / (hi - lo)) as f32 } else { 0.5 };
+            let px = x0 + c as f32 * cell_w;
+            let py = y0 + r as f32 * cell_h;
+            let tip = format!("{} × {}: {}", self.categories.get(c).cloned().unwrap_or_default(), layer.bands.get(r).cloned().unwrap_or_default(), number(*value));
+            scene.shapes.push(Shape::Rect { x: px + 0.5, y: py + 0.5, w: (cell_w - 1.0).max(1.0), h: (cell_h - 1.0).max(1.0), paint: Paint::Heat(t), alpha: 1.0, tip: Some(tip) });
+            scene.picks.push(Pick { x: px, y: py, w: cell_w, h: cell_h, key: self.categories.get(c).cloned().unwrap_or_default() });
+            if layer.labels || cell_w > 48.0 {
+                let paint = if t > 0.55 { Paint::Rgb(Rgb(255, 255, 255)) } else { Paint::Text };
+                scene.shapes.push(text_shape(px + cell_w / 2.0, py + cell_h / 2.0, number(*value), 10.5, Anchor::Middle, paint));
+            }
+        }
+        for (c, category) in self.categories.iter().enumerate() {
+            scene.shapes.push(text_shape(x0 + (c as f32 + 0.5) * cell_w, y1 + 14.0, category.clone(), 11.0, Anchor::Middle, Paint::Muted));
+        }
+        for (r, band) in layer.bands.iter().enumerate() {
+            scene.shapes.push(text_shape(x0 - 8.0, y0 + (r as f32 + 0.5) * cell_h, band.clone(), 11.0, Anchor::End, Paint::Muted));
         }
     }
 
     fn pie_scene(&self, width: f32, height: f32) -> Scene {
-        let mut shapes = Vec::new();
+        let mut scene = Scene { width, height, ..Scene::default() };
         let top = 16.0 + if self.title.is_some() { 24.0 } else { 0.0 };
         if let Some(title) = &self.title {
-            shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true });
+            scene.shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true, angle: 0.0 });
         }
-        let Some(series) = self.series.first() else { return Scene { width, height, shapes } };
+        let Some(layer) = self.layers.first() else { return scene };
+        let Some(series) = layer.series.first() else { return scene };
         let total: f64 = series.ys.iter().sum();
         let (cx, cy) = (width * 0.4, top + (height - top) / 2.0);
         let r = ((height - top) / 2.0 - 28.0).min(width * 0.24).max(10.0);
-        let inner = if self.donut { r * 0.55 } else { 0.0 };
+        let inner = if layer.donut { r * 0.55 } else { 0.0 };
         let mut angle = -FRAC_PI_2;
         for (i, (x, y)) in series.xs.iter().zip(&series.ys).enumerate() {
             let sweep = if total > 0.0 { (y / total) as f32 * TAU } else { 0.0 };
             let label = self.categories.get(*x as usize).cloned().unwrap_or_default();
             let share = if total > 0.0 { (y / total * 100.0).round() } else { 0.0 };
             let tip = format!("{label}: {} ({share}%)", number(*y));
-            shapes.push(Shape::Arc { cx, cy, r, inner, start: angle, end: angle + sweep, paint: Paint::Series(i), tip: Some(tip) });
+            scene.shapes.push(Shape::Arc { cx, cy, r, inner, start: angle, end: angle + sweep, paint: self.paint(layer, i), tip: Some(tip) });
             let mid = angle + sweep / 2.0;
             let (lx, ly) = (cx + (r + 14.0) * mid.cos(), cy + (r + 14.0) * mid.sin());
             let anchor = if mid.cos() >= 0.0 { Anchor::Start } else { Anchor::End };
-            shapes.push(Self::text_shape(lx, ly, format!("{label} {share}%"), 11.0, anchor, Paint::Muted));
+            scene.shapes.push(text_shape(lx, ly, format!("{label} {share}%"), 11.0, anchor, Paint::Muted));
             angle += sweep;
         }
-        Scene { width, height, shapes }
+        scene
     }
 
     pub fn svg(&self) -> String {
-        let scene = self.scene(640.0, 400.0);
-        let color = |paint: &Paint| match paint {
-            Paint::Series(i) => SERIES_COLORS[i % SERIES_COLORS.len()],
-            Paint::Axis => "#56637a",
-            Paint::Grid => "#e3e7ee",
-            Paint::Text => "#1a2230",
-            Paint::Muted => "#66728a",
+        self.svg_sized(640.0, 400.0, false)
+    }
+
+    pub fn svg_sized(&self, width: f32, height: f32, dark: bool) -> String {
+        let scene = self.scene(width, height);
+        let series_colors: Vec<Rgb> = SERIES_COLORS.iter().filter_map(|h| Rgb::parse(h)).collect();
+        let (axis, grid, text, muted, back) = if dark { ("#8a94a6", "#2a313d", "#e6e9ef", "#9aa3b2", "#161a21") } else { ("#56637a", "#e3e7ee", "#1a2230", "#66728a", "#ffffff") };
+        let heat_lo = if dark { Rgb(30, 42, 48) } else { Rgb(232, 241, 243) };
+        let heat_hi = Rgb(8, 63, 69);
+        let color = |paint: &Paint| -> String {
+            match paint {
+                Paint::Series(i) => series_colors[i % series_colors.len()].hex(),
+                Paint::Rgb(rgb) => rgb.hex(),
+                Paint::Heat(t) => heat_lo.mix(heat_hi, *t).hex(),
+                Paint::Axis => axis.to_string(),
+                Paint::Grid => grid.to_string(),
+                Paint::Text => text.to_string(),
+                Paint::Muted => muted.to_string(),
+            }
         };
         let mut out = format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\" font-family=\"sans-serif\">\n",
             w = scene.width,
             h = scene.height
         );
+        if dark {
+            let _ = writeln!(out, "<rect width=\"{}\" height=\"{}\" fill=\"{back}\"/>", scene.width, scene.height);
+        }
+        let opacity = |alpha: f32| if alpha < 1.0 { format!(" fill-opacity=\"{alpha:.2}\"") } else { String::new() };
         for shape in &scene.shapes {
             match shape {
-                Shape::Rect { x, y, w, h, paint, .. } => {
-                    let _ = writeln!(out, "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{w:.1}\" height=\"{h:.1}\" fill=\"{}\"/>", color(paint));
+                Shape::Rect { x, y, w, h, paint, alpha, .. } => {
+                    let _ = writeln!(out, "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{w:.1}\" height=\"{h:.1}\" fill=\"{}\"{}/>", color(paint), opacity(*alpha));
                 }
                 Shape::Line { x1, y1, x2, y2, paint, width, dashed } => {
                     let dash = if *dashed { " stroke-dasharray=\"4 3\"" } else { "" };
                     let _ = writeln!(out, "<line x1=\"{x1:.1}\" y1=\"{y1:.1}\" x2=\"{x2:.1}\" y2=\"{y2:.1}\" stroke=\"{}\" stroke-width=\"{width}\"{dash}/>", color(paint));
                 }
-                Shape::Polyline { points, paint, width } => {
-                    let _ = writeln!(out, "<polyline points=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{width}\"/>", points_attr(points), color(paint));
+                Shape::Polyline { points, paint, width, dashed } => {
+                    let dash = if *dashed { " stroke-dasharray=\"6 4\"" } else { "" };
+                    let _ = writeln!(out, "<polyline points=\"{}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{width}\"{dash}/>", points_attr(points), color(paint));
                 }
-                Shape::Polygon { points, paint } => {
-                    let _ = writeln!(out, "<polygon points=\"{}\" fill=\"{}\" fill-opacity=\"0.35\"/>", points_attr(points), color(paint));
+                Shape::Polygon { points, paint, alpha, .. } => {
+                    let _ = writeln!(out, "<polygon points=\"{}\" fill=\"{}\"{}/>", points_attr(points), color(paint), opacity(*alpha));
                 }
-                Shape::Circle { x, y, r, paint, .. } => {
-                    let _ = writeln!(out, "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"{r}\" fill=\"{}\"/>", color(paint));
+                Shape::Circle { x, y, r, paint, alpha, .. } => {
+                    let _ = writeln!(out, "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"{r}\" fill=\"{}\"{}/>", color(paint), opacity(*alpha));
                 }
                 Shape::Arc { cx, cy, r, inner, start, end, paint, .. } => {
                     let _ = writeln!(out, "<path d=\"{}\" fill=\"{}\"/>", arc_path(*cx, *cy, *r, *inner, *start, *end), color(paint));
                 }
-                Shape::Text { x, y, text, size, anchor, paint, bold } => {
+                Shape::Text { x, y, text, size, anchor, paint, bold, angle } => {
                     let anchor = match anchor {
                         Anchor::Start => "start",
                         Anchor::Middle => "middle",
                         Anchor::End => "end",
                     };
                     let weight = if *bold { " font-weight=\"bold\"" } else { "" };
+                    let rotate = if *angle != 0.0 { format!(" transform=\"rotate({angle:.0} {x:.1} {y:.1})\"") } else { String::new() };
                     let _ = writeln!(
                         out,
-                        "<text x=\"{x:.1}\" y=\"{y:.1}\" text-anchor=\"{anchor}\" dominant-baseline=\"middle\" font-size=\"{size}\" fill=\"{}\"{weight}>{}</text>",
+                        "<text x=\"{x:.1}\" y=\"{y:.1}\" text-anchor=\"{anchor}\" dominant-baseline=\"middle\" font-size=\"{size}\" fill=\"{}\"{weight}{rotate}>{}</text>",
                         color(paint),
                         escape(text)
                     );
@@ -1020,6 +1693,24 @@ impl Plot {
         out
     }
 }
+
+struct LayerContext<'a> {
+    frame: &'a Frame,
+    band: f32,
+    position: &'a dyn Fn(f64) -> f32,
+    value_at: &'a dyn Fn(f64) -> f32,
+    baseline: f64,
+    visible: &'a [bool],
+    layer_index: usize,
+}
+
+impl Clone for LayerContext<'_> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl Copy for LayerContext<'_> {}
 
 fn points_attr(points: &[(f32, f32)]) -> String {
     points.iter().map(|(x, y)| format!("{x:.1},{y:.1}")).collect::<Vec<_>>().join(" ")
@@ -1079,6 +1770,26 @@ fn segment((c0, r0): (usize, usize), (c1, r1): (usize, usize)) -> Vec<(usize, us
 mod tests {
     use super::*;
 
+    fn bars(categories: &[&str], values: &[f64]) -> Plot {
+        let mut plot = Plot::new();
+        plot.categories = categories.iter().map(|c| c.to_string()).collect();
+        let mut layer = Layer::new(Mark::Bar);
+        layer.series = vec![Series::new(None, (0..values.len()).map(|i| i as f64).collect(), values.to_vec())];
+        plot.layers.push(layer);
+        plot
+    }
+
+    fn rects(scene: &Scene) -> Vec<(f32, f32, f32, f32)> {
+        scene
+            .shapes
+            .iter()
+            .filter_map(|s| match s {
+                Shape::Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn ticks_land_on_round_numbers() {
         assert_eq!(ticks(0.0, 42.0, 5), (vec![0.0, 10.0, 20.0, 30.0, 40.0, 50.0], 10.0));
@@ -1088,27 +1799,26 @@ mod tests {
         assert_eq!(ticks(5.0, 5.0, 5), (vec![5.0], 1.0));
         assert_eq!(tick_label(19723.0, 10.0, true), "2024-01-01");
         assert_eq!(ticks(-3.0, 3.0, 4).0, [-4.0, -2.0, 0.0, 2.0, 4.0]);
+        assert_eq!([compact(950.0), compact(1500.0), compact(2_000_000.0), compact(3.26e9), compact(120_000.0)], ["950", "1.5K", "2M", "3.3B", "120K"]);
     }
 
     #[test]
     fn histograms_bin_values_and_clamp_the_maximum() {
         let plot = histogram(&[1.0, 2.0, 2.0, 3.0, 3.0, 3.0, 9.0], 4);
-        assert_eq!(plot.series[0].ys, [3.0, 3.0, 0.0, 1.0]);
-        assert_eq!(plot.series[0].xs, [1.0, 3.0, 5.0, 7.0]);
+        assert_eq!(plot.layers[0].series[0].ys, [3.0, 3.0, 0.0, 1.0]);
+        assert_eq!(plot.layers[0].series[0].xs, [1.0, 3.0, 5.0, 7.0]);
         assert_eq!(plot.categories, ["1–3", "3–5", "5–7", "7–9"]);
         assert_eq!(plot.describe(), "histogram with 4 bins");
-        assert_eq!(histogram(&[2.0, 2.0], 3).series[0].ys, [2.0, 0.0, 0.0]);
-        assert_eq!(histogram(&[], 2).series[0].ys, [0.0, 0.0]);
+        assert_eq!(histogram(&[2.0, 2.0], 3).layers[0].series[0].ys, [2.0, 0.0, 0.0]);
+        assert_eq!(histogram(&[], 2).layers[0].series[0].ys, [0.0, 0.0]);
     }
 
     #[test]
     fn facet_grids_fit_the_space_they_are_given() {
-        let mut plot = Plot::new(Kind::Bar);
+        let mut plot = Plot::new();
         for title in ["a", "b", "c"] {
-            let mut panel = Plot::new(Kind::Bar);
+            let mut panel = bars(&["x"], &[1.0]);
             panel.title = Some(title.into());
-            panel.categories = vec!["x".into()];
-            panel.series = vec![Series { name: None, xs: vec![0.0], ys: vec![1.0] }];
             plot.panels.push(panel);
         }
         let title_ys = |plot: &Plot, width: f32, height: f32| -> Vec<f32> {
@@ -1127,13 +1837,13 @@ mod tests {
         assert_eq!(title_ys(&plot, 480.0, 220.0).len(), 1);
         assert_eq!(title_ys(&plot, 640.0, 400.0).len(), 2);
         assert_eq!(title_ys(&plot, 400.0, 900.0).len(), 3);
+        plot.columns = Some(1);
+        assert_eq!(title_ys(&plot, 640.0, 400.0).len(), 3, "explicit columns win");
     }
 
     #[test]
     fn scenes_place_bars_within_the_plot_area() {
-        let mut plot = Plot::new(Kind::Bar);
-        plot.categories = vec!["a".into(), "b".into()];
-        plot.series = vec![Series { name: None, xs: vec![0.0, 1.0], ys: vec![1.0, 2.0] }];
+        let plot = bars(&["a", "b"], &[1.0, 2.0]);
         let scene = plot.scene(640.0, 400.0);
         let rects: Vec<&Shape> = scene.shapes.iter().filter(|s| matches!(s, Shape::Rect { .. })).collect();
         assert_eq!(rects.len(), 2);
@@ -1142,44 +1852,35 @@ mod tests {
         let Shape::Rect { h: short, .. } = rects[0] else { unreachable!() };
         assert!((h / short - 2.0).abs() < 0.01);
         assert_eq!(plot.describe(), "bar chart with 2 bars");
+        assert_eq!(scene.picks.len(), 2);
+        assert_eq!(scene.picks[0].key, "a");
         let svg = plot.svg();
         assert!(svg.starts_with("<svg xmlns") && svg.ends_with("</svg>\n"));
         assert_eq!(escape("a<b&c"), "a&lt;b&amp;c");
-    }
-
-    fn rects(scene: &Scene) -> Vec<(f32, f32, f32, f32)> {
-        scene
-            .shapes
-            .iter()
-            .filter_map(|s| match s {
-                Shape::Rect { x, y, w, h, .. } => Some((*x, *y, *w, *h)),
-                _ => None,
-            })
-            .collect()
+        assert!(plot.svg_sized(200.0, 100.0, true).contains("fill=\"#161a21\""));
     }
 
     #[test]
     fn stacked_bars_sit_on_top_of_each_other() {
-        let mut plot = Plot::new(Kind::Bar);
-        plot.categories = vec!["a".into()];
-        plot.series = vec![
-            Series { name: Some("x".into()), xs: vec![0.0], ys: vec![1.0] },
-            Series { name: Some("y".into()), xs: vec![0.0], ys: vec![2.0] },
-        ];
-        plot.stacked = true;
+        let mut plot = bars(&["a"], &[1.0]);
+        plot.layers[0].series.push(Series::new(Some("y".into()), vec![0.0], vec![2.0]));
+        plot.layers[0].series[0].name = Some("x".into());
+        plot.layers[0].stacked = true;
         let bars: Vec<_> = rects(&plot.scene(640.0, 400.0)).into_iter().filter(|r| r.2 > 20.0).collect();
         assert_eq!(bars.len(), 2);
         let (first, second) = (bars[0], bars[1]);
         assert!((first.0 - second.0).abs() < 0.01 && (first.2 - second.2).abs() < 0.01, "{bars:?}");
         assert!(((second.1 + second.3) - first.1).abs() < 0.6, "{bars:?}");
         assert!((second.3 / first.3 - 2.0).abs() < 0.05, "{bars:?}");
+        let scene = plot.scene(640.0, 400.0);
+        assert_eq!(scene.legend.len(), 2);
+        let hidden = plot.scene_hiding(640.0, 400.0, &[1]);
+        assert_eq!(rects(&hidden).into_iter().filter(|r| r.2 > 20.0).count(), 1, "a hidden series draws nothing");
     }
 
     #[test]
     fn horizontal_bars_grow_along_x() {
-        let mut plot = Plot::new(Kind::Bar);
-        plot.categories = vec!["a".into(), "b".into()];
-        plot.series = vec![Series { name: None, xs: vec![0.0, 1.0], ys: vec![1.0, 2.0] }];
+        let mut plot = bars(&["a", "b"], &[1.0, 2.0]);
         plot.horizontal = true;
         let bars = rects(&plot.scene(640.0, 400.0));
         assert_eq!(bars.len(), 2);
@@ -1199,9 +1900,8 @@ mod tests {
 
     #[test]
     fn pie_wedges_cover_the_whole_circle() {
-        let mut plot = Plot::new(Kind::Pie);
-        plot.categories = vec!["a".into(), "b".into(), "c".into()];
-        plot.series = vec![Series { name: None, xs: vec![0.0, 1.0, 2.0], ys: vec![1.0, 1.0, 2.0] }];
+        let mut plot = bars(&["a", "b", "c"], &[1.0, 1.0, 2.0]);
+        plot.layers[0].mark = Mark::Pie;
         let scene = plot.scene(640.0, 400.0);
         let sweep: f32 = scene
             .shapes
@@ -1216,9 +1916,11 @@ mod tests {
     }
 
     #[test]
-    fn area_polygons_close_on_the_baseline() {
-        let mut plot = Plot::new(Kind::Area);
-        plot.series = vec![Series { name: None, xs: vec![1.0, 2.0, 3.0], ys: vec![1.0, 4.0, 2.0] }];
+    fn area_polygons_close_on_the_baseline_and_steps_stair() {
+        let mut plot = Plot::new();
+        let mut layer = Layer::new(Mark::Area);
+        layer.series = vec![Series::new(None, vec![1.0, 2.0, 3.0], vec![1.0, 4.0, 2.0])];
+        plot.layers.push(layer);
         let scene = plot.scene(640.0, 400.0);
         let polygon = scene.shapes.iter().find_map(|s| match s {
             Shape::Polygon { points, .. } => Some(points.clone()),
@@ -1227,6 +1929,82 @@ mod tests {
         let points = polygon.expect("an area polygon");
         assert_eq!(points.len(), 6);
         assert!((points[3].1 - points[5].1).abs() < 0.01, "{points:?}");
+        plot.layers[0].mark = Mark::Step;
+        let steps = plot.scene(640.0, 400.0).shapes.iter().find_map(|s| match s {
+            Shape::Polyline { points, .. } => Some(points.clone()),
+            _ => None,
+        });
+        assert_eq!(steps.expect("a step line").len(), 5);
+        assert_eq!(plot.scene(640.0, 400.0).samples.len(), 3);
+    }
+
+    #[test]
+    fn layers_share_scales_and_a_right_axis() {
+        let mut plot = bars(&["a", "b"], &[10.0, 20.0]);
+        plot.layers[0].series[0].name = Some("units".into());
+        let mut line = Layer::new(Mark::Line);
+        line.series = vec![Series::new(Some("share".into()), vec![0.0, 1.0], vec![0.25, 0.75])];
+        line.side = Side::Right;
+        line.first_color = 1;
+        plot.layers.push(line);
+        plot.y2.format = Some("{:.0%}".into());
+        let svg = plot.svg();
+        assert!(svg.contains("%<") && svg.contains(">20<"), "{svg}");
+        assert_eq!(svg.matches("<polyline").count(), 1);
+        assert_eq!(plot.describe(), "bar chart with 2 bars and 1 more layer");
+        let scene = plot.scene(640.0, 400.0);
+        let mut listed: Vec<usize> = scene.legend.iter().map(|e| e.series).collect();
+        listed.sort_unstable();
+        assert_eq!(listed, [0, 1]);
+        assert!(scene.samples.iter().all(|s| s.series == 1));
+    }
+
+    #[test]
+    fn density_and_fits_are_smooth_and_linear() {
+        let series = density(&[1.0, 2.0, 3.0], None, 50);
+        assert_eq!(series.xs.len(), 50);
+        let area: f64 = series.ys.iter().sum::<f64>() * (series.xs[1] - series.xs[0]);
+        assert!((area - 1.0).abs() < 0.05, "{area}");
+        assert_eq!(linear_fit(&[1.0, 2.0, 3.0], &[2.0, 4.0, 6.0]), Some((2.0, 0.0)));
+        assert_eq!(linear_fit(&[1.0], &[2.0]), None);
+        assert_eq!(rolling_mean(&[1.0, 3.0, 5.0, 7.0], 2), [1.0, 2.0, 4.0, 6.0]);
+    }
+
+    #[test]
+    fn colors_parse_and_palettes_paint_series() {
+        assert_eq!(Rgb::parse("#0f7b86"), Some(Rgb(15, 123, 134)));
+        assert_eq!(Rgb::parse("#fff"), Some(Rgb(255, 255, 255)));
+        assert_eq!(Rgb::parse("teal"), None);
+        assert_eq!(Rgb(0, 0, 0).mix(Rgb(255, 255, 255), 0.5).hex(), "#808080");
+        assert_eq!(named_palette("warm").map(|p| p.len()), Some(6));
+        let mut plot = bars(&["a", "b"], &[1.0, 2.0]);
+        plot.palette = vec![Rgb(1, 2, 3)];
+        assert!(plot.svg().contains("fill=\"#010203\""));
+        plot.layers[0].color = Some(Rgb(9, 9, 9));
+        assert!(plot.svg().contains("fill=\"#090909\""));
+    }
+
+    #[test]
+    fn long_category_labels_turn_and_heatmaps_tile() {
+        let names: Vec<String> = (0..12).map(|i| format!("category number {i}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+        let plot = bars(&refs, &[1.0; 12]);
+        let angled = plot.scene(640.0, 400.0).shapes.iter().filter(|s| matches!(s, Shape::Text { angle, .. } if *angle != 0.0)).count();
+        assert_eq!(angled, 12);
+        assert!(plot.svg().contains("rotate(-40"));
+        let mut heat = Plot::new();
+        heat.categories = vec!["x".into(), "y".into()];
+        let mut layer = Layer::new(Mark::Heat);
+        layer.bands = vec!["p".into(), "q".into()];
+        let mut series = Series::new(None, vec![0.0, 1.0, 0.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]);
+        series.sizes = vec![1.0, 2.0, 3.0, 4.0];
+        layer.series = vec![series];
+        heat.layers.push(layer);
+        let scene = heat.scene(640.0, 400.0);
+        assert_eq!(rects(&scene).len(), 4);
+        assert!(scene.shapes.iter().any(|s| matches!(s, Shape::Rect { paint: Paint::Heat(t), .. } if (*t - 1.0).abs() < 0.001)));
+        assert!(heat.text().contains("q") && heat.text().contains("4"));
+        assert_eq!(heat.describe(), "heatmap with 4 cells");
     }
 
     #[test]
@@ -1241,6 +2019,7 @@ mod tests {
         assert_eq!(format_tick(1234567.0, Some("{:,}")), Some("1,234,567".to_string()));
         assert_eq!(format_tick(0.5, Some("{:.0%}")), Some("50%".to_string()));
         assert_eq!(format_tick(2.5, Some("{:z}")), None);
+        assert_eq!(format_tick(2500.0, Some("compact")), Some("2.5K".to_string()));
     }
 
     #[test]
