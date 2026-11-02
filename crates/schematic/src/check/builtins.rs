@@ -270,6 +270,10 @@ fn build() -> HashMap<&'static str, Builtin> {
 
     add("read-csv", vec![Type::Str, map(any(), any())], None, Type::Table, false);
     add("write-csv", vec![Type::Table, Type::Str, map(any(), any())], None, any(), false);
+    add("parse-json", vec![Type::Str, map(any(), any())], None, any(), false);
+    add("to-json", vec![any(), map(any(), any())], None, Type::Str, false);
+    add("read-json", vec![Type::Str, map(any(), any())], None, any(), false);
+    add("write-json", vec![any(), Type::Str, map(any(), any())], None, any(), false);
     add("parse-csv", vec![Type::Str, map(any(), any())], None, Type::Table, false);
     add("to-csv", vec![Type::Table, map(any(), any())], None, Type::Str, false);
     for name in ["print", "println", "prn"] {

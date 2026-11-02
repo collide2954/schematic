@@ -263,6 +263,8 @@ array of strings, so a text column turns into a date column in one call.
 |---|---|
 | `(read-csv path [{:sep ";"}])`, `(write-csv t path [opts])` | files; types are inferred per column, ISO dates included, and empty fields are missing |
 | `(parse-csv text [opts])`, `(to-csv t [opts])` | the same for strings |
+| `(parse-json text [{:keys :strings}])`, `(to-json v [{:pretty true}])` | JSON text to and from values: objects become maps with keyword keys (string keys with `:keys :strings`), arrays become vectors, `null` is `nil`; maps, vectors, lists, sets, arrays, dates, and tables (as arrays of objects) encode |
+| `(read-json path [opts])`, `(write-json v path [opts])` | the same through files |
 | `(print x...)`, `(println x...)` | human-readable output, strings without quotes |
 | `(prn x...)` | output in readable form, strings quoted |
 | `(printf template x...)` | print `(format template x...)` as is, with no newline added |

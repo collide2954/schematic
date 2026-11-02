@@ -11,6 +11,7 @@ mod dates;
 pub mod functional;
 mod help;
 mod io;
+mod json;
 pub mod math;
 pub mod namespaces;
 mod plots;
@@ -31,6 +32,7 @@ pub fn install(globals: &mut Globals) {
     stats::install(globals);
     tables::install(globals);
     csv::install(globals);
+    json::install(globals);
     plots::install(globals);
     help::install(globals);
     namespaces::install(globals);

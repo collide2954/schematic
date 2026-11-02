@@ -10,6 +10,7 @@ pub mod expander;
 pub mod fetch;
 pub mod hash;
 mod interpreter;
+pub mod json;
 pub mod license;
 pub mod list;
 pub mod macros;
