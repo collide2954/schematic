@@ -358,7 +358,79 @@ const BAR_WIDTH: usize = 40;
 const GRID_W: usize = 40;
 const GRID_H: usize = 10;
 const MARKS: [char; 4] = ['•', '○', '▪', '▫'];
+const EIGHTHS: [char; 7] = ['▏', '▎', '▍', '▌', '▋', '▊', '▉'];
 const CHAR_W: f32 = 6.2;
+
+#[derive(Clone, Copy)]
+struct TextStyle {
+    fine: bool,
+    color: bool,
+}
+
+impl TextStyle {
+    const PLAIN: TextStyle = TextStyle { fine: false, color: false };
+
+    fn tint(self, rgb: Option<Rgb>, text: &str) -> String {
+        match rgb {
+            Some(Rgb(r, g, b)) if self.color && !text.is_empty() => format!("\x1b[38;2;{r};{g};{b}m{text}\x1b[0m"),
+            _ => text.to_string(),
+        }
+    }
+
+    fn shade(self, back: Rgb, text: &str) -> String {
+        if !self.color {
+            return text.to_string();
+        }
+        let Rgb(r, g, b) = back;
+        let ink = if (r as u32 + g as u32 + b as u32) < 330 { "255;255;255" } else { "26;34;48" };
+        format!("\x1b[48;2;{r};{g};{b}m\x1b[38;2;{ink}m{text}\x1b[0m")
+    }
+}
+
+fn rgb_of(paint: &Paint) -> Option<Rgb> {
+    match paint {
+        Paint::Series(i) => Rgb::parse(SERIES_COLORS[i % SERIES_COLORS.len()]),
+        Paint::Rgb(rgb) => Some(*rgb),
+        _ => None,
+    }
+}
+
+fn bar_glyphs(share: f64, fine: bool) -> String {
+    if !fine {
+        return "█".repeat((share * BAR_WIDTH as f64).round() as usize);
+    }
+    let eighths = (share * BAR_WIDTH as f64 * 8.0).round() as usize;
+    let mut out = "█".repeat(eighths / 8);
+    if !eighths.is_multiple_of(8) {
+        out.push(EIGHTHS[eighths % 8 - 1]);
+    }
+    out
+}
+
+fn braille_bit(column: usize, row: usize) -> u8 {
+    match (column % 2, row % 4) {
+        (0, 0) => 0x01,
+        (0, 1) => 0x02,
+        (0, 2) => 0x04,
+        (0, _) => 0x40,
+        (_, 0) => 0x08,
+        (_, 1) => 0x10,
+        (_, 2) => 0x20,
+        _ => 0x80,
+    }
+}
+
+fn traced_cells(mark: Mark, cells: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for pair in cells.windows(2) {
+        out.push(pair[0]);
+        if mark == Mark::Step {
+            out.push((pair[1].0, pair[0].1));
+        }
+    }
+    out.extend(cells.last().copied());
+    out
+}
 
 pub fn number(x: f64) -> String {
     if x.fract() == 0.0 && x.abs() < 1e15 { format!("{}", x as i64) } else { format!("{x}") }
@@ -814,13 +886,21 @@ impl Plot {
     }
 
     pub fn text(&self) -> String {
+        self.styled_text(TextStyle::PLAIN)
+    }
+
+    pub fn terminal_text(&self, color: bool) -> String {
+        self.styled_text(TextStyle { fine: true, color })
+    }
+
+    fn styled_text(&self, style: TextStyle) -> String {
         let mut out = String::new();
         if let Some(title) = &self.title {
             out.push_str(title);
             out.push('\n');
         }
         if self.panels.is_empty() {
-            self.body_text(&mut out);
+            self.body_text(&mut out, style);
             return out;
         }
         for (i, panel) in self.panels.iter().enumerate() {
@@ -828,12 +908,12 @@ impl Plot {
                 out.push_str("\n\n");
             }
             let _ = writeln!(out, "── {} ──", panel.title.clone().unwrap_or_default());
-            panel.body_text(&mut out);
+            panel.body_text(&mut out, style);
         }
         out
     }
 
-    fn body_text(&self, out: &mut String) {
+    fn body_text(&self, out: &mut String, style: TextStyle) {
         let mut grid_layers: Vec<&Layer> = Vec::new();
         let mut first = true;
         for layer in &self.layers {
@@ -849,10 +929,10 @@ impl Plot {
             }
             first = false;
             match layer.mark {
-                Mark::Bar | Mark::Histogram | Mark::Lollipop => self.text_bars(layer, out),
-                Mark::Pie => self.text_pie(layer, out),
+                Mark::Bar | Mark::Histogram | Mark::Lollipop => self.text_bars(layer, out, style),
+                Mark::Pie => self.text_pie(layer, out, style),
                 Mark::Box => Self::text_boxes(layer, out),
-                Mark::Heat => self.text_heat(layer, out),
+                Mark::Heat => self.text_heat(layer, out, style),
                 _ => {}
             }
         }
@@ -860,70 +940,73 @@ impl Plot {
             if !first {
                 out.push('\n');
             }
-            self.text_grid(&grid_layers, out);
+            self.text_grid(&grid_layers, out, style);
         }
     }
 
-    fn bar_rows(&self, layer: &Layer) -> Vec<(String, f64)> {
+    fn bar_rows(&self, layer: &Layer) -> Vec<(String, f64, usize)> {
         let multi = layer.series.len() > 1;
         let mut rows = Vec::new();
         if layer.mark == Mark::Histogram {
-            for series in &layer.series {
+            for (si, series) in layer.series.iter().enumerate() {
                 for (i, y) in series.ys.iter().enumerate() {
-                    rows.push((self.categories.get(i).cloned().unwrap_or_default(), *y));
+                    rows.push((self.categories.get(i).cloned().unwrap_or_default(), *y, si));
                 }
             }
             return rows;
         }
         for (c, category) in self.categories.iter().enumerate() {
-            for series in &layer.series {
+            for (si, series) in layer.series.iter().enumerate() {
                 let Some(i) = series.xs.iter().position(|x| *x as usize == c) else { continue };
                 let label = match (&series.name, multi) {
                     (Some(name), true) => format!("{category} {name}"),
                     _ => category.clone(),
                 };
-                rows.push((label, series.ys[i]));
+                rows.push((label, series.ys[i], si));
             }
         }
         rows
     }
 
-    fn write_bars(out: &mut String, rows: &[(String, f64, String)]) {
-        let width = rows.iter().map(|(label, _, _)| label.chars().count()).max().unwrap_or(0);
-        let max = rows.iter().map(|(_, v, _)| v.abs()).fold(0.0, f64::max);
-        for (i, (label, value, suffix)) in rows.iter().enumerate() {
+    fn write_bars(&self, layer: &Layer, out: &mut String, rows: &[(String, f64, String, usize)], style: TextStyle) {
+        let width = rows.iter().map(|(label, ..)| label.chars().count()).max().unwrap_or(0);
+        let max = rows.iter().map(|(_, v, ..)| v.abs()).fold(0.0, f64::max);
+        for (i, (label, value, suffix, series)) in rows.iter().enumerate() {
             if i > 0 {
                 out.push('\n');
             }
-            let n = if max > 0.0 { (value.abs() / max * BAR_WIDTH as f64).round() as usize } else { 0 };
-            let _ = write!(out, "{label:<width$} {} {}{suffix}", "█".repeat(n), number(*value));
+            let share = if max > 0.0 { value.abs() / max } else { 0.0 };
+            let bar = style.tint(rgb_of(&self.paint(layer, *series)), &bar_glyphs(share, style.fine));
+            let _ = write!(out, "{label:<width$} {bar} {}{suffix}", number(*value));
         }
     }
 
-    fn text_bars(&self, layer: &Layer, out: &mut String) {
-        let rows: Vec<(String, f64, String)> = self.bar_rows(layer).into_iter().map(|(l, v)| (l, v, String::new())).collect();
-        Self::write_bars(out, &rows);
+    fn text_bars(&self, layer: &Layer, out: &mut String, style: TextStyle) {
+        let rows: Vec<(String, f64, String, usize)> = self.bar_rows(layer).into_iter().map(|(l, v, s)| (l, v, String::new(), s)).collect();
+        self.write_bars(layer, out, &rows, style);
     }
 
-    fn text_pie(&self, layer: &Layer, out: &mut String) {
+    fn text_pie(&self, layer: &Layer, out: &mut String, style: TextStyle) {
         let Some(series) = layer.series.first() else { return };
         let total: f64 = series.ys.iter().sum();
-        let rows: Vec<(String, f64, String)> = series
+        let rows: Vec<(String, f64, String, usize)> = series
             .xs
             .iter()
             .zip(&series.ys)
-            .map(|(x, y)| {
+            .enumerate()
+            .map(|(i, (x, y))| {
                 let label = self.categories.get(*x as usize).cloned().unwrap_or_default();
                 let share = if total > 0.0 { (y / total * 100.0).round() } else { 0.0 };
-                (label, *y, format!(" ({share}%)"))
+                (label, *y, format!(" ({share}%)"), i)
             })
             .collect();
-        Self::write_bars(out, &rows);
+        self.write_bars(layer, out, &rows, style);
     }
 
-    fn text_heat(&self, layer: &Layer, out: &mut String) {
+    fn text_heat(&self, layer: &Layer, out: &mut String, style: TextStyle) {
         let Some(series) = layer.series.first() else { return };
         let width = layer.bands.iter().map(|b| b.chars().count()).max().unwrap_or(0);
+        let (lo, hi) = series.sizes.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
         let _ = write!(out, "{:<width$}", "");
         for category in &self.categories {
             let _ = write!(out, " {category:>8}");
@@ -932,8 +1015,14 @@ impl Plot {
             let _ = write!(out, "\n{band:<width$}");
             for c in 0..self.categories.len() {
                 let found = series.xs.iter().zip(&series.ys).zip(&series.sizes).find(|((x, y), _)| **x as usize == c && **y as usize == r);
-                let cell = found.map(|(_, v)| number(*v)).unwrap_or_default();
-                let _ = write!(out, " {cell:>8}");
+                let cell = match found {
+                    Some((_, v)) => {
+                        let t = if hi > lo { ((v - lo) / (hi - lo)) as f32 } else { 0.5 };
+                        style.shade(Rgb(232, 241, 243).mix(Rgb(8, 63, 69), t), &format!("{:>8}", number(*v)))
+                    }
+                    None => format!("{:>8}", ""),
+                };
+                let _ = write!(out, " {cell}");
             }
         }
     }
@@ -967,8 +1056,9 @@ impl Plot {
         }
     }
 
-    fn text_grid(&self, layers: &[&Layer], out: &mut String) {
+    fn text_grid(&self, layers: &[&Layer], out: &mut String, style: TextStyle) {
         let series: Vec<(&Layer, &Series)> = layers.iter().flat_map(|l| l.series.iter().map(move |s| (*l, s))).collect();
+        let colors: Vec<Option<Rgb>> = layers.iter().flat_map(|l| (0..l.series.len()).map(move |si| rgb_of(&self.paint(l, si)))).collect();
         let points: Vec<(usize, f64, f64)> = series.iter().enumerate().flat_map(|(i, (_, s))| s.xs.iter().zip(&s.ys).map(move |(x, y)| (i, *x, *y))).collect();
         if points.is_empty() {
             out.push_str("(no points)");
@@ -976,44 +1066,27 @@ impl Plot {
         }
         let (xmin, xmax) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
         let (ymin, ymax) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.2), hi.max(p.2)));
-        let col = |x: f64| if xmax > xmin { ((x - xmin) / (xmax - xmin) * (GRID_W - 1) as f64).round() as usize } else { GRID_W / 2 };
-        let row = |y: f64| {
-            let up = if ymax > ymin { ((y - ymin) / (ymax - ymin) * (GRID_H - 1) as f64).round() as usize } else { GRID_H / 2 };
-            GRID_H - 1 - up
-        };
-        let mut grid = vec![vec![' '; GRID_W]; GRID_H];
-        for (layer, s) in &series {
-            if !matches!(layer.mark, Mark::Line | Mark::Step | Mark::Area | Mark::Density) {
-                continue;
-            }
-            let mut cells: Vec<(usize, usize)> = s.xs.iter().zip(&s.ys).map(|(x, y)| (col(*x), row(*y))).collect();
-            cells.sort();
-            for pair in cells.windows(2) {
-                for (c, r) in segment(pair[0], pair[1]) {
-                    if grid[r][c] == ' ' {
-                        grid[r][c] = '·';
-                    }
-                }
-            }
-        }
-        for (i, x, y) in &points {
-            if series[*i].0.mark != Mark::Density {
-                grid[row(*y)][col(*x)] = MARKS[i % MARKS.len()];
-            }
-        }
+        let braille = style.fine && (style.color || series.len() == 1);
+        let rows = if braille { braille_rows(&series, &colors, (xmin, xmax), (ymin, ymax), style) } else { glyph_rows(&series, &points, (xmin, xmax), (ymin, ymax)) };
         let (lo, hi) = (number(ymin), number(ymax));
         let width = lo.chars().count().max(hi.chars().count());
-        for (r, cells) in grid.iter().enumerate() {
+        for (r, line) in rows.iter().enumerate() {
             let label = if r == 0 { hi.as_str() } else if r == GRID_H - 1 { lo.as_str() } else { "" };
-            let line: String = cells.iter().collect();
-            let _ = writeln!(out, "{label:>width$} |{}", line.trim_end());
+            let _ = writeln!(out, "{label:>width$} |{line}");
         }
         let _ = writeln!(out, "{:>width$} +{}", "", "-".repeat(GRID_W));
         let (left, right) = (self.x_text(xmin), self.x_text(xmax));
         let gap = GRID_W.saturating_sub(left.chars().count() + right.chars().count());
         let _ = write!(out, "{:>width$}  {left}{}{right}", "", " ".repeat(gap));
         if series.len() > 1 {
-            let legend: Vec<String> = series.iter().enumerate().map(|(i, (_, s))| format!("{} {}", MARKS[i % MARKS.len()], s.name.clone().unwrap_or_default())).collect();
+            let legend: Vec<String> = series
+                .iter()
+                .enumerate()
+                .map(|(i, (_, s))| {
+                    let mark = if braille { style.tint(colors[i], "━━") } else { MARKS[i % MARKS.len()].to_string() };
+                    format!("{mark} {}", s.name.clone().unwrap_or_default())
+                })
+                .collect();
             let _ = write!(out, "\n{}", legend.join("  "));
         }
     }
@@ -1025,6 +1098,93 @@ impl Plot {
     pub fn scene_hiding(&self, width: f32, height: f32, hidden: &[usize]) -> Scene {
         if self.panels.is_empty() { self.body_scene(width, height, false, hidden) } else { self.panel_scene(width, height) }
     }
+}
+
+fn glyph_rows(series: &[(&Layer, &Series)], points: &[(usize, f64, f64)], (xmin, xmax): (f64, f64), (ymin, ymax): (f64, f64)) -> Vec<String> {
+    let col = |x: f64| if xmax > xmin { ((x - xmin) / (xmax - xmin) * (GRID_W - 1) as f64).round() as usize } else { GRID_W / 2 };
+    let row = |y: f64| {
+        let up = if ymax > ymin { ((y - ymin) / (ymax - ymin) * (GRID_H - 1) as f64).round() as usize } else { GRID_H / 2 };
+        GRID_H - 1 - up
+    };
+    let mut grid = vec![vec![' '; GRID_W]; GRID_H];
+    for (layer, s) in series {
+        if !matches!(layer.mark, Mark::Line | Mark::Step | Mark::Area | Mark::Density) {
+            continue;
+        }
+        let mut cells: Vec<(usize, usize)> = s.xs.iter().zip(&s.ys).map(|(x, y)| (col(*x), row(*y))).collect();
+        cells.sort();
+        for pair in traced_cells(layer.mark, &cells).windows(2) {
+            for (c, r) in segment(pair[0], pair[1]) {
+                if grid[r][c] == ' ' {
+                    grid[r][c] = '·';
+                }
+            }
+        }
+    }
+    for (i, x, y) in points {
+        if series[*i].0.mark != Mark::Density {
+            grid[row(*y)][col(*x)] = MARKS[i % MARKS.len()];
+        }
+    }
+    grid.iter().map(|cells| cells.iter().collect::<String>().trim_end().to_string()).collect()
+}
+
+fn braille_rows(series: &[(&Layer, &Series)], colors: &[Option<Rgb>], (xmin, xmax): (f64, f64), (ymin, ymax): (f64, f64), style: TextStyle) -> Vec<String> {
+    let (w, h) = (GRID_W * 2, GRID_H * 4);
+    let col = |x: f64| if xmax > xmin { ((x - xmin) / (xmax - xmin) * (w - 1) as f64).round() as usize } else { w / 2 };
+    let row = |y: f64| {
+        let up = if ymax > ymin { ((y - ymin) / (ymax - ymin) * (h - 1) as f64).round() as usize } else { h / 2 };
+        h - 1 - up
+    };
+    let mut dots = vec![vec![0u8; GRID_W]; GRID_H];
+    let mut owners = vec![vec![None; GRID_W]; GRID_H];
+    let mut set = |c: usize, r: usize, series: usize| {
+        if c < w && r < h {
+            dots[r / 4][c / 2] |= braille_bit(c, r);
+            owners[r / 4][c / 2] = Some(series);
+        }
+    };
+    for (i, (layer, s)) in series.iter().enumerate() {
+        let mut cells: Vec<(usize, usize)> = s.xs.iter().zip(&s.ys).map(|(x, y)| (col(*x), row(*y))).collect();
+        cells.sort();
+        if matches!(layer.mark, Mark::Line | Mark::Step | Mark::Area | Mark::Density) {
+            for pair in traced_cells(layer.mark, &cells).windows(2) {
+                set(pair[0].0, pair[0].1, i);
+                for (c, r) in segment(pair[0], pair[1]) {
+                    set(c, r, i);
+                }
+            }
+        }
+        for (c, r) in &cells {
+            set(*c, *r, i);
+            if layer.mark == Mark::Point {
+                set(c + 1, *r, i);
+                set(*c, r + 1, i);
+                set(c + 1, r + 1, i);
+            }
+        }
+    }
+    dots.iter()
+        .zip(&owners)
+        .map(|(cells, owners)| {
+            let mut line = String::new();
+            let mut run = String::new();
+            let mut current = None;
+            for (mask, owner) in cells.iter().zip(owners) {
+                if *owner != current {
+                    line.push_str(&style.tint(current.and_then(|o: usize| colors[o]), &run));
+                    run.clear();
+                    current = *owner;
+                }
+                run.push(if *mask == 0 { ' ' } else { char::from_u32(0x2800 + *mask as u32).unwrap_or(' ') });
+            }
+            line.push_str(&style.tint(current.and_then(|o| colors[o]), &run));
+            line.trim_end().to_string()
+        })
+        .collect()
+}
+
+impl Plot {
 
     fn panel_scene(&self, width: f32, height: f32) -> Scene {
         let mut scene = Scene { width, height, ..Scene::default() };
@@ -2020,6 +2180,29 @@ mod tests {
         assert_eq!(format_tick(0.5, Some("{:.0%}")), Some("50%".to_string()));
         assert_eq!(format_tick(2.5, Some("{:z}")), None);
         assert_eq!(format_tick(2500.0, Some("compact")), Some("2.5K".to_string()));
+    }
+
+    #[test]
+    fn terminal_text_uses_eighth_blocks_braille_and_colors() {
+        let plot = bars(&["a", "b"], &[1.0, 3.0]);
+        let plain = plot.text();
+        assert!(plain.contains("█ 1") && !plain.contains('▍') && !plain.contains("\x1b["), "{plain}");
+        let fine = plot.terminal_text(false);
+        assert!(fine.contains("▍ 1") && !fine.contains("\x1b["), "{fine}");
+        let colored = plot.terminal_text(true);
+        assert!(colored.contains("\x1b[38;2;") && colored.contains("▍\x1b[0m 1"), "{colored}");
+        let mut lines = Plot::new();
+        let mut layer = Layer::new(Mark::Line);
+        layer.series.push(Series::new(Some("a".into()), vec![1.0, 2.0, 3.0], vec![1.0, 2.0, 3.0]));
+        layer.series.push(Series::new(Some("b".into()), vec![1.0, 2.0, 3.0], vec![3.0, 2.0, 1.0]));
+        lines.layers.push(layer);
+        let braille = |text: &str| text.chars().any(|c| ('\u{2800}'..='\u{28ff}').contains(&c));
+        let grid = lines.terminal_text(true);
+        assert!(braille(&grid) && grid.contains("━━\x1b[0m a") && grid.contains("━━\x1b[0m b"), "{grid}");
+        assert!(!braille(&lines.text()) && lines.text().contains("• a  ○ b"));
+        assert!(!braille(&lines.terminal_text(false)));
+        lines.layers[0].series.pop();
+        assert!(braille(&lines.terminal_text(false)));
     }
 
     #[test]

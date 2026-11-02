@@ -1,7 +1,7 @@
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
-use schematic::Interpreter;
+use schematic::{Interpreter, Value};
 use schematic::check::check_file;
 use schematic::error::Error;
 use schematic::project::{Project, Reference, Source};
@@ -94,7 +94,7 @@ fn run_source(source: &str, print_result: bool) -> i32 {
     match interp.eval_str(source) {
         Ok(value) => {
             if print_result {
-                println!("{value}");
+                show(&value);
             }
             0
         }
@@ -251,6 +251,23 @@ fn run_project() -> Result<(), Error> {
     Ok(())
 }
 
+fn show(value: &Value) {
+    if let Value::Plot(plot) = value
+        && io::stdout().is_terminal()
+    {
+        println!("{}", plot.terminal_text(colors_allowed()));
+    } else {
+        println!("{value}");
+    }
+}
+
+fn colors_allowed() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    !cfg!(windows) || ["WT_SESSION", "TERM_PROGRAM", "TERM", "ConEmuANSI", "ANSICON"].iter().any(|key| std::env::var_os(key).is_some())
+}
+
 fn repl() -> i32 {
     let mut interp = Interpreter::new();
     interp.set_load_path(load_path_for(Path::new(".")));
@@ -277,7 +294,7 @@ fn repl() -> i32 {
         buffer.clear();
         for form in &forms {
             match interp.eval(form) {
-                Ok(value) => println!("{value}"),
+                Ok(value) => show(&value),
                 Err(e) => {
                     eprintln!("error: {e}");
                     break;
