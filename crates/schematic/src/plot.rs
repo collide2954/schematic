@@ -1188,12 +1188,13 @@ impl Plot {
 
     fn panel_scene(&self, width: f32, height: f32) -> Scene {
         let mut scene = Scene { width, height, ..Scene::default() };
+        let tiny = height < 120.0 || width < 160.0;
         let mut top = 0.0;
-        if let Some(title) = &self.title {
+        if let (Some(title), false) = (&self.title, tiny) {
             scene.shapes.push(Shape::Text { x: width / 2.0, y: 18.0, text: title.clone(), size: 15.0, anchor: Anchor::Middle, paint: Paint::Text, bold: true, angle: 0.0 });
             top = 32.0;
         }
-        let (top_label, bottom_label) = self.axis_labels();
+        let (top_label, bottom_label) = if tiny { (None, None) } else { self.axis_labels() };
         if let Some(label) = top_label {
             scene.shapes.push(text_shape(self.left_margin(), top + 11.0, label, 12.0, Anchor::Start, Paint::Muted));
             top += 22.0;
@@ -1247,6 +1248,7 @@ impl Plot {
             return self.pie_scene(width, height);
         }
         let mut scene = Scene { width, height, ..Scene::default() };
+        let tiny = bare && (height < 120.0 || width < 160.0);
         let entries: Vec<(usize, usize, String)> = self
             .layers
             .iter()
@@ -1255,16 +1257,17 @@ impl Plot {
             .collect();
         let series_count: usize = self.layers.iter().map(|l| l.series.len()).sum();
         let legend_at = match self.legend {
-            LegendAt::Auto if !entries.is_empty() && series_count > 1 => LegendAt::Top,
+            _ if tiny || entries.is_empty() => LegendAt::Hidden,
+            LegendAt::Auto if series_count > 1 => LegendAt::Top,
             LegendAt::Auto => LegendAt::Hidden,
-            _ if entries.is_empty() => LegendAt::Hidden,
             other => other,
         };
         let (top_label, bottom_label) = if bare { (None, None) } else { self.axis_labels() };
-        let title_room = match (&self.title, bare) {
-            (None, _) => 0.0,
-            (Some(_), true) => 14.0,
-            (Some(_), false) => 24.0,
+        let title_room = match &self.title {
+            None => 0.0,
+            Some(_) if tiny => 0.0,
+            Some(_) if bare => 14.0,
+            Some(_) => 24.0,
         } + if self.subtitle.is_some() && !bare { 16.0 } else { 0.0 };
         let legend_room = if legend_at == LegendAt::Top || top_label.is_some() { 22.0 } else { 0.0 };
         let legend_width = if legend_at == LegendAt::Right { entries.iter().map(|(_, _, n)| n.chars().count()).max().unwrap_or(0) as f32 * 6.5 + 34.0 } else { 0.0 };
@@ -1273,18 +1276,22 @@ impl Plot {
         let any_labels = self.layers.iter().any(|l| l.labels);
         let (label_above, label_beside) = if any_labels { if self.horizontal { (0.0, 28.0) } else { (12.0, 0.0) } } else { (0.0, 0.0) };
         let right_axis = self.layers.iter().any(|l| l.side == Side::Right);
-        let left = self.left_margin();
-        let right = if self.dates { 40.0 } else { 24.0 } + label_beside + legend_width + if right_axis { 46.0 } else { 0.0 };
+        let edge = if self.dates { 40.0 } else { 24.0 };
+        let left = if tiny { 6.0 } else { self.left_margin() };
+        let right = if tiny { 6.0 } else { edge + label_beside + legend_width + if right_axis { 46.0 } else { 0.0 } };
         let longest_category = self.categories.iter().map(|c| c.chars().count()).max().unwrap_or(0) as f32;
         let band_estimate = (width - left - right) / self.categories.len().max(1) as f32;
         let rotate = !self.horizontal && !self.categories.is_empty() && self.mark() != Some(Mark::Histogram) && longest_category * CHAR_W > band_estimate - 6.0;
         let rotated_room = if rotate { (longest_category * CHAR_W * 0.64 + 6.0).min(70.0) } else { 0.0 };
-        let top = 16.0 + title_room + legend_room + label_above;
-        let bottom = 34.0 + if bottom_label.is_some() { 18.0 } else { 0.0 } + legend_bottom + caption_room + rotated_room;
-        let frame = Frame { x0: left, x1: width - right, y0: top, y1: height - bottom };
+        let top = if tiny { 6.0 } else { 16.0 + title_room + legend_room + label_above };
+        let bottom = if tiny { 6.0 } else { 34.0 + if bottom_label.is_some() { 18.0 } else { 0.0 } + legend_bottom + caption_room + rotated_room };
+        if !bare && height - bottom - top < 60.0 {
+            return self.body_scene(width, height, true, hidden);
+        }
+        let frame = Frame { x0: left, x1: (width - right).max(left + 10.0), y0: top, y1: (height - bottom).max(top + 10.0) };
         let (x0, x1, y0, y1) = (frame.x0, frame.x1, frame.y0, frame.y1);
         let (plot_w, plot_h) = ((x1 - x0).max(1.0), (y1 - y0).max(1.0));
-        if let Some(title) = &self.title {
+        if let (Some(title), false) = (&self.title, tiny) {
             let (y, size) = if bare { (14.0, 13.0) } else { (18.0, 15.0) };
             scene.shapes.push(Shape::Text { x: width / 2.0, y, text: title.clone(), size, anchor: Anchor::Middle, paint: Paint::Text, bold: true, angle: 0.0 });
         }
@@ -1345,7 +1352,7 @@ impl Plot {
                 scene.shapes.push(text_shape(x1 + 8.0, value_at(axis, *tick), label, 11.0, Anchor::Start, Paint::Muted));
             }
             if let Some(label) = &self.y2.label {
-                scene.shapes.push(text_shape(x1, y0 - 11.0, label.clone(), 12.0, Anchor::End, Paint::Muted));
+                scene.shapes.push(text_shape(x1 + 8.0, y0 - 11.0, label.clone(), 12.0, Anchor::Start, Paint::Muted));
             }
         }
         let categorical = !self.categories.is_empty();
@@ -1648,10 +1655,11 @@ impl Plot {
     }
 
     fn path_shapes(&self, scene: &mut Scene, layer: &Layer, context: &LayerContext) {
-        let LayerContext { position, value_at, baseline, visible, layer_index, .. } = *context;
+        let LayerContext { frame, position, value_at, baseline, visible, layer_index, .. } = *context;
         let stack = layer.stacks();
         let mut base: BTreeMap<u64, f64> = BTreeMap::new();
         let max_size = layer.series.iter().flat_map(|s| s.sizes.iter().copied()).fold(0.0, f64::max);
+        let largest = ((frame.x1 - frame.x0).min(frame.y1 - frame.y0) * 0.1).max(2.0);
         let value_text = |v: f64| format_tick(v, self.y.format.as_deref()).unwrap_or_else(|| number(v));
         for (si, series) in layer.series.iter().enumerate() {
             if !visible[si] {
@@ -1698,7 +1706,7 @@ impl Plot {
                 }
                 if dots {
                     let r = match series.sizes.get(k) {
-                        Some(size) if max_size > 0.0 => 3.0 + 15.0 * (size / max_size).sqrt() as f32,
+                        Some(size) if max_size > 0.0 => (3.0 + 15.0 * (size / max_size).sqrt() as f32).min(largest),
                         _ if layer.mark == Mark::Point => 3.5,
                         _ => 2.5,
                     };

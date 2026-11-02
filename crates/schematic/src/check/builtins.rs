@@ -279,7 +279,7 @@ fn build() -> HashMap<&'static str, Builtin> {
     add("newline", vec![], None, Type::Nil, false);
 
     for name in ["bar-chart", "line-chart", "area-chart", "scatter", "pie-chart", "bars", "lines", "steps", "points", "areas", "lollipops", "pie"] {
-        add(name, vec![any(), any(), any(), map(any(), any())], None, Type::Plot, false);
+        add(name, vec![any(), any(), any(), any(), map(any(), any())], None, Type::Plot, false);
     }
     for name in ["histogram", "density"] {
         add(name, vec![any(), any(), any(), any()], None, Type::Plot, false);
