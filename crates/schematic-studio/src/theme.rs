@@ -50,7 +50,7 @@ pub const LIGHT: Tones = Tones {
     text: rgb(0x1A2230),
     muted: rgb(0x66728A),
     faint: rgb(0x9AA5B8),
-    accent: rgb(0x0F7B86),
+    accent: rgb(0x0B57A4),
     accent_text: rgb(0xFFFFFF),
     danger: rgb(0xC83C32),
     warning: rgb(0xB7791F),
@@ -58,7 +58,7 @@ pub const LIGHT: Tones = Tones {
     comment: rgb(0x8B95A7),
     string: rgb(0x2A8A5A),
     number: rgb(0xB4540F),
-    keyword: rgb(0x7B3FE4),
+    keyword: rgb(0x6B3FA0),
     special: rgb(0x2458D3),
     constant: rgb(0xC0286E),
     brackets: [rgb(0x56637A), rgb(0x3D6ACB), rgb(0xB0731E)],
@@ -75,15 +75,15 @@ pub const DARK: Tones = Tones {
     text: rgb(0xE3E8EF),
     muted: rgb(0x8C97AA),
     faint: rgb(0x5B6678),
-    accent: rgb(0x3EC6CF),
-    accent_text: rgb(0x0B1A1C),
+    accent: rgb(0x82B6EA),
+    accent_text: rgb(0x0B1A2C),
     danger: rgb(0xF0695E),
     warning: rgb(0xE2A93B),
     success: rgb(0x55C98A),
     comment: rgb(0x6F7A8E),
     string: rgb(0x8BD39C),
     number: rgb(0xF0A868),
-    keyword: rgb(0xC7A2FF),
+    keyword: rgb(0xC7A8F3),
     special: rgb(0x86B4FF),
     constant: rgb(0xF58FB8),
     brackets: [rgb(0xA0AABB), rgb(0x74A6F0), rgb(0xDDB36E)],
@@ -125,7 +125,7 @@ pub const CONTRAST: Tones = Tones {
     text: rgb(0xFFFFFF),
     muted: rgb(0xCFCFCF),
     faint: rgb(0x8F8F8F),
-    accent: rgb(0x5EF1F8),
+    accent: rgb(0x9CCBFF),
     accent_text: rgb(0x000000),
     danger: rgb(0xFF7B6E),
     warning: rgb(0xFFC84A),
@@ -333,11 +333,10 @@ pub fn cell(selected: bool) -> impl Fn(&Theme) -> container::Style {
     move |theme| if selected { filled(fade(tones(theme).accent, 0.12)) } else { container::Style::default() }
 }
 
-pub fn notebook_cell(focused: bool) -> impl Fn(&Theme) -> container::Style {
+pub fn cell_rule(focused: bool) -> impl Fn(&Theme) -> container::Style {
     move |theme| {
         let t = tones(theme);
-        let color = if focused { t.accent } else { t.line };
-        container::Style { border: Border { color, width: 1.0, radius: 4.0.into() }, ..filled(t.surface) }
+        filled(if focused { t.accent } else { t.line })
     }
 }
 

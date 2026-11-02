@@ -272,7 +272,7 @@ const STYLE: &str = "body{margin:0;background:#fff;color:#1a2230;font:15px/1.5 s
 main{max-width:52rem;margin:0 auto;padding:2rem 1.25rem}\
 .cell{margin:0 0 1.25rem}.cell>*+*{margin-top:.4rem}\
 pre{margin:0;padding:.6rem .8rem;border-radius:6px;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap}\
-.code{background:#f3f5f8}.result{background:#f8fafb;border-left:3px solid #0f7b86}.output{color:#444c5c}.error{color:#b42318;background:#fdf2f0}\
+.code{background:#f3f5f8}.result{background:#f8fafb;border-left:3px solid #0b57a4}.output{color:#444c5c}.error{color:#b42318;background:#fdf2f0}\
 figure{margin:.5rem 0}svg{max-width:100%;height:auto}\
 h1,h2,h3{line-height:1.25;margin:1.2em 0 .4em}p{margin:.4em 0}\
 code{font:.92em ui-monospace,Menlo,Consolas,monospace;background:#f3f5f8;padding:.1em .3em;border-radius:4px}pre code{background:none;padding:0}\

@@ -220,16 +220,6 @@ fn plural(n: usize, word: &str) -> String {
 fn summarize(value: &Value) -> String {
     match value {
         Value::Table(t) => format!("{}, {}", plural(t.nrows(), "row"), plural(t.ncols(), "column")),
-        Value::Array(a) => {
-            let missing = a.missing_count();
-            let base = format!("{} {} values", a.len(), a.kind());
-            if missing > 0 { format!("{base}, {missing} missing") } else { base }
-        }
-        Value::Vector(v) => plural(v.len(), "item"),
-        Value::List(l) => plural(l.len(), "item"),
-        Value::Set(s) => plural(s.len(), "item"),
-        Value::Map(m) if m.len() == 1 => "1 entry".to_string(),
-        Value::Map(m) => format!("{} entries", m.len()),
         Value::Closure(c) => {
             let arity = if c.proto.rest { Arity::AtLeast(c.proto.params) } else { Arity::Exact(c.proto.params) };
             arity.to_string()
@@ -493,9 +483,9 @@ mod tests {
             *bindings,
             vec![
                 table("t", "1 row, 1 column", &["a"]),
-                binding("xs", "array", "3 int values, 1 missing"),
-                binding("v", "vector", "3 items"),
-                binding("m", "map", "2 entries"),
+                binding("xs", "array", "#[1 2 nil]"),
+                binding("v", "vector", "[1 2 3]"),
+                binding("m", "map", "{:a 1, :b 2}"),
                 binding("f", "function", "at least 1 argument"),
                 binding("g", "function", "1 argument"),
                 binding("s", "string", &format!("\"{}...", "x".repeat(59))),

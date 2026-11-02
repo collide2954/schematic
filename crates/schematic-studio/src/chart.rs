@@ -5,7 +5,7 @@ use iced::alignment::Vertical;
 use iced::mouse::{self, Cursor, ScrollDelta};
 use iced::widget::canvas::{self, Action, Frame, Geometry, LineDash, Path, Program, Stroke};
 use iced::{Color, Event, Pixels, Point, Rectangle, Renderer, Size, Theme, Vector};
-use schematic::plot::{Anchor, Paint, Plot, Scene, Shape, arc_points};
+use schematic::plot::{Anchor, Paint, Plot, Rgb, SERIES_COLORS, Scene, Shape, arc_points};
 
 use crate::app::Message;
 use crate::{fonts, theme};
@@ -148,13 +148,16 @@ fn lerp(a: Color, b: Color, t: f32) -> Color {
 fn paint_color(theme: &Theme, paint: &Paint) -> Color {
     let t = theme::tones(theme);
     match paint {
-        Paint::Series(i) => [t.accent, t.keyword, t.number, t.constant, t.special, t.string][i % 6],
+        Paint::Series(i) => {
+            let rgb = Rgb::parse(SERIES_COLORS[i % SERIES_COLORS.len()]).unwrap_or(Rgb(0, 0, 0));
+            Color::from_rgb8(rgb.0, rgb.1, rgb.2)
+        }
         Paint::Rgb(rgb) => Color::from_rgb8(rgb.0, rgb.1, rgb.2),
         Paint::Heat(level) => {
             if *level < 0.6 {
                 lerp(t.raised, t.accent, level / 0.6)
             } else {
-                lerp(t.accent, Color::from_rgb8(8, 63, 69), (level - 0.6) / 0.4)
+                lerp(t.accent, Color::from_rgb8(11, 61, 107), (level - 0.6) / 0.4)
             }
         }
         Paint::Axis => t.muted,

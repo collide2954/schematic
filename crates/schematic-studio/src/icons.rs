@@ -20,8 +20,6 @@ pub enum Glyph {
     Plus,
     Detach,
     Close,
-    Copy,
-    Bars,
     Up,
     Down,
     Left,
@@ -138,15 +136,6 @@ impl<Message> Program<Message> for Icon {
                 frame.stroke(&Path::line(Point::new(4.0, 4.0), Point::new(12.0, 12.0)), stroke());
                 frame.stroke(&Path::line(Point::new(12.0, 4.0), Point::new(4.0, 12.0)), stroke());
             }
-            Glyph::Copy => {
-                frame.stroke(&Path::rectangle(Point::new(5.5, 5.5), Size::new(7.5, 8.0)), stroke().with_width(1.4));
-                frame.stroke(&polyline(&[(3.5, 10.0), (3.0, 10.0), (3.0, 2.5), (10.5, 2.5), (10.5, 3.5)]), stroke().with_width(1.4));
-            }
-            Glyph::Bars => {
-                frame.fill_rectangle(Point::new(2.5, 9.0), Size::new(3.0, 4.5), color);
-                frame.fill_rectangle(Point::new(6.5, 4.0), Size::new(3.0, 9.5), color);
-                frame.fill_rectangle(Point::new(10.5, 6.5), Size::new(3.0, 7.0), color);
-            }
             Glyph::Up => frame.stroke(&polyline(&[(4.5, 10.0), (8.0, 6.0), (11.5, 10.0)]), stroke()),
             Glyph::Down => frame.stroke(&polyline(&[(4.5, 6.0), (8.0, 10.0), (11.5, 6.0)]), stroke()),
             Glyph::Left => frame.stroke(&polyline(&[(10.0, 4.5), (6.0, 8.0), (10.0, 11.5)]), stroke()),
@@ -176,8 +165,6 @@ mod tests {
             Glyph::Plus,
             Glyph::Detach,
             Glyph::Close,
-            Glyph::Copy,
-            Glyph::Bars,
             Glyph::Up,
             Glyph::Down,
             Glyph::Left,

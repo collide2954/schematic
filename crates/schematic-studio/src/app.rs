@@ -505,6 +505,7 @@ pub struct Studio {
     pub watches: Vec<String>,
     pub watched: Vec<Watched>,
     pub console_find: Option<String>,
+    pub console_pick: Option<usize>,
     pub last_run: Option<u128>,
     pub plots: Vec<Plot>,
     pub plot_at: usize,
@@ -574,6 +575,7 @@ pub enum Message {
     HistoryBack,
     HistoryForward,
     ClearConsole,
+    PickLine(usize),
     Inspect(String),
     Page(i64),
     SavePlot,
@@ -1151,6 +1153,7 @@ impl Studio {
             watches: settings.watches.clone(),
             watched: Vec::new(),
             console_find: None,
+            console_pick: None,
             last_run: None,
             plots: Vec::new(),
             plot_at: 0,
@@ -2576,6 +2579,11 @@ impl Studio {
             }
             Message::ClearConsole => {
                 self.console.clear();
+                self.console_pick = None;
+                Task::none()
+            }
+            Message::PickLine(i) => {
+                self.console_pick = if self.console_pick == Some(i) { None } else { Some(i) };
                 Task::none()
             }
             Message::Inspect(name) => self.inspect(name, 0),
@@ -3514,6 +3522,20 @@ mod tests {
         assert_eq!(studio.panes.iter().count(), 1, "the last pane stays");
         let _ = studio.update(Message::ShowHelp(Page::Guide));
         assert_eq!((studio.tab, studio.help.as_ref().map(|h| h.page)), (Tab::Help, Some(Page::Guide)));
+    }
+
+    #[test]
+    fn console_lines_are_picked_for_copying() {
+        let mut studio = studio_with_content();
+        assert!(studio.console.len() > 1);
+        let _ = studio.update(Message::PickLine(1));
+        assert_eq!(studio.console_pick, Some(1));
+        let _ = view::view(&studio);
+        let _ = studio.update(Message::PickLine(1));
+        assert_eq!(studio.console_pick, None);
+        let _ = studio.update(Message::PickLine(0));
+        let _ = studio.update(Message::ClearConsole);
+        assert_eq!(studio.console_pick, None);
     }
 
     #[test]

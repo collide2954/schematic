@@ -285,10 +285,15 @@ fn toolbar(studio: &Studio) -> Element<'_, Message> {
 
 fn status_bar(studio: &Studio) -> Element<'_, Message> {
     let (line, column) = studio.cursor();
-    let dot_style: TextStyle = if studio.running { theme::accent } else { theme::faint };
-    let status_style: TextStyle = if studio.status.starts_with("Error") { theme::alarm } else { theme::muted };
+    let status_style: TextStyle = if studio.status.starts_with("Error") {
+        theme::alarm
+    } else if studio.running {
+        theme::accent
+    } else {
+        theme::muted
+    };
     let path = studio.doc().path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
-    let mut bar = row![text("•").size(theme::META).style(dot_style), text(&studio.status).size(theme::FINE).style(status_style), space::horizontal()]
+    let mut bar = row![text(&studio.status).size(theme::FINE).style(status_style), space::horizontal()]
         .spacing(12)
         .align_y(Alignment::Center);
     let count = studio.doc().problems.len();
@@ -529,7 +534,8 @@ fn console_controls(studio: &Studio) -> Element<'_, Message> {
         }
         None => small("Find", Some(Message::ConsoleFind(true))),
     };
-    row![find, small("Clear", Some(Message::ClearConsole))].spacing(2).align_y(Alignment::Center).into()
+    let picked = studio.console_pick.and_then(|i| studio.console.get(i)).map(|line| Message::CopyText(line.text.trim_end_matches('\n').to_string()));
+    row![small("Copy", picked), find, small("Clear", Some(Message::ClearConsole))].spacing(2).align_y(Alignment::Center).into()
 }
 
 fn outline(studio: &Studio) -> Element<'_, Message> {
@@ -896,8 +902,7 @@ fn notebook_view<'a>(studio: &'a Studio, notebook: &'a Notebook) -> Element<'a, 
 fn cell_view<'a>(studio: &'a Studio, cell: &'a Cell, i: usize, focused: bool, count: usize) -> Element<'a, Message> {
     let ready = studio.worker.is_some();
     let code = cell.kind == Kind::Code;
-    let mut tools = Row::new().spacing(2).align_y(Alignment::Center);
-    tools = tools.push(text(if code { "Code" } else { "Text" }).size(theme::FINE).style(theme::faint)).push(space::horizontal());
+    let mut tools = Row::new().spacing(2).align_y(Alignment::Center).push(space::horizontal());
     if cell.running {
         tools = tools.push(text("running").size(theme::FINE).style(theme::accent));
     } else if let Some(ms) = cell.elapsed {
@@ -909,7 +914,7 @@ fn cell_view<'a>(studio: &'a Studio, cell: &'a Cell, i: usize, focused: bool, co
         tools.push(small(if cell.editing { "Done" } else { "Edit" }, Some(if cell.editing { Message::DoneText(i) } else { Message::EditText(i) })))
     };
     tools = tools
-        .push(small(if code { "Make text" } else { "Make code" }, Some(Message::ToggleCellKind(i))))
+        .push(small(if code { "As text" } else { "As code" }, Some(Message::ToggleCellKind(i))))
         .push(glyph_button(Glyph::Up, (i > 0).then_some(Message::MoveCell(i, -1))))
         .push(glyph_button(Glyph::Down, (i + 1 < count).then_some(Message::MoveCell(i, 1))))
         .push(glyph_button(Glyph::Close, (count > 1).then_some(Message::DeleteCell(i))))
@@ -951,7 +956,8 @@ fn cell_view<'a>(studio: &'a Studio, cell: &'a Cell, i: usize, focused: bool, co
     for output in &cell.outputs {
         column = column.push(output_view(studio, output));
     }
-    container(column).padding(Padding { top: 4.0, right: 10.0, bottom: 8.0, left: 10.0 }).width(Length::Fill).style(theme::notebook_cell(focused)).into()
+    let rule = container(space::vertical()).width(2).height(Length::Fill).style(theme::cell_rule(focused));
+    row![rule, container(column).padding(Padding { top: 2.0, right: 10.0, bottom: 6.0, left: 10.0 }).width(Length::Fill)].into()
 }
 
 fn output_view<'a>(studio: &'a Studio, output: &'a Output) -> Element<'a, Message> {
@@ -1376,28 +1382,25 @@ fn help(studio: &Studio) -> Element<'_, Message> {
 fn console(studio: &Studio) -> Element<'_, Message> {
     let size = studio.console_size();
     let query = studio.console_find.as_deref().map(str::to_lowercase).filter(|q| !q.is_empty());
-    let shown = studio.console.iter().filter(move |line| query.as_ref().is_none_or(|q| line.text.to_lowercase().contains(q)));
-    let lines = shown.map(|line| {
-        let (marker, marker_style, style, font): (&str, TextStyle, TextStyle, Font) = match line.kind {
-            LineKind::Input => ("›", theme::accent, theme::strong, fonts::MONO),
-            LineKind::Output => ("", theme::faint, theme::strong, fonts::MONO),
-            LineKind::Result => ("=", theme::faint, theme::strong, fonts::MONO),
-            LineKind::Error => ("!", theme::alarm, theme::alarm, fonts::MONO),
-            LineKind::Note => ("", theme::faint, theme::muted, fonts::MONO_ITALIC),
+    let picked = studio.console_pick;
+    let shown = studio.console.iter().enumerate().filter(move |(_, line)| query.as_ref().is_none_or(|q| line.text.to_lowercase().contains(q)));
+    let lines = shown.map(|(i, line)| {
+        let (marker, marker_style, style): (&str, TextStyle, TextStyle) = match line.kind {
+            LineKind::Input => ("›", theme::accent, theme::strong),
+            LineKind::Output => ("", theme::faint, theme::strong),
+            LineKind::Result => ("=", theme::faint, theme::strong),
+            LineKind::Error => ("!", theme::alarm, theme::alarm),
+            LineKind::Note => ("", theme::faint, theme::muted),
         };
         let content = line.text.trim_end_matches('\n');
         let body: Element<'_, Message> = match line.kind {
             LineKind::Input | LineKind::Result => code(content, &studio.theme, size),
-            _ => text(content).font(font).size(size).style(style).width(Length::Fill).into(),
+            _ => text(content).font(fonts::MONO).size(size).style(style).width(Length::Fill).into(),
         };
-        let mut row = row![container(text(marker).font(fonts::MONO_BOLD).size(size).style(marker_style)).width(14), body].spacing(8);
-        if line.kind != LineKind::Note {
-            let copy = button(icon(Glyph::Copy, Ink::Muted)).padding([0, 4]).style(theme::ghost).on_press(Message::CopyText(content.to_string()));
-            row = row.push(tip(copy, "Copy"));
-        }
-        row.into()
+        let row = row![container(text(marker).font(fonts::MONO_BOLD).size(size).style(marker_style)).width(14), body].spacing(8);
+        button(row).padding([1, 4]).width(Length::Fill).style(theme::row(picked == Some(i))).on_press(Message::PickLine(i)).into()
     });
-    let history = scrollable(column(lines).spacing(3).padding([8, 12]).width(Length::Fill))
+    let history = scrollable(column(lines).spacing(1).padding([8, 8]).width(Length::Fill))
         .id(console_id())
         .height(Length::Fill)
         .style(theme::scroll);
@@ -1500,7 +1503,11 @@ fn data_header<'a>(studio: &'a Studio, grid: &'a Grid) -> Element<'a, Message> {
     let filter = text_input("Filter rows", &studio.grid_filter).on_input(Message::GridFilter).size(theme::META).padding(theme::CONTROL).style(theme::field).width(theme::FIELD_SMALL);
     let copy = small("Copy", (!grid.rows.is_empty()).then_some(Message::CopyRows));
     let csv = small("CSV…", studio.table_shown().then_some(Message::ExportCsv));
-    row![filter, tip(copy, "Copy rows"), csv, space::horizontal(), pager(grid)]
+    let sorted = grid.sort.as_ref().map(|(column, _)| column.clone()).filter(|column| {
+        grid.columns.iter().position(|c| c == column).and_then(|c| grid.numeric.get(c).copied()).unwrap_or(false)
+    });
+    let histogram = small("Histogram", sorted.map(Message::PlotColumn));
+    row![filter, tip(copy, "Copy rows"), csv, histogram, space::horizontal(), pager(grid)]
         .spacing(6)
         .align_y(Alignment::Center)
         .padding(HEADER)
@@ -1530,11 +1537,7 @@ fn grid_table<'a>(studio: &'a Studio, grid: &'a Grid) -> Element<'a, Message> {
         let label = text(format!("{name}{arrow}")).font(fonts::UI_SEMIBOLD).size(theme::FINE).style(label_style);
         let head = button(label).padding(theme::CELL).style(theme::ghost).on_press_maybe(sortable.then(|| Message::SortBy(name.clone())));
         let stats = grid.stats.get(c).map(String::as_str).unwrap_or_default();
-        let head: Element<'_, Message> = if stats.is_empty() { head.into() } else { tip(head, stats) };
-        let mut header = Row::new().align_y(Alignment::Center).spacing(2).push(head);
-        if numeric && sortable {
-            header = header.push(tip(glyph_button(Glyph::Bars, Some(Message::PlotColumn(name.clone()))), "Histogram"));
-        }
+        let header: Element<'_, Message> = if stats.is_empty() { head.into() } else { tip(head, stats) };
         let longest = grid.rows.iter().map(|row| row[c].chars().count()).max().unwrap_or(0).max(name.chars().count() + 2);
         let width = (longest as f32 * 7.6 + 24.0).clamp(56.0, 360.0);
         let style: TextStyle = if index && c == 0 { theme::faint } else { theme::strong };

@@ -94,7 +94,7 @@ impl Rgb {
     }
 }
 
-pub const SERIES_COLORS: [&str; 6] = ["#0f7b86", "#7b3fe4", "#b4540f", "#c0286e", "#2458d3", "#2a8a5a"];
+pub const SERIES_COLORS: [&str; 6] = ["#0072b2", "#e69f00", "#009e73", "#d55e00", "#cc79a7", "#56b4e9"];
 
 pub fn named_palette(name: &str) -> Option<Vec<Rgb>> {
     let hexes: &[&str] = match name {
@@ -1018,7 +1018,7 @@ impl Plot {
                 let cell = match found {
                     Some((_, v)) => {
                         let t = if hi > lo { ((v - lo) / (hi - lo)) as f32 } else { 0.5 };
-                        style.shade(Rgb(232, 241, 243).mix(Rgb(8, 63, 69), t), &format!("{:>8}", number(*v)))
+                        style.shade(Rgb(232, 240, 248).mix(Rgb(11, 61, 107), t), &format!("{:>8}", number(*v)))
                     }
                     None => format!("{:>8}", ""),
                 };
@@ -1796,8 +1796,8 @@ impl Plot {
         let scene = self.scene(width, height);
         let series_colors: Vec<Rgb> = SERIES_COLORS.iter().filter_map(|h| Rgb::parse(h)).collect();
         let (axis, grid, text, muted, back) = if dark { ("#8a94a6", "#2a313d", "#e6e9ef", "#9aa3b2", "#161a21") } else { ("#56637a", "#e3e7ee", "#1a2230", "#66728a", "#ffffff") };
-        let heat_lo = if dark { Rgb(30, 42, 48) } else { Rgb(232, 241, 243) };
-        let heat_hi = Rgb(8, 63, 69);
+        let heat_lo = if dark { Rgb(30, 40, 52) } else { Rgb(232, 240, 248) };
+        let heat_hi = Rgb(11, 61, 107);
         let color = |paint: &Paint| -> String {
             match paint {
                 Paint::Series(i) => series_colors[i % series_colors.len()].hex(),
